@@ -24,7 +24,7 @@ export default async function run() {
     assert(await page.locator('[data-testid="mode-cards"] [data-testid="start-scan"], [data-testid="mode-cards"] [data-testid="start-print"]').count() === 2, 'scan + print under "Met kaartjes"');
     assert(await page.locator('[data-testid="mode-app"] [data-testid="start-digital"], [data-testid="mode-app"] [data-testid="start-bingo"]').count() === 2, 'Tijdlijn + Bingo under "Alleen de app"');
     assert((await page.getByTestId('start-settings').getAttribute('href')) === '#/instellingen', 'settings link points to #/instellingen');
-    assert((await page.getByTestId('app-version').textContent()).trim() === 'v2', 'version label v2');
+    assert((await page.getByTestId('app-version').textContent()).trim() === 'v3', 'version label v3');
     const scrollW = await page.evaluate(() => document.documentElement.scrollWidth);
     assert(scrollW <= 390, `no horizontal scroll (${scrollW})`);
     await page.getByTestId('start-rules').click();

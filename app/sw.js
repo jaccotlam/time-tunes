@@ -5,7 +5,7 @@
 // cross-origin and are never cached here; the same goes for Spotify
 // (api.spotify.com, accounts.spotify.com).
 // Bump VERSION when the list below changes; old caches are removed on activate.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const CACHE = `timetunesr-shell-${VERSION}`;
 const SHELL = [
   './',

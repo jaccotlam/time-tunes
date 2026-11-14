@@ -74,7 +74,7 @@ export function render(root, { install }) {
       <a class="btn btn-small btn-ghost" href="#/instellingen" data-testid="start-settings">${gearIcon}<span>Instellingen</span></a>
     </div>
     <div class="install-slot">${installHint(install)}</div>
-    <div class="deck-slot">${deckLineHtml({ kind: activeDeckInfo().kind, name: activeDeckInfo().name, cards: [] }, { testid: 'deck-info', count: '…' })}</div><p class="foot"><span class="version" data-testid="app-version">v2</span></p>
+    <div class="deck-slot">${deckLineHtml({ kind: activeDeckInfo().kind, name: activeDeckInfo().name, cards: [] }, { testid: 'deck-info', count: '…' })}</div><p class="foot"><span class="version" data-testid="app-version">v3</span></p>
   </section>`;
 
   const slot = root.querySelector('.install-slot');
