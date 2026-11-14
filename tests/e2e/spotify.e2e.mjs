@@ -333,7 +333,13 @@ export default async function run() {
     await page.waitForFunction(() => window.__tt.player.state.status === 'playing');
     const gs = await pstate();
     assert(gs.source === 'spotify' || gs.cardId === '003', `digital game plays via Spotify (card ${gs.cardId}, ${gs.source})`);
-    await noSecrets('digital game');
+    // Start cards lie face up: when card 001 (Dancing Queen) is one of them its title is
+    // legitimately on screen, so then only check what Spotify itself returned.
+    const dealt = (await page.evaluate(() => JSON.parse(localStorage.getItem('timetunesr.game.v1')))).players.flatMap((p) => p.timeline);
+    if (dealt.includes('001')) {
+      const t = await domText();
+      for (const s of SECRET.slice(2)) assert(!t.includes(s), `digital game: "${s}" not in the DOM`);
+    } else await noSecrets('digital game');
     await page.getByTestId('back-home').click();
     await page.getByTestId('screen-start').waitFor();
 

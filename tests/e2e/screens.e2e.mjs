@@ -12,7 +12,7 @@ export default async function run() {
     page.on('pageerror', (e) => errors.push(e.message));
     await page.goto(server.url);
     await page.getByTestId('screen-start').waitFor();
-    await page.waitForFunction(() => /kaarten in het deck/.test(document.querySelector('[data-testid="deck-info"]').textContent));
+    await page.waitForFunction(() => /Muziek: TimeTunesr-deck · \d+ kaarten/.test(document.querySelector('[data-testid="deck-info"]').textContent));
     await shot(page, '00-start');
     for (const id of ['start-scan', 'start-digital', 'start-print', 'start-rules', 'start-bingo', 'start-settings']) {
       assert(await page.getByTestId(id).isVisible(), `start button ${id} visible`);

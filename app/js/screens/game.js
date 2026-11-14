@@ -7,6 +7,8 @@ import * as player from '../player.js';
 import { icons, esc, store, vibrate, reducedMotion, toast } from '../ui.js';
 import { playerViewHtml, mountPlayerView } from './playerview.js';
 import { answerHtml } from './answer.js';
+import { isPlayable, deckSnapshot } from '../deck.js';
+import { deckLineHtml, deckLabel } from './deckline.js';
 
 export const name = 'game';
 
@@ -14,7 +16,7 @@ const GAME_KEY = 'timetunesr.game.v1';
 const SETUP_KEY = 'timetunesr.setup.v1';
 
 export function render(root, { deck }) {
-  const playable = deck.cards.filter((c) => Number.isFinite(c.year) && (c.previewUrl || c.itunesId));
+  const playable = deck.cards.filter(isPlayable);
   let game = restore();
   let view = null; // 'setup' | 'handoff' | 'place' | 'reveal' | 'won'
   let selectedSlot = null;
@@ -25,7 +27,13 @@ export function render(root, { deck }) {
     const s = store.get(GAME_KEY);
     if (!isValidGameState(s)) return null;
     const ids = [...s.pile, ...s.players.flatMap((p) => p.timeline), ...(s.currentCard ? [s.currentCard] : [])];
-    if (!ids.every((id) => deck.byId.has(id))) { store.remove(GAME_KEY); return null; }
+    // Games keep their own copy of the cards (s.deck), so switching decks does not break them.
+    const has = s.deck?.cards ? (id) => !!s.deck.cards[id] : (id) => deck.byId.has(id);
+    if (!ids.every(has)) {
+      store.remove(GAME_KEY);
+      setTimeout(() => toast('Het vorige potje paste niet bij deze muziek en is gestopt.', { kind: 'warn', ms: 4500 }), 0);
+      return null;
+    }
     return s;
   }
   function save() {
@@ -40,7 +48,7 @@ export function render(root, { deck }) {
     return { names, goal };
   }
 
-  function card(id) { return deck.byId.get(id); }
+  function card(id) { return game?.deck?.cards?.[id] || deck.byId.get(id); }
 
   function draw(next) {
     if (unmountPv) { unmountPv(); unmountPv = null; }
@@ -85,6 +93,7 @@ export function render(root, { deck }) {
     const tooSmall = playable.length < cardsNeeded(setup.names.length);
     return `${topbar('Speel zonder kaarten')}
       <p class="lead">Eén telefoon gaat rond. De app speelt een geheim fragment; jij kiest waar het in jouw tijdlijn hoort. Wie als eerste het doel haalt, wint.</p>
+      ${deckLineHtml(deck, { count: playable.length })}
       <form class="setup" data-testid="setup-form" autocomplete="off">
         <fieldset>
           <legend>Spelers of teams <span class="muted">(${MIN_PLAYERS}–${MAX_PLAYERS})</span></legend>
@@ -106,15 +115,22 @@ export function render(root, { deck }) {
           </div>
           <p class="muted small">De startkaart telt mee.</p>
         </fieldset>
-        ${tooSmall ? `<p class="warn" data-testid="deck-too-small">Er staan maar ${playable.length} speelbare kaarten in het deck; dat is te weinig voor ${setup.names.length} spelers.</p>` : ''}
+        ${tooSmall ? `<p class="warn" data-testid="deck-too-small">Er staan maar ${playable.length} speelbare ${deck.kind === 'playlist' ? `nummers in “${esc(deck.name)}”` : 'kaarten in het deck'}; dat is te weinig voor ${setup.names.length} spelers (minstens ${cardsNeeded(setup.names.length)}). <a href="#/playlists">Kies andere muziek</a> of speel met minder spelers.</p>` : ''}
+        ${!tooSmall && playable.length < setup.names.length * (setup.goal - 1) ? `<p class="small muted" data-testid="deck-short">Met ${playable.length} nummers haalt waarschijnlijk niemand het doel; dan wint de langste tijdlijn als de muziek op is.</p>` : ''}
         <button class="btn btn-primary btn-xl" type="submit" data-testid="start-game" ${tooSmall ? 'disabled' : ''}>${icons.play}<span>Start het spel</span></button>
       </form>`;
+  }
+
+  function otherDeckNote() {
+    if (!game.deck || game.deck.id === deck.id) return '';
+    return `<p class="small muted deck-note" data-testid="game-deck-note">Dit potje speelt nog met <b>${esc(game.deck.name)}</b>. Nieuwe potjes gebruiken ${esc(deckLabel(deck))}.</p>`;
   }
 
   function handoffHtml() {
     const p = game.players[game.current];
     return `${topbar(`Ronde ${game.round}`)}
       ${scoreboard()}
+      ${otherDeckNote()}
       <div class="handoff" data-testid="handoff">
         <p class="handoff-kicker">Geef de telefoon aan</p>
         <h2 class="handoff-name" data-testid="current-player">${esc(p.name)}</h2>
@@ -242,6 +258,7 @@ export function render(root, { deck }) {
         cards: playable.map((c) => ({ id: c.id, year: c.year })),
         seed: (Math.random() * 2 ** 32) >>> 0,
       });
+      game.deck = deckSnapshot(deck, playable);
     } catch (e) {
       toast(e.message, { kind: 'warn' });
       return;

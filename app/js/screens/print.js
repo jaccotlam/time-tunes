@@ -3,6 +3,9 @@ import qrcode from '../../vendor/qrcode-generator.mjs';
 import { cardUrl } from '../logic.js';
 import { generateCards, SQUARES, SIZES, YEAR_MARGIN } from '../bingo.js';
 import { icons, esc, store, logoSvg } from '../ui.js';
+import { loadBuiltinDeck } from '../deck.js';
+import * as playlists from '../playlists.js';
+import { playlistDeck, BUILTIN_ID } from '../playlist-logic.js';
 
 export const name = 'print';
 
@@ -38,9 +41,10 @@ function decadeClass(year) {
 
 function frontHtml(card, base) {
   if (!card) return '<div class="pc pc-empty"></div>';
+  // own-playlist cards carry a self-contained code (#/c/~...), so any phone can play them
   return `<div class="pc pc-front" data-testid="print-front" data-card-id="${esc(card.id)}">
     <div class="pc-brand">${logoSvg('pc-logo')}<span>TimeTunesr</span></div>
-    ${qrSvg(cardUrl(base, card.id))}
+    ${qrSvg(cardUrl(base, card.code || card.id))}
     <div class="pc-num">${esc(card.id)}</div>
   </div>`;
 }
@@ -56,7 +60,8 @@ function backHtml(card) {
 }
 
 /** Build the sheet pairs. Backs are mirrored per row for long-edge duplex. */
-export function sheetsHtml(cards, base) {
+export function sheetsHtml(cards, base, deckName = '') {
+  const brand = deckName ? `TimeTunesr · ${esc(deckName)}` : 'TimeTunesr';
   const out = [];
   const total = Math.ceil(cards.length / PER_SHEET);
   for (let s = 0; s < total; s++) {
@@ -68,11 +73,11 @@ export function sheetsHtml(cards, base) {
     }
     const label = `${chunk[0].id}–${chunk[chunk.length - 1].id}`;
     out.push(`<div class="sheet-page" data-testid="print-sheet" data-side="front">
-      <div class="sheet-label">TimeTunesr · vel ${s + 1}/${total} · VOORKANT · kaarten ${esc(label)}</div>
+      <div class="sheet-label">${brand} · vel ${s + 1}/${total} · VOORKANT · kaarten ${esc(label)}</div>
       <div class="sheet-grid">${slots.map((c) => frontHtml(c, base)).join('')}</div>
     </div>`);
     out.push(`<div class="sheet-page" data-testid="print-sheet" data-side="back">
-      <div class="sheet-label">TimeTunesr · vel ${s + 1}/${total} · ACHTERKANT · kaarten ${esc(label)}</div>
+      <div class="sheet-label">${brand} · vel ${s + 1}/${total} · ACHTERKANT · kaarten ${esc(label)}</div>
       <div class="sheet-grid">${backs.map((c) => backHtml(c)).join('')}</div>
     </div>`);
   }
@@ -114,7 +119,15 @@ export function bingoSheetsHtml(count, size, seed) {
   return out.join('');
 }
 
-export function render(root, { deck }) {
+export function render(root, { deck: activeDeck, params = [] }) {
+  // #/print/<playlist id>: print that playlist; else the active deck.
+  const wanted = params[0] && params[0] !== BUILTIN_ID ? playlists.get(params[0]) : null;
+  let deck = wanted ? playlistDeck(wanted) : activeDeck;
+  if (params[0] === BUILTIN_ID && activeDeck.kind !== 'builtin') {
+    loadBuiltinDeck().then((d) => { if (root.isConnected && document.body.dataset.route === name) { deck = d; switchDeck(); } }).catch(() => {});
+  }
+  const isPlaylist = () => deck.kind === 'playlist';
+  const printable = () => (isPlaylist() ? deck.cards.filter((c) => c.code) : deck.cards);
   const saved = store.get(BASE_KEY, null);
   const ids = deck.cards.map((c) => Number.parseInt(c.id, 10)).filter(Number.isFinite);
   const minId = ids.length ? Math.min(...ids) : 1;
@@ -169,9 +182,17 @@ export function render(root, { deck }) {
         </label>
         <p class="small muted">Standaard het adres waarop je de app nu gebruikt. Print je lokaal maar host je de app elders (bv. GitHub Pages)? Vul dan dat adres in. <button type="button" class="linklike" data-action="reset-base" data-testid="print-base-reset">Standaard herstellen</button></p>
         <p class="warn small" data-testid="print-base-warn" hidden></p>
+        <label class="field">
+          <span>Welke muziek?</span>
+          <select name="deck" data-testid="print-deck" class="print-deck">
+            <option value="${BUILTIN_ID}">TimeTunesr-deck (ingebouwd)</option>
+            ${playlists.all().map((p) => `<option value="${esc(p.id)}">${esc(p.name)} (eigen playlist)</option>`).join('')}
+          </select>
+        </label>
+        <p class="small muted print-deck-note" data-testid="print-deck-note"></p>
         <fieldset class="field">
           <legend>Welke kaarten?</legend>
-          <label class="radio"><input type="radio" name="mode" value="all" checked data-testid="print-all"> Alle kaarten (${deck.cards.length})</label>
+          <label class="radio"><input type="radio" name="mode" value="all" checked data-testid="print-all"> Alle kaarten (<span data-slot="count">${deck.cards.length}</span>)</label>
           <label class="radio"><input type="radio" name="mode" value="range" data-testid="print-range"> Bereik:
             <input type="number" name="from" min="${minId}" max="${maxId}" value="${opts.from}" aria-label="Vanaf kaartnummer" data-testid="print-from">
             t/m
@@ -204,10 +225,10 @@ export function render(root, { deck }) {
   let timer = 0;
 
   function selected() {
-    if (opts.mode === 'all') return deck.cards;
+    if (opts.mode === 'all') return printable();
     const lo = Math.min(opts.from, opts.to);
     const hi = Math.max(opts.from, opts.to);
-    return deck.cards.filter((c) => {
+    return printable().filter((c) => {
       const n = Number.parseInt(c.id, 10);
       return Number.isFinite(n) && n >= lo && n <= hi;
     });
@@ -249,10 +270,40 @@ export function render(root, { deck }) {
     const nSheets = Math.ceil(cards.length / PER_SHEET);
     summary.innerHTML = cards.length
       ? `<b>${cards.length}</b> ${cards.length === 1 ? 'kaart' : 'kaarten'} · ${nSheets} ${nSheets === 1 ? 'vel' : 'vellen'} · ${nSheets * 2} pagina's (voor + achter)`
-      : 'Geen kaarten in dit bereik.';
+      : (deck.cards.length ? 'Geen kaarten in dit bereik.' : 'Deze playlist heeft nog geen nummers.');
     root.querySelector('[data-action="print"]').disabled = !cards.length;
-    sheets.innerHTML = cards.length ? sheetsHtml(cards, base) : '';
+    sheets.innerHTML = cards.length ? sheetsHtml(cards, base, isPlaylist() ? deck.name : '') : '';
     fit();
+  }
+
+  function deckNote() {
+    const note = root.querySelector('[data-testid="print-deck-note"]');
+    const skipped = deck.cards.length - printable().length;
+    note.hidden = !isPlaylist();
+    note.innerHTML = isPlaylist()
+      ? `De QR-codes van een eigen playlist werken op elke telefoon met TimeTunesr, ook zonder deze playlist. Het jaartal zit (onleesbaar) in de code; titel en artiest haalt de app op bij Apple Music.${skipped ? ` <b>${skipped} ${skipped === 1 ? 'nummer staat' : 'nummers staan'} niet bij Apple Music en ${skipped === 1 ? 'kan' : 'kunnen'} niet geprint worden.</b>` : ''}`
+      : '';
+  }
+
+  function switchDeck() {
+    const ids2 = deck.cards.map((c) => Number.parseInt(c.id, 10)).filter(Number.isFinite);
+    const lo = ids2.length ? Math.min(...ids2) : 1;
+    const hi = ids2.length ? Math.max(...ids2) : 1;
+    form.elements.deck.value = deck.id || BUILTIN_ID;
+    root.querySelector('[data-slot="count"]').textContent = String(printable().length);
+    for (const [el, v] of [[form.elements.from, lo], [form.elements.to, Math.min(hi, lo + PER_SHEET - 1)]]) {
+      el.min = String(lo); el.max = String(hi); el.value = String(v);
+    }
+    form.querySelector('input[value="all"]').checked = true;
+    deckNote();
+    readForm();
+    rebuild();
+  }
+
+  async function chooseDeck(id) {
+    const p = id !== BUILTIN_ID ? playlists.get(id) : null;
+    try { deck = p ? playlistDeck(p) : await loadBuiltinDeck(); } catch { return; }
+    switchDeck();
   }
 
   function readForm() {
@@ -270,6 +321,7 @@ export function render(root, { deck }) {
   }
 
   const onInput = (e) => {
+    if (e.target.name === 'deck') { chooseDeck(e.target.value); return; }
     if (e.target.type === 'radio') { readForm(); rebuild(); return; }
     if (e.target.name === 'from' || e.target.name === 'to') {
       form.querySelector('input[value="range"]').checked = true;
@@ -300,6 +352,8 @@ export function render(root, { deck }) {
   form.addEventListener('submit', (e) => e.preventDefault());
   root.addEventListener('click', onClick);
   window.addEventListener('resize', fit);
+  form.elements.deck.value = deck.id || BUILTIN_ID;
+  deckNote();
   rebuild();
 
   return () => {

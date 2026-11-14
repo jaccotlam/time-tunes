@@ -3,6 +3,7 @@ import { findCard } from '../deck.js';
 import { startScanner, cameraSupport } from '../scanner.js';
 import { icons, toast, vibrate, esc } from '../ui.js';
 import * as player from '../player.js';
+import { decodeCardCode, isCardCode } from '../playlist-logic.js';
 
 export const name = 'scan';
 
@@ -103,9 +104,19 @@ export function render(root, { deck, navigate }) {
       vibrate([30, 60, 30]);
       return;
     }
+    if (isCardCode(id)) {
+      // own-playlist card: self-contained, works whatever deck is active
+      if (!decodeCardCode(id)) {
+        toast('Deze kaart is niet goed te lezen. Probeer opnieuw.', { kind: 'warn' });
+        vibrate([30, 60, 30]);
+        return;
+      }
+      openCard({ id });
+      return;
+    }
     const card = findCard(deck, id);
     if (!card) {
-      toast(`Kaart ${id} staat niet in dit deck.`, { kind: 'warn' });
+      toast(`Kaart ${id} staat niet in ${deck.kind === 'playlist' ? `“${deck.name}”` : 'dit deck'}.`, { kind: 'warn' });
       vibrate([30, 60, 30]);
       return;
     }
@@ -140,9 +151,10 @@ export function render(root, { deck, navigate }) {
       input.focus();
       return;
     }
+    if (isCardCode(id) && decodeCardCode(id)) { msg.textContent = ''; player.unlock(); openCard({ id }); return; }
     const card = findCard(deck, id);
     if (!card) {
-      msg.innerHTML = `Kaart <strong>${esc(id)}</strong> staat niet in dit deck (${deck.cards.length} ${deck.cards.length === 1 ? 'kaart' : 'kaarten'}).`;
+      msg.innerHTML = `Kaart <strong>${esc(id)}</strong> staat niet in ${deck.kind === 'playlist' ? `de playlist “${esc(deck.name)}”` : 'dit deck'} (${deck.cards.length} ${deck.cards.length === 1 ? 'kaart' : 'kaarten'}).`;
       input.select();
       return;
     }

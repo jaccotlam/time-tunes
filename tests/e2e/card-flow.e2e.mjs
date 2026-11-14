@@ -13,7 +13,7 @@ export default async function run() {
 
     await page.goto(server.url);
     await page.getByTestId('screen-start').waitFor();
-    await page.waitForFunction(() => /kaarten in het deck/.test(document.querySelector('[data-testid="deck-info"]').textContent));
+    await page.waitForFunction(() => /Muziek: TimeTunesr-deck · \d+ kaarten/.test(document.querySelector('[data-testid="deck-info"]').textContent));
     await shot(page, '01-start');
 
     await page.getByTestId('start-scan').click();

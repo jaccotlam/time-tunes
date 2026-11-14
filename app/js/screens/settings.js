@@ -4,6 +4,7 @@ import * as player from '../player.js';
 import { loopbackVersion } from '../pkce.js';
 import { icons, esc, toast } from '../ui.js';
 import { deviceListHtml, NO_DEVICE_HELP } from './devices.js';
+import { activeDeckInfo } from '../deck.js';
 
 export const name = 'settings';
 
@@ -155,6 +156,12 @@ export function render(root) {
             <span><b>Spotify</b><small>Hele nummers, Spotify Premium nodig.</small></span></label>
         </div>
         ${sourceNote}
+      </section>
+
+      <section class="set-card" aria-labelledby="set-music" data-testid="settings-music">
+        <h2 id="set-music">${icons.music}<span>Muziek</span></h2>
+        <p>Je speelt met <b data-testid="settings-deck-name">${esc(activeDeckInfo().name)}</b>. Maak een eigen playlist met je eigen nummers, of kies een andere.</p>
+        <a class="btn btn-ghost" href="#/playlists" data-testid="settings-playlists">${icons.music}<span>Eigen playlists</span></a>
       </section>
 
       <section class="set-card" aria-labelledby="set-spotify" data-testid="spotify-block" data-connected="${st.connected}">

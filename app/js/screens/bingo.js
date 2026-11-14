@@ -8,6 +8,8 @@ import * as player from '../player.js';
 import { icons, esc, store, vibrate, reducedMotion, toast } from '../ui.js';
 import { playerViewHtml, mountPlayerView } from './playerview.js';
 import { answerHtml } from './answer.js';
+import { isPlayable, deckSnapshot } from '../deck.js';
+import { deckLineHtml, deckLabel } from './deckline.js';
 
 export const name = 'bingo';
 
@@ -40,7 +42,7 @@ export function bingoCardHtml(p, size, { selectable = false, selected = null, hi
 }
 
 export function render(root, { deck }) {
-  const playable = deck.cards.filter((c) => Number.isFinite(c.year) && (c.previewUrl || c.itunesId));
+  const playable = deck.cards.filter(isPlayable);
   let game = restore();
   let view = null; // 'setup' | 'handoff' | 'claim' | 'reveal' | 'won'
   let selected = null;
@@ -52,7 +54,13 @@ export function render(root, { deck }) {
     const s = store.get(BINGO_KEY);
     if (!isValidBingoState(s)) return null;
     const ids = [...s.pile, ...(s.currentCard ? [s.currentCard] : []), ...(s.last ? [s.last.cardId] : [])];
-    if (!ids.every((id) => deck.byId.has(id))) { store.remove(BINGO_KEY); return null; }
+    // Games keep their own copy of the cards (s.deck), so switching decks does not break them.
+    const has = s.deck?.cards ? (id) => !!s.deck.cards[id] : (id) => deck.byId.has(id);
+    if (!ids.every(has)) {
+      store.remove(BINGO_KEY);
+      setTimeout(() => toast('Het vorige bingopotje paste niet bij deze muziek en is gestopt.', { kind: 'warn', ms: 4500 }), 0);
+      return null;
+    }
     return s;
   }
   function save() {
@@ -67,7 +75,7 @@ export function render(root, { deck }) {
     return { names, size };
   }
   function saveSetup() { store.set(SETUP_KEY, { names: setup.names, size: setup.size }); }
-  const card = (id) => deck.byId.get(id);
+  const card = (id) => game?.deck?.cards?.[id] || deck.byId.get(id);
 
   function draw(next) {
     if (unmountPv) { unmountPv(); unmountPv = null; }
@@ -110,6 +118,7 @@ export function render(root, { deck }) {
     const tooSmall = playable.length < setup.names.length * 3;
     return `${topbar('Bingo')}
       <p class="lead">Iedereen krijgt een eigen bingokaart. Hoor je een fragment, claim dan één vakje dat erbij past. Goed? Afgestempeld. Wie het eerst een volle rij, kolom of diagonaal heeft, roept <b>bingo</b>.</p>
+      ${deckLineHtml(deck, { testid: 'bingo-deck', count: playable.length })}
       <form class="setup bingo-setup" data-testid="bingo-setup-form" autocomplete="off">
         <fieldset>
           <legend>Spelers of teams <span class="muted">(${MIN_PLAYERS}–${MAX_PLAYERS})</span></legend>
@@ -140,7 +149,7 @@ export function render(root, { deck }) {
             <li><span class="dot kind-artist"></span><b>Artiest</b> of <b>Titel</b>: zeg het hardop, de groep beslist na de onthulling.</li>
           </ul>
         </details>
-        ${tooSmall ? `<p class="warn" data-testid="bingo-deck-too-small">Er staan te weinig speelbare kaarten in het deck voor ${setup.names.length} spelers.</p>` : ''}
+        ${tooSmall ? `<p class="warn" data-testid="bingo-deck-too-small">Er staan te weinig speelbare ${deck.kind === 'playlist' ? `nummers in “${esc(deck.name)}”` : 'kaarten in het deck'} voor ${setup.names.length} spelers: ${playable.length}, en Bingo vraagt er minstens ${setup.names.length * 3}. <a href="#/playlists">Kies andere muziek</a> of speel met minder spelers.</p>` : ''}
         <button class="btn btn-primary btn-xl" type="submit" data-testid="bingo-start" ${tooSmall ? 'disabled' : ''}>${icons.play}<span>Deel de kaarten uit</span></button>
       </form>`;
   }
@@ -148,8 +157,11 @@ export function render(root, { deck }) {
   function handoffHtml() {
     const p = game.players[game.current];
     const open = p.marks.filter((m) => m == null).length;
+    const note = game.deck && game.deck.id !== deck.id
+      ? `<p class="small muted deck-note" data-testid="bingo-deck-note">Dit potje speelt nog met <b>${esc(game.deck.name)}</b>. Nieuwe potjes gebruiken ${esc(deckLabel(deck))}.</p>` : '';
     return `${topbar(`Bingo · ronde ${game.round}`)}
       ${progressHtml()}
+      ${note}
       <div class="handoff" data-testid="bingo-handoff">
         <p class="handoff-kicker">Geef de telefoon aan</p>
         <h2 class="handoff-name" data-testid="bingo-current-player">${esc(p.name)}</h2>
@@ -291,6 +303,7 @@ export function render(root, { deck }) {
         names: setup.names, size: setup.size, seed,
         cards: playable.map((c) => ({ id: c.id, year: c.year })),
       });
+      game.deck = deckSnapshot(deck, playable);
     } catch (e) {
       toast(e.message, { kind: 'warn' });
       return;

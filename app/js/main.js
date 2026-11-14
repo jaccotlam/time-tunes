@@ -11,16 +11,21 @@ import * as rulesScreen from './screens/rules.js';
 import * as bingoScreen from './screens/bingo.js';
 import * as settingsScreen from './screens/settings.js';
 import * as spotify from './spotify.js';
+import * as playlistsScreen from './screens/playlists.js';
+import * as playlistScreen from './screens/playlist.js';
 
 const routes = [
   { re: /^#?\/?$/, screen: startScreen, needsDeck: false },
   { re: /^#\/scan\/?$/, screen: scanScreen, needsDeck: true },
-  { re: /^#\/c\/([0-9A-Za-z]+)\/?$/, screen: cardScreen, needsDeck: true },
+  { re: /^#\/c\/(~?[0-9A-Za-z]+)\/?$/, screen: cardScreen, needsDeck: true },
   { re: /^#\/spel\/?$/, screen: gameScreen, needsDeck: true },
-  { re: /^#\/print\/?$/, screen: printScreen, needsDeck: true },
+  { re: /^#\/print(?:\/([A-Za-z0-9_-]+))?\/?$/, screen: printScreen, needsDeck: true },
   { re: /^#\/regels\/?$/, screen: rulesScreen, needsDeck: false },
   { re: /^#\/bingo\/?$/, screen: bingoScreen, needsDeck: true },
   { re: /^#\/instellingen\/?$/, screen: settingsScreen, needsDeck: false },
+  { re: /^#\/playlists\/?$/, screen: playlistsScreen, needsDeck: false },
+  { re: /^#\/playlists\/([A-Za-z0-9_-]+)\/?$/, screen: playlistScreen, needsDeck: false },
+  { re: /^#\/pl\/(.+)$/, screen: playlistsScreen, needsDeck: false },
 ];
 
 const root = document.getElementById('app');

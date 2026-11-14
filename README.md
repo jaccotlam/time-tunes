@@ -41,12 +41,49 @@ Op een telefoon in hetzelfde netwerk werkt alles behalve de camera-scanner, want
 | `app/js/bingo.js` | Pure bingologica zonder DOM: kaarten genereren (zaaibare RNG), claims controleren, lijn en winnaar bepalen |
 | `app/js/screens/` | De schermen: start, scannen, kaart afspelen, Tijdlijn (digitaal), Bingo, printen, spelregels |
 | `app/css/bingo.css` | Opmaak van het bingospel en de printbare bingokaarten |
+| `app/js/playlist-logic.js`, `playlists.js`, `itunes.js`, `spotify-playlists.js`, `screens/playlist*.js`, `css/playlists.css` | Eigen playlists: pure logica (regels, jaarkeuze, QR- en deelcodes), opslag, iTunes-zoeken, Spotify-import, schermen |
 | `app/vendor/` | jsQR (QR lezen, Apache-2.0) en qrcode-generator (QR maken, MIT), met licenties |
 | `app/sw.js` | Service worker: app-shell offline, netwerk eerst zodat updates direct doorkomen |
 | `tests/unit/` | `node --test` voor de spellogica |
 | `tests/e2e/` | Playwright-scripts (kaart scannen met nep-camera, Tijdlijn, Bingo, printen, PWA) |
 
-Routes (hash): `#/` start, `#/scan`, `#/c/042` (verborgen afspeelscherm voor kaart 042), `#/spel` (Tijdlijn), `#/bingo`, `#/print`, `#/regels`, `#/instellingen`.
+Routes (hash): `#/` start, `#/scan`, `#/c/042` (verborgen afspeelscherm voor kaart 042), `#/c/~<code>` (kaart van een eigen playlist), `#/spel` (Tijdlijn), `#/bingo`, `#/print` (of `#/print/<playlist-id>`), `#/regels`, `#/instellingen`, `#/playlists` (muziek kiezen), `#/playlists/<id>` (een playlist bewerken), `#/pl/<code>` (gedeelde playlist ontvangen).
+
+## Eigen playlist
+
+Spelen met je eigen nummers in plaats van het ingebouwde deck kan in alle spelvormen: scannen met kaartjes, Tijdlijn, Bingo (en Samen spelen, dat ook het actieve deck gebruikt). Tik op het startscherm op de regel **Muziek: … — wijzig** (of ga via **Instellingen → Eigen playlists**) en maak een playlist.
+
+**Nummers toevoegen** kan op drie manieren:
+
+- **Zoeken** via de iTunes Search API. Er wordt pas gezocht als je even stopt met typen (of op het vergrootglas tikt). Karaoke-, tribute-, cover- en liveversies komen onderaan.
+- **Lijst plakken**: één nummer per regel als `Artiest - Titel`, eventueel met `, 1987` of `(1987)` erachter. De app zoekt de regels één voor één op (Apple staat ongeveer 20 zoekvragen per minuut toe, dus ±3 s per regel) met een voortgangsbalk. Stoppen kan altijd; gevonden nummers blijven staan, de rest en de niet-gevonden regels blijven in het tekstvak. Twijfelgevallen krijgen een keuzelijst met andere versies.
+- **Spotify-playlist overnemen** (alleen als Spotify gekoppeld is). Volgens de Spotify-documentatie van februari 2026 leest de app de nummers met `GET /playlists/{id}/items` (veld `item`, voorheen `track`), en dat werkt in Development Mode **alleen voor playlists die je zelf hebt gemaakt of waaraan je meewerkt**; voor andere playlists geeft Spotify 403. Daarvoor zijn de scopes `playlist-read-private` en `playlist-read-collaborative` nodig: wie eerder alleen voor afspelen koppelde, geeft één keer opnieuw toestemming (de app vraagt daarom). Daarna zoekt de app op de achtergrond voor elk nummer een Apple Music-fragment; een nummer zonder match speelt alleen via Spotify (als Spotify de muziekbron is) en doet anders niet mee.
+
+**Het jaartal.** iTunes en Spotify geven vaak het jaar van een heruitgave of verzamelalbum. De app neemt het vroegste jaar onder de zoekresultaten die duidelijk dezelfde opname van dezelfde artiest zijn (geen live, remix, karaoke). Komt dat jaar alleen van een verzamelalbum of uit één bron, dan staat er **controleer het jaar**. Elk jaar is per nummer aan te passen; het jaar hoort bij de playlist.
+
+**Minimum.** Tijdlijn vraagt minstens 3 nummers (1 startkaart per speler + 1), Bingo 3 per speler (dus 6). Met minder is de startknop uitgeschakeld en zegt de app waarom; scannen met kaartjes kan altijd. Met 30+ nummers duren potjes lang genoeg.
+
+**Lopende potjes** bewaren een kopie van hun kaarten. Wissel je van muziek terwijl er een potje loopt, dan speelt dat potje gewoon door met de oude muziek (de app meldt dat); een nieuw potje gebruikt de nieuwe.
+
+**Printen en scannen op elk toestel.** De printpagina print het actieve deck (kies erboven een andere playlist), met de naam van de playlist op elk vel. Een ingebouwde kaart heeft als QR `#/c/042`; een kaart van een eigen playlist `#/c/~<code>`, waarin het iTunes-id en het jaar zitten (het jaar licht versluierd, met een controleteken). Zo'n kaart speelt op elke telefoon met TimeTunesr, ook zonder die playlist: de app zoekt het nummer op id op en toont bij **Toon antwoord** het jaar uit de QR en titel en artiest uit Apple Music.
+
+**Delen** maakt een link en een QR-code: `#/pl/<code>` met per nummer alleen iTunes-id + jaar (±10 tekens) en de naam. Het andere toestel vraagt eerst of de playlist erbij mag en haalt titels op met één lookup per 150 id's. Is de link te lang voor één QR-code (meer dan ±60 nummers), dan wordt hij over meerdere codes verdeeld (*Code 1 van 3*); elke gescande code voegt zijn deel toe aan dezelfde playlist. Boven de 8 codes is er alleen de link. **Exporteren** geeft een `.json`-back-up; **Back-up terugzetten** voegt die als nieuwe playlist toe (nooit overschrijven).
+
+**Opslag** (localStorage): `timetunesr.playlists.v1` = `{ v: 1, lists: [{ id, name, nextN, tracks: [{ n, itunesId, spotifyId?, title, artist, album, year, yearSure, previewUrl, trackViewUrl }] }] }` en `timetunesr.activeDeck.v1` = `"builtin"` of het id van een playlist (JSON-string). `n` is het kaartnummer binnen de playlist. Een voorbeeld-playlist klaarzetten (bijv. voor de uitlegvideo), in de console of met `page.evaluate`:
+
+```js
+localStorage.setItem('timetunesr.playlists.v1', JSON.stringify({ v: 1, lists: [{ id: 'demo', name: 'Feestje', tracks: [
+  { n: 1, itunesId: 6800311742, title: 'Dancing Queen', artist: 'ABBA', year: 1976 },
+  { n: 2, itunesId: 1440763833, title: 'Gold Digger', artist: 'Kanye West', year: 2005 },
+  { n: 3, itunesId: 1308586364, title: 'Back for Good', artist: 'Take That', year: 1995 },
+  { n: 4, itunesId: 1322068804, title: 'Mambo No. 5 (A Little Bit Of...)', artist: 'Lou Bega', year: 1999 },
+  { n: 5, itunesId: 268284600, title: '...Baby One More Time', artist: 'Britney Spears', year: 1998 },
+  { n: 6, itunesId: 1440741632, title: 'In the Summertime', artist: 'Mungo Jerry', year: 1970 },
+] }] }));
+localStorage.setItem('timetunesr.activeDeck.v1', JSON.stringify('demo'));
+```
+
+Testen: `tests/unit/playlist.test.mjs`, `tests/e2e/playlists.e2e.mjs` en `playlists-spotify.e2e.mjs` (met nagebootste iTunes en Spotify). `node tests/e2e/playlists-live.e2e.mjs` is een rooktest tegen de echte iTunes-API (internet nodig; geen onderdeel van `npm run test:e2e`). `localStorage['timetunesr.itunesGap.v1'] = '30'` verkort voor tests de wachttijd tussen iTunes-verzoeken (standaard 3,1 s).
 
 ## Kaarten printen
 

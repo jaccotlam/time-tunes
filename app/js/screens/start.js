@@ -1,4 +1,5 @@
-import { loadDeck } from '../deck.js';
+import { loadDeck, activeDeckInfo } from '../deck.js';
+import { deckLineHtml } from './deckline.js';
 import { icons, logoSvg, wordmark, esc } from '../ui.js';
 
 export const name = 'start';
@@ -65,7 +66,7 @@ export function render(root, { install }) {
       <a class="btn btn-small btn-ghost" href="#/instellingen" data-testid="start-settings">${gearIcon}<span>Instellingen</span></a>
     </div>
     <div class="install-slot">${installHint(install)}</div>
-    <p class="foot"><span class="version" data-testid="app-version">v2</span> · <span data-testid="deck-info">&nbsp;</span></p>
+    <div class="deck-slot">${deckLineHtml({ kind: activeDeckInfo().kind, name: activeDeckInfo().name, cards: [] }, { testid: 'deck-info', count: '…' })}</div><p class="foot"><span class="version" data-testid="app-version">v2</span></p>
   </section>`;
 
   const slot = root.querySelector('.install-slot');
@@ -84,10 +85,10 @@ export function render(root, { install }) {
   }
 
   loadDeck().then((deck) => {
-    const info = root.querySelector('[data-testid="deck-info"]');
-    if (info) info.innerHTML = `${esc(deck.cards.length)} ${deck.cards.length === 1 ? 'kaart' : 'kaarten'} in het deck · fragmenten via Apple Music`;
+    const info = root.querySelector('.deck-slot');
+    if (info) info.innerHTML = deckLineHtml(deck, { testid: 'deck-info' });
   }).catch(() => {
-    const info = root.querySelector('[data-testid="deck-info"]');
+    const info = root.querySelector('[data-testid="deck-info"] .deck-line-text');
     if (info) info.textContent = 'Kaartendeck nog niet geladen (offline?)';
   });
 

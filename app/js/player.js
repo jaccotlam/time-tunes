@@ -202,6 +202,11 @@ export function usePreview() {
   return loadPreview(card, { autoplay: true });
 }
 
+/** Store a lookup that was already done elsewhere (own-playlist cards), so load() skips it. */
+export function prime(itunesId, info) {
+  if (itunesId && info?.previewUrl) lookupCache.set(itunesId, { previewUrl: info.previewUrl, trackViewUrl: info.trackViewUrl || null });
+}
+
 /** Warm up the trackViewUrl lookup for the answer screen. */
 export function freshInfo(card) {
   return card?.itunesId ? lookupCache.get(card.itunesId) || null : null;
