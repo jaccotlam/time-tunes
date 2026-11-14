@@ -50,7 +50,7 @@ export default async function run() {
 
     // New deploy: change the start screen text on the server; one normal reload must show it.
     const startJs = join(copy, 'js/screens/start.js');
-    writeFileSync(startJs, readFileSync(startJs, 'utf8').replace('Luister. Raad het jaar. Bouw je tijdlijn.', 'NIEUWE VERSIE'));
+    writeFileSync(startJs, readFileSync(startJs, 'utf8').replace('Luister. Raad het jaar. Speel samen.', 'NIEUWE VERSIE'));
     await page.goto(url);
     await page.reload();
     await page.getByTestId('screen-start').waitFor();

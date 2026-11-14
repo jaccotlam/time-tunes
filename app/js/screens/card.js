@@ -30,7 +30,7 @@ export function render(root, { deck, params }) {
       <h1 class="topbar-title"><span class="chip" data-testid="card-number">Kaart ${esc(card.id)}</span></h1>
       <span class="topbar-spacer"></span>
     </header>
-    <p class="card-lead">Welk jaar? Leg de kaart op de juiste plek in je tijdlijn.</p>
+    <p class="card-lead">Welk jaar? Leg de kaart in je tijdlijn, of claim een vakje op je bingokaart.</p>
     ${playerViewHtml()}
     <div class="card-actions">
       <a class="btn btn-primary btn-xl" href="#/scan" data-testid="next-card">${icons.scan}<span>Volgende kaart scannen</span></a>

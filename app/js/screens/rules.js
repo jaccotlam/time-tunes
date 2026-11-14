@@ -11,43 +11,46 @@ export function render(root) {
     </header>
 
     <article class="rules">
-      <p class="lead">In TimeTunesr hoor je een fragment van een nummer, zonder titel of artiest. Raad uit welk jaar het komt en leg de kaart op de goede plek in jouw eigen tijdlijn. Wie als eerste een volle tijdlijn heeft, wint.</p>
+      <p class="lead">TimeTunesr speelt een stukje muziek zonder te zeggen wat het is. Jij raadt uit welke tijd het komt. Er zijn twee spellen, <b>Tijdlijn</b> en <b>Bingo</b>, en twee manieren om ze te spelen: met geprinte kaartjes of alleen met de app.</p>
 
-      <section class="rule">
-        <h2><span class="rule-num">1</span>Voorbereiden</h2>
+      <section class="rule rule-mode" data-testid="rules-modes">
+        <h2><span class="rule-num">?</span>Met kaartjes of alleen de app</h2>
         <ul>
-          <li>Speel met 2 tot 8 spelers of teams. Je hebt één telefoon met TimeTunesr nodig.</li>
-          <li>Schud de kaarten en leg de stapel met de QR-kant naar boven.</li>
-          <li>Iedereen krijgt één <strong>startkaart</strong> met de jaarkant open voor zich. Dat is het begin van je tijdlijn.</li>
-          <li>Spreek af hoeveel kaarten je nodig hebt om te winnen. Standaard is dat <strong>10</strong>, inclusief de startkaart.</li>
+          <li><b>Met kaartjes:</b> elke muziekkaart heeft een QR-code. Scan hem met de app, luister, en draai de kaart om voor jaar, artiest en titel. De telefoon kan in het midden blijven liggen.</li>
+          <li><b>Alleen de app:</b> geen kaartjes nodig. De app kiest de nummers, houdt de stand bij en controleert de antwoorden. Geef de telefoon door aan wie aan de beurt is.</li>
+          <li>Speel met 2 tot 8 spelers of teams. Muziekkaartjes en bingokaarten print je via <em>Kaarten printen</em>.</li>
         </ul>
       </section>
 
-      <section class="rule">
-        <h2><span class="rule-num">2</span>Een beurt</h2>
+      <section class="rule" data-testid="rules-timeline">
+        <h2><span class="rule-num">1</span>Tijdlijn</h2>
+        <p>Bouw een rij nummers op volgorde: oud links, nieuw rechts. Wie als eerste het afgesproken aantal kaarten (standaard <strong>10</strong>) goed heeft liggen, wint.</p>
+        <h3>Met kaartjes</h3>
         <ol>
-          <li>Pak de bovenste kaart en scan de QR-code met de app (of typ het kaartnummer). Het fragment start zonder te verklappen wat het is.</li>
-          <li>Luister goed. Overleg mag, maar de speler aan de beurt beslist.</li>
-          <li>Leg de kaart in je tijdlijn: links van, tussen of rechts van je open kaarten. Oud links, nieuw rechts.</li>
-          <li>Draai de kaart om. Klopt de plek? Dan blijft hij open liggen. Fout? Dan gaat de kaart uit het spel.</li>
-          <li>Hetzelfde jaar als de kaart ernaast is altijd goed, aan welke kant je hem ook legt.</li>
-          <li>Daarna is de volgende speler (met de klok mee) aan de beurt.</li>
+          <li>Iedereen krijgt één kaart met de jaarkant open: het begin van je tijdlijn.</li>
+          <li>Pak een kaart van de stapel en scan hem. Luister naar het fragment.</li>
+          <li>Leg de kaart waar jij denkt dat hij hoort: vóór, tussen of na je open kaarten.</li>
+          <li>Draai hem om. Goed? Hij blijft liggen. Fout? Weg ermee. Hetzelfde jaar als je buurkaart telt altijd als goed.</li>
+          <li>De volgende speler is aan de beurt.</li>
         </ol>
+        <h3>Alleen de app</h3>
+        <p>Kies <em>Tijdlijn</em>, vul de namen in en tik op de plek in je tijdlijn waar het nummer hoort. De app laat meteen zien of het klopt.</p>
       </section>
 
-      <section class="rule">
-        <h2><span class="rule-num">3</span>Winnen</h2>
-        <p>Wie als eerste het afgesproken aantal kaarten goed in zijn tijdlijn heeft liggen, wint. Zijn de kaarten op? Dan wint wie de langste tijdlijn heeft.</p>
-      </section>
-
-      <section class="rule">
-        <h2><span class="rule-num">4</span>Spelen zonder kaarten</h2>
-        <p>Geen kaarten bij de hand? Kies <em>Speel zonder kaarten</em> op het startscherm. Vul de namen in en geef de telefoon door:</p>
-        <ul>
-          <li>De app speelt een willekeurig nummer dat nog niet geweest is.</li>
-          <li>Tik op de plek in je tijdlijn waar het nummer hoort en bevestig.</li>
-          <li>De app laat meteen zien of het goed was, en houdt de stand en tijdlijnen bij. Ook als je de pagina per ongeluk herlaadt.</li>
-        </ul>
+      <section class="rule" data-testid="rules-bingo">
+        <h2><span class="rule-num">2</span>Bingo</h2>
+        <p>Iedereen heeft een eigen bingokaart met vakjes zoals <em>Jaren 80</em>, <em>Vóór 2000</em>, <em>Jaar ±2</em>, <em>Artiest</em> en <em>Titel</em>. Wie als eerste een volle rij, kolom of diagonaal heeft, roept bingo en wint.</p>
+        <ol>
+          <li>Luister naar het fragment.</li>
+          <li>Kies één open vakje op je eigen kaart dat volgens jou bij dit nummer past. Je moet altijd een vakje kiezen.</li>
+          <li>Bij <em>Jaar ±2</em> noem je een jaartal: maximaal 2 jaar ernaast is goed. Bij <em>Artiest</em> of <em>Titel</em> zeg je het antwoord hardop.</li>
+          <li>Onthul het antwoord. Klopt je claim? Dan is het vakje van jou. Fout? Het vakje blijft open. Over artiest en titel beslist de groep.</li>
+          <li>Zijn de nummers op voordat iemand bingo heeft? Dan wint wie de meeste vakjes heeft.</li>
+        </ol>
+        <h3>Met kaartjes</h3>
+        <p>Print de bingokaarten (iedere speler één) en pak een pen. Scan een muziekkaart, claim hardop een vakje, draai de muziekkaart om en kruis het vakje af als het klopt.</p>
+        <h3>Alleen de app</h3>
+        <p>Kies <em>Bingo</em> en kies 3×3 (snel potje) of 4×4 (standaard). De telefoon gaat rond: je ziet je eigen kaart, tikt een vakje aan en bevestigt. De app stempelt af en houdt ieders voortgang bij.</p>
       </section>
 
       <section class="rule rule-tips">
@@ -55,8 +58,8 @@ export function render(root) {
         <ul>
           <li>Zet de telefoon op een speaker via Bluetooth: dan hoort iedereen het fragment goed.</li>
           <li>Speel in teams als je met veel mensen bent.</li>
-          <li>Wil je het antwoord in de app zien? Houd <em>Toon antwoord</em> even ingedrukt. Zo verklap je het niet per ongeluk.</li>
-          <li>Te makkelijk? Laat de speler ook de artiest of titel raden voor de eer.</li>
+          <li>Antwoord van een gescande kaart in de app zien? Houd <em>Toon antwoord</em> even ingedrukt.</li>
+          <li>Bewaar bij bingo de makkelijke vakjes niet te lang: soms moet je een moeilijk vakje gokken.</li>
         </ul>
       </section>
     </article>

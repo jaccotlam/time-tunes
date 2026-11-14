@@ -1,5 +1,9 @@
 // Print page: QR codes render, decode back to the expected URL, backs are mirrored, PDF renders.
 import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
+
+/** Number of pages in a PDF written by Chromium. */
+const pdfPages = (path) => (readFileSync(path, 'latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
 import { launch, phoneContext, startServer, useFixtureDeck, assert, shot, OUT } from './helpers.mjs';
 
 /** Decode the QR svg of the given front card inside the page with the vendored jsQR. */
@@ -77,7 +81,40 @@ export default async function run() {
     const pdfPath = join(OUT, 'cards.pdf');
     await page.pdf({ path: pdfPath, format: 'A4', printBackground: true, preferCSSPageSize: true });
     await page.emulateMedia({ media: 'screen' });
-    assert(true, `PDF written to ${pdfPath}`);
+    assert(pdfPages(pdfPath) === 6, `card PDF has 6 pages (${pdfPages(pdfPath)}) at ${pdfPath}`);
+
+    // Bingokaarten: uniek, genummerd, 2 per A4.
+    await page.getByTestId('print-kind-bingo').check();
+    await page.locator('[data-testid="print-bingo-card"]').first().waitFor();
+    assert(await page.getByTestId('print-base-url').isHidden(), 'base URL field hidden for bingo cards');
+    assert((await page.locator('[data-testid="print-front"]').count()) === 0, 'no music cards in bingo mode');
+    await page.getByTestId('print-bingo-count').fill('40');
+    await page.waitForTimeout(500);
+    let sigs = await page.locator('[data-testid="print-bingo-card"]').evaluateAll((els) => els.map((e) => [e.dataset.cardNo, e.dataset.signature]));
+    assert(sigs.length === 30 && new Set(sigs.map((s) => s[1])).size === 30, `count is capped at 30 and all cards differ (${sigs.length})`);
+    assert(sigs.map((s) => s[0]).join(',') === Array.from({ length: 30 }, (_, i) => i + 1).join(','), 'bingo cards numbered 1..30');
+    assert((await page.locator('[data-testid="print-bingo-sheet"]').count()) === 15, '30 bingo cards on 15 sheets');
+    await page.getByTestId('print-bingo-count').fill('7');
+    await page.getByTestId('print-bingo-size-3').check();
+    await page.waitForTimeout(500);
+    sigs = await page.locator('[data-testid="print-bingo-card"]').evaluateAll((els) => els.map((e) => e.dataset.signature.split(',').length));
+    assert(sigs.length === 7 && sigs.every((n) => n === 9), '7 cards of 3×3');
+    assert(/7<\/b> bingokaarten 3×3 · 4 vellen/.test(await page.getByTestId('print-summary').innerHTML()), 'summary: 7 cards, 4 sheets');
+    const before = await page.locator('[data-testid="print-bingo-card"]').first().getAttribute('data-signature');
+    await page.getByTestId('print-bingo-reshuffle').click();
+    const after = await page.locator('[data-testid="print-bingo-card"]').first().getAttribute('data-signature');
+    assert(before !== after, 'reshuffle makes other cards');
+    await shot(page, '23-print-bingo');
+    await page.emulateMedia({ media: 'print' });
+    const bingoPdf = join(OUT, 'bingo-cards.pdf');
+    await page.pdf({ path: bingoPdf, format: 'A4', printBackground: true, preferCSSPageSize: true });
+    await page.emulateMedia({ media: 'screen' });
+    assert(pdfPages(bingoPdf) === 4, `bingo PDF has 4 pages for 7 cards (${pdfPages(bingoPdf)})`);
+    const overflow = await page.locator('.bk').evaluateAll((els) => els.filter((e) => e.scrollHeight > e.clientHeight + 1).length);
+    assert(overflow === 0, 'bingo cards fit their half page');
+    await page.getByTestId('print-kind-cards').check();
+    await page.locator('[data-testid="print-front"]').first().waitFor();
+    assert((await page.locator('[data-testid="print-front"]').count()) === 30, 'switching back shows the music cards again');
 
     // Desktop-sized preview screenshot of a sheet.
     const desk = await browser.newContext({ viewport: { width: 1100, height: 1300 }, deviceScaleFactor: 1, serviceWorkers: 'block' });
@@ -87,6 +124,8 @@ export default async function run() {
     await p2.locator('[data-testid="print-front"]').first().waitFor();
     await p2.locator('[data-side="front"]').first().screenshot({ path: join(OUT, '21-print-sheet-front.png') });
     await p2.locator('[data-side="back"]').first().screenshot({ path: join(OUT, '22-print-sheet-back.png') });
+    await p2.getByTestId('print-kind-bingo').check();
+    await p2.locator('[data-testid="print-bingo-sheet"]').first().screenshot({ path: join(OUT, '24-print-bingo-sheet-4x4.png') });
     await desk.close();
 
     // Reset stored base URL so other runs start clean.

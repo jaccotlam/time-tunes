@@ -4,13 +4,14 @@
 // cache is only a fallback for offline use. Audio and the iTunes API are
 // cross-origin and are never cached here.
 // Bump VERSION when the list below changes; old caches are removed on activate.
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = `timetunesr-shell-${VERSION}`;
 const SHELL = [
   './',
   'index.html',
   'manifest.webmanifest',
   'css/app.css',
+  'css/bingo.css',
   'js/main.js',
   'js/logic.js',
   'js/deck.js',
@@ -25,6 +26,8 @@ const SHELL = [
   'js/screens/game.js',
   'js/screens/print.js',
   'js/screens/rules.js',
+  'js/bingo.js',
+  'js/screens/bingo.js',
   'vendor/jsQR.js',
   'vendor/qrcode-generator.mjs',
   'data/deck.json',
