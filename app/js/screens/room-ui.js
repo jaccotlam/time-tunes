@@ -56,6 +56,8 @@ const STATUS_TEXT = {
   notfound: 'Kamer niet gevonden, opnieuw proberen…',
   taken: 'Kamer wordt hersteld…',
   closed: 'Niet verbonden',
+  waking: 'Server wordt wakker…',
+  unreachable: 'Server niet bereikbaar, opnieuw proberen…',
 };
 
 /** Small connection badge: data-state = connecting | online | reconnecting | notfound | taken | closed. */
@@ -410,3 +412,98 @@ export function keepAwake() {
 
 /** Name of the game for titles. */
 export const gameName = (kind) => (kind === 'timeline' ? 'Tijdlijn' : 'Bingo');
+
+/* ---------- room server: step-by-step diagnosis, leader away ---------- */
+
+/** Show the steps (instead of a bare spinner) once something fails or takes a while. */
+export function diagVisible(diag, status) {
+  if (!diag) return false;
+  if (status === 'online') return false;
+  if (diag.waking) return true;
+  if (Object.values(diag.steps).some((s) => s.state === 'fail')) return true;
+  return Date.now() - diag.started > 4000;
+}
+
+function stepAdvice(key, step, { role, code }) {
+  const c = step.code || '';
+  if (key === 'server') {
+    if (c === 'offline') return 'Je telefoon heeft geen internet. Zet wifi of mobiele data aan.';
+    if (c === 'timeout') return 'De server reageert niet. Misschien slaapt hij nog of ligt hij plat. We blijven het proberen.';
+    if (c === 'version') return 'De server en deze app passen niet bij elkaar. Ververs de pagina.';
+    return 'De server is niet bereikbaar. Controleer je internet. Lukt het op wifi niet, probeer dan mobiele data (of andersom).';
+  }
+  if (key === 'room') {
+    if (c === 'notfound') {
+      return role === 'host'
+        ? 'De kamer staat niet meer op de server. Maak een nieuwe kamer.'
+        : `Er is geen kamer met code ${code}. Klopt de code? Staat het scherm van de spelleider nog aan? We blijven zoeken.`;
+    }
+    if (c === 'ratelimit') return 'Te veel nieuwe kamers in korte tijd. Wacht een paar minuten.';
+    return role === 'host' ? 'De server kon geen kamer maken. We proberen het opnieuw.' : 'De kamer kon niet worden opgezocht. We proberen het opnieuw.';
+  }
+  if (c === 'token') return 'Deze plek in de kamer hoort bij een ander toestel.';
+  if (/^ws-/.test(c)) return 'De server is bereikt, maar de live-verbinding lukt niet. Sommige netwerken (school, werk, hotel) blokkeren dat: probeer mobiele data.';
+  return 'Binnenkomen in de kamer lukte niet. We proberen het opnieuw.';
+}
+
+/**
+ * Steps of connecting: server reached, room found/made, in the room (✓ / ✗ / …), with in plain
+ * Dutch what to do, a wake-up bar for a sleeping server and "Kopieer diagnose".
+ */
+export function diagHtml(diag, { role = 'player', code = '' } = {}) {
+  const labels = { server: 'Server bereikt', room: role === 'host' ? 'Kamer gemaakt' : `Kamer ${code} gevonden`, join: 'In de kamer' };
+  const now = Date.now();
+  let advice = '';
+  const rows = ['server', 'room', 'join'].map((k) => {
+    const st = diag.steps[k];
+    const mark = st.state === 'ok' ? icons.check : st.state === 'fail' ? icons.cross : st.state === 'busy' ? '<i class="diag-spin" aria-hidden="true"></i>' : '';
+    const secs = (st.state === 'busy' || st.retrying) && st.t0 ? Math.floor((now - st.t0) / 1000) : null;
+    const word = st.retrying && st.state === 'fail' ? 'mislukt · opnieuw…' : ({ ok: 'gelukt', fail: 'mislukt', busy: 'bezig', idle: 'nog niet' }[st.state] || '');
+    if (st.state === 'fail' && !advice) advice = stepAdvice(k, st, { role, code });
+    return `<li class="diag-step is-${st.state}" data-testid="diag-step-${k}" data-state="${st.state}"${st.code ? ` data-code="${esc(st.code)}"` : ''}>
+      <span class="diag-mark" aria-hidden="true">${mark}</span>
+      <span class="diag-label">${esc(labels[k])}</span>
+      <span class="diag-word">${word}${secs != null && secs >= 2 ? ` · ${secs} s` : ''}</span>
+    </li>`;
+  }).join('');
+  let wake = '';
+  if (diag.waking) {
+    const secs = Math.floor((now - diag.waking.since) / 1000);
+    const pct = Math.min(95, Math.round((secs / 60) * 100));
+    wake = `<div class="wake" data-testid="server-waking">
+      <p><b>Server wordt wakker…</b> Hij sliep omdat er een tijdje niemand speelde. Dat duurt meestal minder dan een minuut.</p>
+      <div class="wake-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>
+      <p class="muted small">${secs} s</p>
+    </div>`;
+  }
+  return `<section class="diag" data-testid="conn-diag" aria-label="Verbinding">
+    ${wake}
+    <ol class="diag-steps">${rows}</ol>
+    ${advice ? `<p class="diag-advice" data-testid="diag-advice">${esc(advice)}</p>` : ''}
+    <div class="diag-actions">
+      <button class="btn btn-small btn-ghost" type="button" data-action="retry" data-testid="diag-retry">${icons.restart}<span>Nu opnieuw</span></button>
+      <button class="btn btn-small btn-ghost" type="button" data-action="copy-diag" data-testid="diag-copy">${icons.share}<span>Kopieer diagnose</span></button>
+    </div>
+  </section>`;
+}
+
+/** Key for redrawing the diagnosis (changes every second while something is busy). */
+export function diagKey(diag) {
+  if (!diag) return '';
+  const busy = Object.values(diag.steps).some((s) => s.state === 'busy' || s.retrying) || diag.waking;
+  return JSON.stringify([diag.steps, !!diag.waking, busy ? Math.floor(Date.now() / 1000) : 0]);
+}
+
+/** "De spelleider is even weg" (+ after a while: take the lead). */
+export function leaderAwayHtml(meta, { awayMs }) {
+  const left = Math.max(0, Math.ceil((meta.takeoverMs - awayMs) / 1000));
+  const can = left === 0;
+  return `<div class="leader-away" data-testid="room-leader-away" data-can-take="${can}">
+    <p><b>De spelleider is even weg.</b> ${can
+    ? 'Komt hij niet terug? Dan kun jij de leiding overnemen: de muziek speelt dan op jouw telefoon.'
+    : 'Je blijft in de kamer; het spel gaat verder zodra hij terug is.'}</p>
+    ${can
+    ? `<button class="btn btn-primary" type="button" data-action="takeover" data-testid="room-takeover">${icons.music}<span>Neem de leiding over</span></button>`
+    : `<p class="muted small" data-testid="room-takeover-wait">Over ${left} s kun je zo nodig de leiding overnemen.</p>`}
+  </div>`;
+}

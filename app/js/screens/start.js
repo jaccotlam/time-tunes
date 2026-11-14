@@ -1,6 +1,7 @@
 import { loadDeck, activeDeckInfo } from '../deck.js';
 import { deckLineHtml } from './deckline.js';
 import { icons, logoSvg, wordmark, esc } from '../ui.js';
+import { usesServer, wakeServer } from '../multi/server-session.js';
 
 export const name = 'start';
 
@@ -42,6 +43,8 @@ function entry({ href, testid, icon, title, text, cls = '' }) {
 }
 
 export function render(root, { install }) {
+  // "Samen spelen": a sleeping free room server starts waking up as soon as the start screen opens
+  if (usesServer()) wakeServer();
   root.innerHTML = `<section class="screen screen-start" data-testid="screen-start">
     <header class="hero hero-compact">
       <div class="hero-logo">${logoSvg('logo logo-hero')}</div>

@@ -16,3 +16,12 @@ export const MULTI_SIGNAL = { host: '0.peerjs.com', port: 443, path: '/', secure
 export const MULTI_ICE_SERVERS = null;
 // Prefix of the host's id on the broker (room ABCD -> timetunesr-kamer-ABCD).
 export const MULTI_PEER_PREFIX = 'timetunesr-kamer-';
+
+// "Samen spelen" via a room server (recommended): the server holds the room and every phone
+// only makes an ordinary outgoing connection to it. The Cloudflare Worker "time-tunes"
+// (wrangler.jsonc, server/worker.mjs) serves the app and this server at the same address.
+// Another server (e.g. the Node version on Render): fill in its https address here.
+// Empty = no server: the phones connect directly through PeerJS (above), which does not work
+// on every network. Per browser: localStorage['timetunesr.multiServer.v1'] = '"https://…"' (or '"off"').
+// See README.md, "Server voor samen spelen".
+export const MULTI_SERVER_URL = 'https://time-tunes.jaccotlam.workers.dev';

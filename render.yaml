@@ -1,0 +1,20 @@
+# Render Blueprint: the room server for "Samen spelen" as a free Node web service.
+# This is the ALTERNATIVE to Cloudflare (wrangler.jsonc). In the Render dashboard:
+# New > Blueprint > choose this repository. See README.md, "Server voor samen spelen".
+# A free Render service sleeps after 15 minutes without traffic; the first connection then
+# takes up to about a minute (the app shows "Server wordt wakker…").
+services:
+  - type: web
+    name: timetunesr-kamers
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm ci --omit=dev
+    startCommand: node server/node.mjs
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # web addresses that may use this server (comma-separated; ":*" = any port)
+      - key: ALLOWED_ORIGINS
+        value: https://jaccotlam.github.io,https://time-tunes.jaccotlam.workers.dev,http://localhost:*,http://127.0.0.1:*
