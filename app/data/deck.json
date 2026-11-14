@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "country": "NL",
+  "cards": [
+    {
+      "id": "001",
+      "title": "Dancing Queen",
+      "artist": "ABBA",
+      "year": 1976,
+      "itunesId": 1422648513,
+      "previewUrl": "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview211/v4/ec/b1/63/ecb163bc-aff2-4dd2-d40b-c044f0b9fa4d/mzaf_4358783485405794088.plus.aac.p.m4a",
+      "trackViewUrl": "https://music.apple.com/nl/album/dancing-queen/1422648512?i=1422648513&uo=4"
+    }
+  ]
+}
