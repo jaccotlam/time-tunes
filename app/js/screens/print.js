@@ -1,6 +1,7 @@
 // Printable A4 sheets: fronts with QR codes, backs with the answer.
 import qrcode from '../../vendor/qrcode-generator.mjs';
 import { cardUrl } from '../logic.js';
+import { generateCards, SQUARES, SIZES, YEAR_MARGIN } from '../bingo.js';
 import { icons, esc, store, logoSvg } from '../ui.js';
 
 export const name = 'print';
@@ -78,12 +79,50 @@ export function sheetsHtml(cards, base) {
   return out.join('');
 }
 
+export const BINGO_MAX = 30;
+
+function bingoCardHtml(card, size, no, series) {
+  const cells = card.map((key) => {
+    const sq = SQUARES[key];
+    const write = key === 'year' ? '<span class="bk-sub">schrijf je jaartal op</span><span class="bk-write" aria-hidden="true"></span>' : `<span class="bk-sub">${esc(sq.range ? `${sq.sub} · ${sq.range}` : sq.sub)}</span>`;
+    return `<div class="bk-cell kind-${sq.kind}"><span class="bk-label">${esc(sq.short || sq.label)}</span>${write}</div>`;
+  }).join('');
+  const nr = String(no).padStart(2, '0');
+  return `<div class="bk size-${size}" data-testid="print-bingo-card" data-card-no="${no}" data-signature="${esc(card.join(','))}">
+    <div class="bk-head">
+      <span class="bk-brand">${logoSvg('bk-logo')}<span>TimeTunesr</span><span class="bk-bingo">Bingo</span></span>
+      <span class="bk-name">Naam:<i></i></span>
+      <span class="bk-no">Nr. <b>${nr}</b><small>reeks ${esc(series)} · ${size}×${size}</small></span>
+    </div>
+    <div class="bk-grid" style="--n:${size}">${cells}</div>
+    <p class="bk-rule">Claim per fragment hardop één vakje, draai de muziekkaart om en kruis af als het klopt. Volle rij, kolom of diagonaal: <b>bingo!</b></p>
+  </div>`;
+}
+
+/** Printable bingo cards: 2 per A4 (portrait, single-sided), numbered 1..n. */
+export function bingoSheetsHtml(count, size, seed) {
+  const cards = generateCards(count, size, seed);
+  const series = (seed >>> 0).toString(36).toUpperCase().slice(-4).padStart(4, '0');
+  const out = [];
+  const total = Math.ceil(cards.length / 2);
+  for (let s = 0; s < total; s++) {
+    const pair = cards.slice(s * 2, s * 2 + 2);
+    out.push(`<div class="sheet-page bingo-page" data-testid="print-bingo-sheet">
+      ${pair.map((c, i) => bingoCardHtml(c, size, s * 2 + i + 1, series)).join('<div class="bk-cut" aria-hidden="true"></div>')}
+    </div>`);
+  }
+  return out.join('');
+}
+
 export function render(root, { deck }) {
   const saved = store.get(BASE_KEY, null);
   const ids = deck.cards.map((c) => Number.parseInt(c.id, 10)).filter(Number.isFinite);
   const minId = ids.length ? Math.min(...ids) : 1;
   const maxId = ids.length ? Math.max(...ids) : 1;
-  const opts = { base: saved || defaultBaseUrl(), mode: 'all', from: minId, to: Math.min(maxId, minId + PER_SHEET - 1) };
+  const opts = {
+    base: saved || defaultBaseUrl(), mode: 'all', from: minId, to: Math.min(maxId, minId + PER_SHEET - 1),
+    kind: 'cards', bingoCount: 8, bingoSize: 4, bingoSeed: (Math.random() * 2 ** 32) >>> 0,
+  };
 
   root.innerHTML = `<section class="screen screen-print" data-testid="screen-print">
     <div class="no-print">
@@ -93,6 +132,37 @@ export function render(root, { deck }) {
         <span class="topbar-spacer"></span>
       </header>
       <form class="print-form panel" data-testid="print-form" autocomplete="off">
+        <fieldset class="field print-kind">
+          <legend>Wat wil je printen?</legend>
+          <div class="kind-pick">
+            <label class="kind-opt"><input type="radio" name="kind" value="cards" checked data-testid="print-kind-cards"><span><b>Muziekkaartjes</b><small>QR voor, antwoord achter. Voor Tijdlijn én Bingo.</small></span></label>
+            <label class="kind-opt"><input type="radio" name="kind" value="bingo" data-testid="print-kind-bingo"><span><b>Bingokaarten</b><small>Eén per speler, 2 per A4. Kruis af met een pen.</small></span></label>
+          </div>
+        </fieldset>
+        <div class="print-opts-bingo" hidden>
+          <div class="bingo-print-row">
+            <label class="field"><span>Aantal kaarten</span>
+              <input type="number" name="bingoCount" min="1" max="${BINGO_MAX}" value="${opts.bingoCount}" inputmode="numeric" data-testid="print-bingo-count">
+            </label>
+            <fieldset class="field">
+              <legend>Formaat</legend>
+              <div class="radio-row">
+                ${SIZES.map((n) => `<label class="radio"><input type="radio" name="bingoSize" value="${n}" ${n === opts.bingoSize ? 'checked' : ''} data-testid="print-bingo-size-${n}"> ${n}×${n}</label>`).join('')}
+              </div>
+            </fieldset>
+          </div>
+          <p class="small muted">Elke kaart is anders en genummerd. Niet tevreden? <button type="button" class="linklike" data-action="reshuffle" data-testid="print-bingo-reshuffle">Maak andere kaarten</button></p>
+          <details class="print-tips">
+            <summary>Zo speel je bingo met kaartjes</summary>
+            <ul>
+              <li>Print enkelzijdig op A4, schaal 100%, en knip elk vel door het midden.</li>
+              <li>Iedereen krijgt een bingokaart en een pen. Je hebt ook de muziekkaartjes nodig.</li>
+              <li>Scan een muziekkaart, luister, en claim hardop één open vakje (bij <em>Jaar ±${YEAR_MARGIN}</em> schrijf je eerst je jaartal op).</li>
+              <li>Draai de muziekkaart om. Klopt je claim? Kruis het vakje af. Bij <em>Artiest</em> en <em>Titel</em> beslist de groep.</li>
+            </ul>
+          </details>
+        </div>
+        <div class="print-opts-cards">
         <label class="field">
           <span>Adres van de app in de QR-codes</span>
           <input type="url" name="base" value="${esc(opts.base)}" spellcheck="false" data-testid="print-base-url" inputmode="url">
@@ -108,9 +178,10 @@ export function render(root, { deck }) {
             <input type="number" name="to" min="${minId}" max="${maxId}" value="${opts.to}" aria-label="Tot en met kaartnummer" data-testid="print-to">
           </label>
         </fieldset>
+        </div>
         <p class="print-summary" data-testid="print-summary"></p>
         <button type="button" class="btn btn-primary btn-xl" data-action="print" data-testid="print-button">${icons.print}<span>Printen</span></button>
-        <details class="print-tips">
+        <details class="print-tips print-opts-cards">
           <summary>Tips voor goed printen</summary>
           <ul>
             <li>Print op A4, schaal <strong>100%</strong> (niet "passend maken"), bij voorkeur stevig papier van 160–250 g/m².</li>
@@ -150,7 +221,22 @@ export function render(root, { deck }) {
     sheets.style.setProperty('--preview-scale', String(scale));
   }
 
+  function rebuildBingo() {
+    const n = Math.max(1, Math.min(BINGO_MAX, Math.round(opts.bingoCount) || 1));
+    const pages = Math.ceil(n / 2);
+    warn.hidden = true;
+    summary.innerHTML = `<b>${n}</b> ${n === 1 ? 'bingokaart' : 'bingokaarten'} ${opts.bingoSize}×${opts.bingoSize} · ${pages} ${pages === 1 ? 'vel' : 'vellen'} A4 (2 per vel, enkelzijdig)`;
+    root.querySelector('[data-action="print"]').disabled = false;
+    sheets.innerHTML = bingoSheetsHtml(n, opts.bingoSize, opts.bingoSeed);
+    fit();
+  }
+
   function rebuild() {
+    const isBingo = opts.kind === 'bingo';
+    root.querySelectorAll('.print-opts-cards').forEach((el) => { el.hidden = isBingo; });
+    root.querySelector('.print-opts-bingo').hidden = !isBingo;
+    document.body.dataset.print = opts.kind;
+    if (isBingo) { rebuildBingo(); return; }
     const cards = selected();
     const base = opts.base.trim() || defaultBaseUrl();
     let w = '';
@@ -175,12 +261,16 @@ export function render(root, { deck }) {
     opts.mode = fd.get('mode') === 'range' ? 'range' : 'all';
     opts.from = Number(fd.get('from')) || minId;
     opts.to = Number(fd.get('to')) || maxId;
+    opts.kind = fd.get('kind') === 'bingo' ? 'bingo' : 'cards';
+    opts.bingoCount = Number(fd.get('bingoCount')) || 1;
+    opts.bingoSize = SIZES.includes(Number(fd.get('bingoSize'))) ? Number(fd.get('bingoSize')) : 4;
     const trimmed = opts.base.trim();
     if (trimmed && trimmed !== defaultBaseUrl()) store.set(BASE_KEY, trimmed);
     else store.remove(BASE_KEY);
   }
 
   const onInput = (e) => {
+    if (e.target.type === 'radio') { readForm(); rebuild(); return; }
     if (e.target.name === 'from' || e.target.name === 'to') {
       form.querySelector('input[value="range"]').checked = true;
     }
@@ -196,6 +286,10 @@ export function render(root, { deck }) {
       readForm();
       rebuild();
       window.print();
+    } else if (a.dataset.action === 'reshuffle') {
+      opts.bingoSeed = (Math.random() * 2 ** 32) >>> 0;
+      readForm();
+      rebuild();
     } else if (a.dataset.action === 'reset-base') {
       form.elements.base.value = defaultBaseUrl();
       readForm();
@@ -209,6 +303,7 @@ export function render(root, { deck }) {
   rebuild();
 
   return () => {
+    delete document.body.dataset.print;
     clearTimeout(timer);
     root.removeEventListener('click', onClick);
     window.removeEventListener('resize', fit);

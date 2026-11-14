@@ -8,6 +8,7 @@ import * as cardScreen from './screens/card.js';
 import * as gameScreen from './screens/game.js';
 import * as printScreen from './screens/print.js';
 import * as rulesScreen from './screens/rules.js';
+import * as bingoScreen from './screens/bingo.js';
 
 const routes = [
   { re: /^#?\/?$/, screen: startScreen, needsDeck: false },
@@ -16,6 +17,7 @@ const routes = [
   { re: /^#\/spel\/?$/, screen: gameScreen, needsDeck: true },
   { re: /^#\/print\/?$/, screen: printScreen, needsDeck: true },
   { re: /^#\/regels\/?$/, screen: rulesScreen, needsDeck: false },
+  { re: /^#\/bingo\/?$/, screen: bingoScreen, needsDeck: true },
 ];
 
 const root = document.getElementById('app');

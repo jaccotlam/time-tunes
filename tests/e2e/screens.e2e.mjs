@@ -14,12 +14,23 @@ export default async function run() {
     await page.getByTestId('screen-start').waitFor();
     await page.waitForFunction(() => /kaarten in het deck/.test(document.querySelector('[data-testid="deck-info"]').textContent));
     await shot(page, '00-start');
-    for (const id of ['start-scan', 'start-digital', 'start-print', 'start-rules']) {
+    for (const id of ['start-scan', 'start-digital', 'start-print', 'start-rules', 'start-bingo', 'start-settings']) {
       assert(await page.getByTestId(id).isVisible(), `start button ${id} visible`);
     }
+    // De vier hoofdingangen staan zonder scrollen in beeld (390×844), verdeeld over twee manieren van spelen.
+    const bottoms = await page.evaluate(() => ['start-scan', 'start-print', 'start-digital', 'start-bingo']
+      .map((id) => document.querySelector(`[data-testid="${id}"]`).getBoundingClientRect().bottom));
+    assert(bottoms.every((b) => b <= 844), `four main entries above the fold (lowest at ${Math.round(Math.max(...bottoms))}px)`);
+    assert(await page.locator('[data-testid="mode-cards"] [data-testid="start-scan"], [data-testid="mode-cards"] [data-testid="start-print"]').count() === 2, 'scan + print under "Met kaartjes"');
+    assert(await page.locator('[data-testid="mode-app"] [data-testid="start-digital"], [data-testid="mode-app"] [data-testid="start-bingo"]').count() === 2, 'Tijdlijn + Bingo under "Alleen de app"');
+    assert((await page.getByTestId('start-settings').getAttribute('href')) === '#/instellingen', 'settings link points to #/instellingen');
+    assert((await page.getByTestId('app-version').textContent()).trim() === 'v2', 'version label v2');
+    const scrollW = await page.evaluate(() => document.documentElement.scrollWidth);
+    assert(scrollW <= 390, `no horizontal scroll (${scrollW})`);
     await page.getByTestId('start-rules').click();
     await page.getByTestId('screen-rules').waitFor();
     await shot(page, '40-rules');
+    for (const id of ['rules-modes', 'rules-timeline', 'rules-bingo']) assert(await page.getByTestId(id).count() === 1, `rules section ${id}`);
     await page.getByTestId('back-home').click();
     await page.getByTestId('screen-start').waitFor();
 
