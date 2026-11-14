@@ -5,6 +5,7 @@
 <title>TimeTunesr uitlegvideo: decor</title>
 <!-- De huisstijl komt uit de app zelf: kleuren, typografie en de printopmaak van de kaarten. -->
 <link rel="stylesheet" href="../css/app.css">
+<link rel="stylesheet" href="../css/bingo.css">
 <link rel="stylesheet" href="stage.css">
 </head>
 <body>
@@ -12,7 +13,7 @@
   <div id="titlecard" class="v-layer">
     <div class="v-title-logo" id="title-logo"></div>
     <div class="v-title-word" id="title-word"></div>
-    <p class="v-title-tag">Luister. Raad het jaar. Bouw je tijdlijn.</p>
+    <p class="v-title-tag">Luister. Raad het jaar. Speel samen.</p>
     <p class="v-title-sub"><span>Zo werkt het spel</span></p>
   </div>
 
@@ -32,8 +33,14 @@
   <div id="hand" class="v-layer"></div>
 
   <div id="digital" class="v-layer"></div>
+  <div id="bingo" class="v-layer"></div>
   <div id="print" class="v-layer"></div>
+  <div id="music" class="v-layer"></div>
+  <div id="playlist" class="v-layer"></div>
   <div id="bullets" class="v-layer"></div>
+
+  <!-- "Ieder een eigen telefoon": spelleider en twee spelers naast elkaar (gevuld door stage.js) -->
+  <div id="trio"></div>
 
   <div id="phone">
     <div class="v-screen">
@@ -48,7 +55,8 @@
   <div id="endcard" class="v-layer">
     <div class="v-title-logo" id="end-logo"></div>
     <div class="v-title-word" id="end-word"></div>
-    <p class="v-title-tag">Luister. Raad het jaar. Bouw je tijdlijn.</p>
+    <p class="v-title-tag">Luister. Raad het jaar. Speel samen.</p>
+    <p class="v-end-url" id="end-url"></p>
     <p class="v-end-line">Gratis spelen in je browser · geen account nodig</p>
   </div>
 </div>

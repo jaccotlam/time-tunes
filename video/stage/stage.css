@@ -26,7 +26,8 @@ body {
   display: inline-block; padding: 12px 34px; border-radius: 999px; font-size: 32px; font-weight: 700;
   background: rgba(255, 255, 255, .07); border: 2px solid var(--line); color: var(--text);
 }
-.v-end-line { margin: 44px 0 0; }
+.v-end-line { margin: 26px 0 0; }
+.v-end-url { margin: 40px 0 0; font-family: "Inter Display", Inter, sans-serif; font-weight: 800; font-size: 46px; color: var(--mustard); letter-spacing: -.01em; }
 
 /* ---------- telefoon ---------- */
 #phone {
@@ -70,7 +71,37 @@ body {
 .v-cap { top: 172px; }
 .v-cap p { font-size: 43px; line-height: 1.3; font-weight: 500; margin: 0; color: var(--text); max-width: 1150px; text-wrap: balance; }
 .v-chips { display: flex; gap: 14px; margin-top: 26px; }
+.v-chip.is-on { background: var(--mustard); border-color: transparent; color: var(--ink); }
 .v-chip { padding: 9px 22px; border-radius: 999px; background: rgba(255, 255, 255, .07); border: 2px solid var(--line); font-size: 26px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+
+/* tekst boven de drie telefoons ("Ieder een eigen telefoon"): kop links, ondertitel rechts */
+.v-head.is-trio { left: -610px; top: -26px; width: 930px; }
+.v-head.is-trio .v-kicker { margin-bottom: 14px; }
+.v-head.is-trio .v-badge { width: 80px; height: 80px; font-size: 48px; }
+.v-head.is-trio .v-title { font-size: 56px; }
+.v-head.is-trio .v-headrow { gap: 22px; }
+.v-cap.is-trio { left: 330px; top: -20px; width: 850px; }
+.v-cap.is-trio p { font-size: 36px; line-height: 1.3; max-width: 850px; }
+
+/* ---------- drie telefoons naast elkaar ---------- */
+#trio { position: absolute; inset: 0; pointer-events: none; }
+.v-sphone {
+  position: absolute; left: 0; top: 245px; width: 375px; height: 813px; border-radius: 46px; background: #0b0612; visibility: hidden;
+  box-shadow: 0 0 0 2px #4a2f6e, 0 0 0 6px #140a20, 0 40px 80px rgba(0, 0, 0, .6), 0 0 100px rgba(255, 93, 115, .10);
+}
+.v-sscreen { position: absolute; left: 12px; top: 12px; width: 351px; height: 789px; border-radius: 36px; overflow: hidden; background: #120819; }
+.v-sscreen img { position: absolute; left: 0; top: 24px; width: 351px; height: 765px; display: block; }
+.v-stag {
+  position: absolute; left: 50%; top: -24px; transform: translateX(-50%); z-index: 5; padding: 8px 26px; border-radius: 999px; white-space: nowrap;
+  font-family: "Inter Display", Inter, sans-serif; font-weight: 800; font-size: 27px; line-height: 1.2; color: var(--ink); background: var(--teal);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .5);
+}
+.v-stag.is-host { background: var(--mustard); }
+.v-stag small { font-family: Inter, sans-serif; font-weight: 600; font-size: 20px; margin-left: 10px; opacity: .8; }
+.v-stap { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 4; opacity: 0; }
+.v-stap i, .v-stap b { position: absolute; left: 0; top: 0; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%; }
+.v-stap i { background: rgba(255, 255, 255, .34); border: 4px solid #fff; box-shadow: 0 0 0 2px rgba(23, 11, 36, .55), 0 6px 18px rgba(0, 0, 0, .45); }
+.v-stap b { border: 5px solid var(--mustard); opacity: 0; }
 
 /* ---------- tafel ---------- */
 #table { left: 680px; top: 430px; width: 1170px; height: 604px; }
@@ -120,8 +151,49 @@ body {
 .v-caret::before { content: ""; position: absolute; left: -3px; top: -84px; width: 6px; height: 168px; border-radius: 3px; background: var(--mustard); box-shadow: 0 0 18px rgba(255, 198, 73, .8); }
 #confetti i { position: absolute; left: 0; top: 0; width: 14px; height: 22px; border-radius: 3px; }
 
-/* ---------- zonder kaarten ---------- */
-#digital, #print, #bullets { left: 680px; top: 430px; width: 1170px; height: 604px; }
+/* ---------- de muziek (twee tegels) ---------- */
+#music, #playlist { left: 680px; top: 430px; width: 1170px; height: 604px; }
+.v-tile {
+  position: absolute; width: 562px; height: 400px; padding: 30px 32px; border-radius: 30px; opacity: 0;
+  background: var(--surface); border: 3px solid var(--line);
+}
+.v-tile.is-on { border-color: var(--mustard); background: rgba(255, 198, 73, .12); box-shadow: 0 0 40px rgba(255, 198, 73, .18); }
+.v-tile-top { display: flex; align-items: center; gap: 18px; }
+.v-tile-ico { flex: none; width: 92px; height: 92px; border-radius: 26px; display: grid; place-items: center; background: rgba(255, 198, 73, .18); color: var(--mustard); }
+.v-tile-ico .ico, .v-tile-ico svg { width: 54px; height: 54px; }
+.v-tile.is-teal .v-tile-ico { background: rgba(46, 211, 192, .18); color: var(--teal); }
+.v-tile-top .v-chip { margin-left: auto; color: var(--ink); background: var(--mustard); border-color: transparent; }
+.v-tile-top .v-chip.is-quiet { color: var(--text); background: rgba(255, 255, 255, .07); border-color: var(--line); }
+.v-tile b { display: block; margin-top: 26px; font-family: "Inter Display", Inter, sans-serif; font-weight: 900; font-size: 46px; line-height: 1.1; letter-spacing: -.01em; }
+.v-tile p { margin: 14px 0 0; font-size: 32px; line-height: 1.3; font-weight: 500; color: var(--muted); }
+
+/* ---------- eigen playlist ---------- */
+.v-pl {
+  position: absolute; left: 0; top: 0; width: 700px; padding: 22px 26px 18px; border-radius: 30px;
+  background: var(--surface); border: 3px solid var(--line);
+}
+.v-pl-head { display: flex; align-items: center; gap: 16px; height: 64px; margin-bottom: 8px; }
+.v-pl-head .v-tile-ico { width: 60px; height: 60px; border-radius: 18px; }
+.v-pl-head .v-tile-ico svg { width: 36px; height: 36px; }
+.v-pl-name { font-family: "Inter Display", Inter, sans-serif; font-weight: 900; font-size: 42px; line-height: 1; }
+.v-pl-count { font-size: 26px; font-weight: 600; color: var(--muted); }
+.v-pl-active { margin-left: auto; padding: 7px 20px; border-radius: 999px; font-size: 24px; font-weight: 800; background: var(--good); color: var(--ink); opacity: 0; }
+.v-pl-row { display: flex; align-items: center; gap: 16px; height: 62px; padding: 0 6px; border-top: 2px solid var(--line); overflow: hidden; }
+.v-pl-row i { flex: none; width: 44px; font-style: normal; font-size: 21px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.v-pl-row span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 27px; font-weight: 700; }
+.v-pl-row span small { font-size: 23px; font-weight: 500; color: var(--muted); margin-left: 10px; }
+.v-pl-row b { flex: none; padding: 5px 16px; border-radius: 12px; border: 2px solid var(--line); background: rgba(0, 0, 0, .25); font-size: 27px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.v-pl-row.is-new span { color: var(--mustard); }
+.v-pl.is-years .v-pl-row b { border-color: var(--mustard); box-shadow: 0 0 16px rgba(255, 198, 73, .5); }
+.v-pl-side { position: absolute; left: 740px; top: 6px; width: 430px; }
+.v-pl-side h3 { margin: 0 0 16px; font-size: 23px; font-weight: 800; letter-spacing: .15em; text-transform: uppercase; color: var(--muted); }
+.v-pl-side .v-chip { display: block; width: max-content; margin: 0 0 14px; font-size: 28px; padding: 11px 24px; color: var(--text); opacity: 0; }
+.v-pl-side .v-chip.is-on { color: var(--ink); }
+.v-pl-side h3 + .v-chip { margin-top: 0; }
+.v-pl-side h3.is-second { margin-top: 30px; }
+
+/* ---------- alleen de app: tijdlijn ---------- */
+#digital, #print, #bullets, #bingo { left: 680px; top: 430px; width: 1170px; height: 604px; }
 .v-players { position: absolute; left: 0; top: 40px; width: 1170px; display: flex; justify-content: center; gap: 150px; }
 .v-player { position: relative; width: 300px; padding: 30px 20px 26px; border-radius: 30px; text-align: center; background: var(--surface); border: 3px solid var(--line); }
 .v-avatar { width: 132px; height: 132px; margin: 0 auto 14px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); color: var(--mustard); font-family: "Inter Display", Inter, sans-serif; font-weight: 900; font-size: 68px; }
@@ -135,12 +207,28 @@ body {
 .v-miniphone svg { width: 40px; height: 40px; }
 .v-pass { position: absolute; left: 0; width: 1170px; top: 470px; text-align: center; font-size: 28px; font-weight: 700; color: var(--muted); }
 
+/* ---------- alleen de app: bingo ---------- */
+.v-bpanel { position: absolute; top: 0; border-radius: 30px; background: rgba(23, 11, 36, .5); border: 3px solid var(--line); opacity: 0; }
+.v-bpanel.is-turn { border-color: var(--mustard); }
+.v-bhead { position: absolute; left: 22px; top: 16px; right: 22px; display: flex; align-items: center; gap: 14px; height: 60px; }
+.v-bavatar { flex: none; width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); color: var(--mustard); font-family: "Inter Display", Inter, sans-serif; font-weight: 900; font-size: 30px; }
+.v-bname { font-family: "Inter Display", Inter, sans-serif; font-weight: 900; font-size: 36px; line-height: 1; white-space: nowrap; }
+.v-bchip { margin-left: auto; padding: 7px 18px; border-radius: 999px; background: var(--mustard); color: var(--ink); font-size: 23px; font-weight: 800; white-space: nowrap; display: flex; align-items: center; gap: 8px; opacity: 0; }
+.v-bchip svg { width: 28px; height: 28px; }
+.v-bchip.is-good { background: var(--good); }
+.v-bchip.is-won { background: linear-gradient(135deg, var(--mustard), var(--coral-2)); font-family: "Inter Display", Inter, sans-serif; font-weight: 900; font-size: 28px; padding: 5px 20px; }
+.v-bcard { position: absolute; left: 22px; top: 88px; width: 340px; transform-origin: 0 0; }
+.v-bcard .bingo-card { border-radius: 20px; }
+.v-bnote { position: absolute; left: 0; top: 548px; width: 1170px; text-align: center; font-size: 27px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+#bingo-confetti { position: absolute; left: 0; top: 0; }
+#bingo-confetti i { position: absolute; left: 0; top: 0; width: 14px; height: 22px; border-radius: 3px; }
+
 /* ---------- printen ---------- */
 .v-sheet { position: absolute; left: 0; top: 0; width: 210mm; height: 297mm; transform-origin: 0 0; }
 .v-sheet .sheet-page { box-shadow: 0 30px 70px rgba(0, 0, 0, .55); border-radius: 6px; }
 .v-sheet-label { position: absolute; top: 0; font-size: 26px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); text-align: center; width: 380px; }
-.v-print-chips { position: absolute; left: 762px; top: 170px; display: flex; flex-direction: column; gap: 18px; align-items: flex-start; }
-.v-print-chips .v-chip { font-size: 30px; padding: 12px 28px; color: var(--text); opacity: 0; }
+.v-print-chips { position: absolute; left: 0; top: 542px; width: 1170px; display: flex; gap: 16px; justify-content: center; }
+.v-print-chips .v-chip { font-size: 27px; padding: 10px 24px; color: var(--text); opacity: 0; }
 
 /* ---------- slot ---------- */
 .v-bullet { position: absolute; left: 6px; display: flex; align-items: center; gap: 30px; font-family: "Inter Display", Inter, sans-serif; font-weight: 800; font-size: 58px; opacity: 0; white-space: nowrap; }

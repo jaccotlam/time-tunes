@@ -3,15 +3,17 @@
 // 3-render.mjs frame voor frame een scherpe, schokvrije video kan maken.
 //
 // Invoer: ../__tmp/events.json (geschreven door 2-record.mjs) met de starttijden van de
-// scènes, de tikken op het scherm en de lijst opgenomen telefoonframes.
+// scènes, de tikken op het scherm en per telefoon de lijst opgenomen frames.
+// Een scène die niet is opgenomen (TT_ONLY=...) heeft starttijd Infinity; het decor ervan blijft dan weg.
 import { loadDeck, faces } from './cards.js';
 import { SCENES } from './scenes.js';
 import { icons, logoSvg, wordmark } from '../js/ui.js';
-import { sheetsHtml } from '../js/screens/print.js';
+import { sheetsHtml, bingoSheetsHtml } from '../js/screens/print.js';
+import { SQUARES } from '../js/bingo.js';
 
 const E = await (await fetch('../__tmp/events.json', { cache: 'no-store' })).json();
 const deck = await loadDeck();
-const { TABLE, DIGITAL, PUBLIC_URL, PHONE } = E.config;
+const { TABLE, DIGITAL, MULTI, PLAYLIST, PUBLIC_URL, PHONE, SMALL_PHONE } = E.config;
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, html = '') => { const n = document.createElement(tag); if (cls) n.className = cls; n.innerHTML = html; return n; };
 
@@ -21,6 +23,7 @@ const startOf = Object.fromEntries(E.scenes.map((s) => [s.id, s.t]));
 const S = (id) => startOf[id] ?? Infinity; // start van een scène
 const END = (id) => { const i = order.indexOf(id); return i < 0 ? Infinity : (E.scenes[i + 1]?.t ?? E.duration); };
 const M = (name) => E.marks[name] ?? Infinity; // los tijdstip uit de opname
+const HAS = (id) => id in startOf;
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const lerp = (a, b, p) => a + (b - a) * p;
 const ease = {
@@ -50,6 +53,7 @@ for (const id of ['title', 'end']) {
   $(`${id}-logo`).innerHTML = logoSvg('logo');
   $(`${id}-word`).innerHTML = wordmark();
 }
+$('end-url').textContent = PUBLIC_URL.replace(/^https?:\/\//, '').replace(/\/$/, '');
 const titleParts = [...$('titlecard').children];
 const endParts = [...$('endcard').children];
 
@@ -59,8 +63,8 @@ document.querySelector('.v-status-icons').innerHTML = `
   <svg width="26" height="14" viewBox="0 0 26 14"><rect x="1" y="1" width="21" height="12" rx="3.5" fill="none" stroke="#fff4e6" stroke-width="1.6"/><rect x="3.4" y="3.4" width="14" height="7.2" rx="1.8" fill="#fff4e6"/><rect x="23.4" y="4.6" width="2" height="4.8" rx="1" fill="#fff4e6"/></svg>`;
 const screenImg = $('screen');
 let currentFrame = '';
-function frameAt(t) {
-  const f = E.frames;
+/** Het laatste frame van een telefoon op tijdstip t (frames = [[t, bestand], ...]). */
+function frameAt(f, t) {
   let lo = 0; let hi = f.length - 1;
   while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (f[mid][0] <= t + 0.004) lo = mid; else hi = mid - 1; }
   return f[lo][1];
@@ -68,7 +72,7 @@ function frameAt(t) {
 
 // ---------- tekst rechts ----------
 const copy = $('copy');
-const badgeHtml = (b) => (b === 'print' ? icons.print : b === 'check' ? icons.check : b);
+const badgeHtml = (b) => ({ print: icons.print, check: icons.check, music: icons.music }[b] || b);
 const heads = []; // { el, t0, t1 }
 const caps = []; //  { el, t0, t1, first }
 {
@@ -78,15 +82,17 @@ const caps = []; //  { el, t0, t1, first }
     const key = `${sc.kicker}|${sc.badge}|${sc.title}`;
     const first = !run || run.key !== key;
     if (first) {
-      const node = el('div', 'v-head', `<p class="v-kicker">${sc.kicker}</p><div class="v-headrow"><span class="v-badge ${/^\d$/.test(sc.badge) ? '' : 'is-teal'}">${badgeHtml(sc.badge)}</span><h1 class="v-title">${sc.title}</h1></div>`);
+      const node = el('div', `v-head${sc.layout === 'trio' ? ' is-trio' : ''}`, `<p class="v-kicker">${sc.kicker}</p><div class="v-headrow"><span class="v-badge ${/^\d$/.test(sc.badge) ? '' : 'is-teal'}">${badgeHtml(sc.badge)}</span><h1 class="v-title">${sc.title}</h1></div>`);
       copy.append(node);
       run = { key, el: node, t0: S(sc.id), t1: END(sc.id) };
       heads.push(run);
     } else run.t1 = END(sc.id);
     if (sc.caption) {
-      const node = el('div', 'v-cap', `<p>${sc.caption}</p>${sc.chips ? `<div class="v-chips">${sc.chips.map((c) => `<span class="v-chip">${c}</span>`).join('')}</div>` : ''}`);
+      const node = el('div', `v-cap${sc.layout === 'trio' ? ' is-trio' : ''}`, `<p>${sc.caption}</p>${sc.chips ? `<div class="v-chips">${sc.chips.map((c) => `<span class="v-chip">${c}</span>`).join('')}</div>` : ''}`);
       copy.append(node);
-      caps.push({ el: node, t0: S(sc.id), t1: END(sc.id), first });
+      // chipMarks: elk kaartje licht op vanaf zijn tijdstip tot het volgende (gelijk met het kader op de telefoon)
+      const chips = (sc.chipMarks || []).map((m, i) => ({ el: node.querySelectorAll('.v-chip')[i], t0: M(m), t1: M(sc.chipMarks[i + 1]) }));
+      caps.push({ el: node, t0: S(sc.id), t1: END(sc.id), first, chips, trio: sc.layout === 'trio' });
     }
   }
 }
@@ -215,7 +221,8 @@ const confetti = Array.from({ length: 54 }, (_, i) => {
 
 function drawTable(t) {
   const table = $('table');
-  const vis = ramp(t, S('intro') + 0.9, S('intro') + 1.5) * (1 - ramp(t, S('d1') - 0.4, S('d1') - 0.05));
+  const tableEnd = HAS('s6') ? END('s6') : END('modes');
+  const vis = ramp(t, S('intro') + 0.9, S('intro') + 1.5) * (1 - ramp(t, tableEnd - 0.4, tableEnd - 0.05));
   table.style.opacity = vis.toFixed(3);
   table.style.transform = `translateY(${px((1 - ramp(t, S('intro') + 0.9, S('intro') + 1.5, ease.out)) * 40)})`;
   handEl.style.opacity = vis.toFixed(3);
@@ -233,6 +240,11 @@ function drawTable(t) {
   for (const id of [idA, idB, idC]) {
     const p = slot(id, t);
     place(cards[id], { x: p.x, y: CY, s: p.s, flip: 180, z: 10 });
+  }
+  if (!HAS('s2')) { // het verhaal met kaartjes is niet opgenomen: alleen de stapel en de drie open kaarten
+    for (const id of [G, B, ...winNew]) place(cards[id], { x: 0, y: 0, op: 0 });
+    counter.innerHTML = '<span>Jouw tijdlijn: <b>3</b> van 10 kaarten</span>';
+    return;
   }
 
   // goede kaart
@@ -341,9 +353,9 @@ digital.innerHTML = `<div class="v-players">${DIGITAL.names.map((n, i) => `<div 
 const playerEls = [...digital.querySelectorAll('.v-player')];
 const miniPhone = digital.querySelector('.v-miniphone');
 const PLAYER_X = [360, 810];
-const D = E.digital || { turns: [], scores: [], winner: null };
+const D = { turns: [], scores: [], winner: null, ...(E.digital || {}) };
 function drawDigital(t) {
-  const vis = ramp(t, M('setup') + 0.1, M('setup') + 0.6) * (1 - ramp(t, S('p1') - 0.4, S('p1') - 0.05));
+  const vis = ramp(t, M('setup') + 0.1, M('setup') + 0.6) * (1 - ramp(t, END('d3') - 0.4, END('d3') - 0.05));
   digital.style.opacity = vis.toFixed(3);
   if (vis <= 0) return;
   // positie van de telefoon: glijdt bij elke beurtwissel naar de volgende speler
@@ -382,38 +394,227 @@ const printEl = $('print');
 {
   const first12 = [...deck.values()].sort((a, c) => a.id.localeCompare(c.id)).slice(0, 12);
   const tmp = el('div', '', sheetsHtml(first12, PUBLIC_URL));
-  const pages = [...tmp.querySelectorAll('.sheet-page')];
-  const labels = ['Voorkant', 'Achterkant'];
+  // het derde vel: de bingokaarten die ook op het printscherm van de telefoon staan (zelfde zaaiwaarde)
+  const pb = E.print?.bingo || { seed: 1, size: 4 };
+  const tmpBingo = el('div', '', bingoSheetsHtml(8, pb.size, pb.seed));
+  const pages = [...tmp.querySelectorAll('.sheet-page'), tmpBingo.querySelector('.sheet-page')];
+  const labels = ['Voorkant', 'Achterkant', 'Bingokaarten'];
   pages.forEach((page, i) => {
     const wrap = el('div', 'v-sheet');
     wrap.append(page);
     printEl.append(wrap, el('div', 'v-sheet-label', labels[i]));
   });
-  printEl.append(el('div', 'v-print-chips', ['A4, dubbelzijdig', '12 kaarten per vel', 'knip uit: 6,2 × 6,2 cm'].map((c) => `<span class="v-chip">${c}</span>`).join('')));
+  printEl.append(el('div', 'v-print-chips', ['A4, dubbelzijdig', '12 kaartjes per vel', 'bingokaarten: 2 per vel'].map((c) => `<span class="v-chip">${c}</span>`).join('')));
 }
 const sheetEls = [...printEl.querySelectorAll('.v-sheet')];
 const sheetLabels = [...printEl.querySelectorAll('.v-sheet-label')];
 const printChips = [...printEl.querySelectorAll('.v-print-chips .v-chip')];
 const SHEET_SCALE = 0.4;
 function drawPrint(t) {
-  const vis = 1 - ramp(t, S('outro') - 0.4, S('outro') - 0.05);
+  const vis = 1 - ramp(t, END('p2') - 0.4, END('p2') - 0.05);
   printEl.style.opacity = (t >= S('p1') ? vis : 0).toFixed(3);
   if (t < S('p1') || vis <= 0) return;
-  [S('p1') + 0.5, S('p1') + 1.3].forEach((t0, i) => {
+  [S('p1') + 0.5, S('p1') + 1.3, S('p2') + 0.5].forEach((t0, i) => {
     const p = ramp(t, t0, t0 + 0.6, ease.out);
-    const x = 10 + i * 364;
+    const x = 62 + i * 364;
     sheetEls[i].style.opacity = p.toFixed(3);
-    sheetEls[i].style.transform = `translate(${px(x)}, ${px(64 + (1 - p) * 50)}) rotate(${i ? 1.2 : -1.2}deg) scale(${SHEET_SCALE})`;
+    sheetEls[i].style.transform = `translate(${px(x)}, ${px(64 + (1 - p) * 50)}) rotate(${i === 1 ? 1.2 : -1.2}deg) scale(${SHEET_SCALE})`;
     sheetLabels[i].style.opacity = p.toFixed(3);
     sheetLabels[i].style.left = px(x - 31);
     sheetLabels[i].style.top = '10px';
   });
   printChips.forEach((c, i) => {
-    const t0 = S('p2') + 0.4 + i * 0.5;
+    const t0 = [S('p1') + 2.2, S('p1') + 2.7, S('p2') + 1.3][i];
     const p = ramp(t, t0, t0 + 0.4, ease.out);
+    c.style.opacity = p.toFixed(3);
+    c.style.transform = `translateY(${px((1 - p) * 20)})`;
+  });
+}
+
+// ---------- alleen de app: bingo (de kaarten groot, gelijk met de telefoon) ----------
+const bingoEl = $('bingo');
+const BG = { size: 3, names: [], cards: [], years: {}, snaps: [], ...(E.bingo || {}) };
+function bingoCardHtml(card, marks, { selected = null, winLine = null } = {}) {
+  // zelfde opbouw en klassen als bingoCardHtml in app/js/screens/bingo.js (opmaak uit app/css/bingo.css)
+  const cells = card.map((key, i) => {
+    const sq = SQUARES[key];
+    const stamped = marks[i] != null;
+    const state = stamped ? 'stamped' : selected === i ? 'selected' : 'open';
+    const stamp = stamped ? `<span class="bc-done"><span class="bc-stamp">${icons.check}</span><span class="bc-year">${BG.years[marks[i]] ?? ''}</span></span>` : '';
+    return `<div class="bc kind-${sq.kind} is-${state}${winLine && winLine.includes(i) ? ' is-win' : ''}"><span class="bc-label">${sq.short || sq.label}</span><span class="bc-sub">${sq.sub}</span>${stamp}</div>`;
+  }).join('');
+  return `<div class="bingo-card size-${BG.size}" style="--n:${BG.size}">${cells}</div>`;
+}
+const B_SCALE = [1.5, 1.1];
+const B_BOX = [{ x: 69, w: 554, h: 533 }, { x: 683, w: 418, h: 420 }];
+const bPanels = BG.cards.map((card, i) => {
+  const n = el('div', 'v-bpanel', `<div class="v-bhead"><span class="v-bavatar">${BG.names[i][0]}</span><span class="v-bname">${BG.names[i]}</span><span class="v-bchip"></span></div><div class="v-bcard"></div>`);
+  n.style.cssText = `left:${B_BOX[i].x}px;width:${B_BOX[i].w}px;height:${B_BOX[i].h}px`;
+  n.querySelector('.v-bcard').style.transform = `scale(${B_SCALE[i]})`;
+  bingoEl.append(n);
+  return { n, cardEl: n.querySelector('.v-bcard'), chip: n.querySelector('.v-bchip'), html: '', chipHtml: '' };
+});
+bingoEl.append(el('p', 'v-bnote', 'Iedereen heeft een andere kaart · één telefoon gaat rond'), el('div', '', ''));
+bingoEl.lastChild.id = 'bingo-confetti';
+const bingoConfetti = Array.from({ length: 48 }, (_, i) => {
+  const n = el('i');
+  n.style.background = ['var(--mustard)', 'var(--coral)', 'var(--teal)'][i % 3];
+  bingoEl.lastChild.append(n);
+  return { n, x: 60 + rnd() * 1050, dx: (rnd() - 0.5) * 160, delay: rnd() * 0.8, dur: 1.5 + rnd() * 0.9, rot: 300 + rnd() * 700, h: 440 + rnd() * 120 };
+});
+function drawBingo(t) {
+  const vis = ramp(t, S('b1') + 0.4, S('b1') + 0.9) * (1 - ramp(t, END('b3') - 0.4, END('b3') - 0.05));
+  bingoEl.style.opacity = vis.toFixed(3);
+  if (vis <= 0) return;
+  let snap = null; let prev = null;
+  for (const s of BG.snaps) { if (s.t > t) break; prev = snap; snap = s; }
+  const tWin = M('bingoWin');
+  bPanels.forEach((p, i) => {
+    const born = ramp(t, S('b1') + 0.4 + i * 0.25, S('b1') + 0.9 + i * 0.25, ease.out);
+    p.n.style.opacity = born.toFixed(3);
+    p.n.style.transform = `translateY(${px((1 - born) * 30)})`;
+    const marks = snap ? snap.marks[i] : BG.cards[i].map(() => null);
+    const mine = i === 0; // in de video is steeds Sanne (de eerste speler) aan de beurt
+    const html = bingoCardHtml(BG.cards[i], marks, { selected: mine && snap ? snap.selected : null, winLine: mine && snap ? snap.winLine : null });
+    if (p.html !== html) { p.html = html; p.cardEl.innerHTML = html; }
+    let chip = ''; let cls = '';
+    if (mine && snap) {
+      const count = (m) => m.filter((x) => x != null).length;
+      if (snap.winLine) { chip = `${icons.trophy}<span>BINGO!</span>`; cls = ' is-won'; }
+      else if (snap.selected != null) chip = `claimt: ${SQUARES[BG.cards[0][snap.selected]].label}`;
+      else if (prev && prev.selected != null && count(marks) > count(prev.marks[0])) { chip = `${icons.check}<span>goed: afgestempeld</span>`; cls = ' is-good'; }
+      else chip = 'aan de beurt';
+    }
+    if (p.chipHtml !== chip + cls) { p.chipHtml = chip + cls; p.chip.innerHTML = chip; p.chip.className = `v-bchip${cls}`; }
+    p.chip.style.opacity = chip ? '1' : '0';
+    p.chip.style.transform = cls === ' is-won' ? `scale(${(1 + 0.18 * pulse(t, tWin, tWin + 0.6, 0.15, 0.35)).toFixed(3)})` : '';
+    p.n.classList.toggle('is-turn', mine && !!snap);
+  });
+  for (const c of bingoConfetti) {
+    const q = (t - tWin - c.delay) / c.dur;
+    if (!(q > 0 && q < 1)) { c.n.style.opacity = '0'; continue; }
+    c.n.style.opacity = (q < 0.75 ? 1 : (1 - q) * 4).toFixed(2);
+    c.n.style.transform = `translate(${px(c.x + c.dx * q)}, ${px(-10 + c.h * q * (0.55 + 0.45 * q))}) rotate(${(c.rot * q).toFixed(1)}deg)`;
+  }
+}
+
+// ---------- ieder een eigen telefoon: spelleider en spelers naast elkaar ----------
+const FR = E.frames;
+const TRIO_X = [267, 772, 1277];
+const sphones = [['host', MULTI.host, 'speelt de muziek'], ['a', MULTI.names[0], ''], ['b', MULTI.names[1], '']]
+  .filter(([key]) => FR[key]?.length).map(([key, name, sub], i) => {
+    const n = el('div', 'v-sphone', `<span class="v-stag${i === 0 ? ' is-host' : ''}">${name}${sub ? `<small>${sub}</small>` : ''}</span>
+      <div class="v-sscreen"><img alt=""><div class="v-stap"><i></i><b></b></div></div>`);
+    $('trio').append(n);
+    return { key, n, img: n.querySelector('img'), tap: n.querySelector('.v-stap'), cur: '' };
+  });
+/** Stand van de tik-indicator op een telefoon: { op, x, y, scale, ring } in CSS-px van die telefoon. */
+function tapState(t, key) {
+  let op = 0; let x = 0; let y = 0; let scale = 1; let ring = 0;
+  for (const tap of E.taps) {
+    if ((tap.phone || 'main') !== key) continue;
+    const lead = tap.lead ?? 0.45;
+    if (t < tap.t - lead || t > tap.t + 0.5) continue;
+    x = tap.x; y = tap.y;
+    if (t < tap.t) { const p = ramp(t, tap.t - lead, tap.t - 0.08, ease.out); op = p; scale = 1.6 - 0.6 * p; ring = 0; } else {
+      const p = (t - tap.t) / 0.5;
+      op = 1 - ramp(t, tap.t + 0.2, tap.t + 0.5);
+      scale = p < 0.2 ? 1 - 0.2 * (p / 0.2) : 0.8 + 0.2 * clamp01((p - 0.2) / 0.3);
+      ring = p;
+    }
+  }
+  for (const d of E.drags || []) {
+    if ((d.phone || 'main') !== key) continue;
+    if (t < d.t0 - 0.3 || t > d.t1 + 0.25) continue;
+    const p = ramp(t, d.t0, d.t1);
+    x = d.x; y = lerp(d.y0, d.y1, p);
+    op = ramp(t, d.t0 - 0.3, d.t0 - 0.05) * (1 - ramp(t, d.t1, d.t1 + 0.25));
+    scale = 0.9; ring = 0;
+  }
+  return { op, x, y, scale, ring };
+}
+function drawTap(node, s, k, top) {
+  node.style.opacity = s.op.toFixed(3);
+  node.style.transform = `translate(${px(s.x * k)}, ${px(top + s.y * k)})`;
+  node.firstChild.style.transform = `scale(${s.scale.toFixed(3)})`;
+  node.lastChild.style.opacity = s.ring > 0 ? (1 - s.ring).toFixed(3) : '0';
+  node.lastChild.style.transform = `scale(${(1 + s.ring * 1.5).toFixed(3)})`;
+}
+function drawTrio(t) {
+  const a = M('trioIn'); const z = M('trioOut');
+  sphones.forEach((p, i) => {
+    const inP = ramp(t, a + 0.45 + i * 0.15, a + 1.15 + i * 0.15, ease.out);
+    const outP = ramp(t, z + i * 0.06, z + 0.55 + i * 0.06, ease.in);
+    const vis = inP > 0 && outP < 1;
+    p.n.style.visibility = vis ? 'visible' : 'hidden';
+    if (!vis) return;
+    p.n.style.transform = `translate(${px(TRIO_X[i])}, ${px((1 - inP) * 900 + outP * 900)})`;
+    drawTap(p.tap, tapState(t, p.key), SMALL_PHONE.scale, 24);
+  });
+}
+
+// ---------- de muziek: fragment of heel nummer ----------
+const musicEl = $('music');
+musicEl.innerHTML = `
+  <div class="v-tile" style="left:0;top:30px"><div class="v-tile-top"><span class="v-tile-ico">${icons.music}</span><span class="v-chip">standaard</span></div>
+    <b>Fragment van 30 seconden</b><p>Geen account nodig.</p></div>
+  <div class="v-tile is-teal" style="left:608px;top:30px"><div class="v-tile-top"><span class="v-tile-ico">${icons.music}</span><span class="v-chip is-quiet">als je wilt</span></div>
+    <b>Hele nummers via Spotify</b><p>Met Spotify Premium. Eén keer koppelen bij Instellingen.</p></div>`;
+const musicTiles = [...musicEl.querySelectorAll('.v-tile')];
+function drawMusic(t) {
+  const vis = 1 - ramp(t, END('set1') - 0.4, END('set1') - 0.05);
+  musicEl.style.opacity = (t >= S('set1') ? vis : 0).toFixed(3);
+  if (t < S('set1') || vis <= 0) return;
+  const on = [[M('srcPreview'), M('srcSpotify')], [M('srcSpotify'), END('set1')]];
+  musicTiles.forEach((n, i) => {
+    const p = ramp(t, S('set1') + 0.3 + i * 0.3, S('set1') + 0.8 + i * 0.3, ease.out);
+    n.style.opacity = p.toFixed(3);
+    n.style.transform = `translateY(${px((1 - p) * 30)})`;
+    n.classList.toggle('is-on', t >= on[i][0] && t < on[i][1]);
+  });
+}
+
+// ---------- eigen playlist: de lijst groot, gelijk met de telefoon ----------
+const playlistEl = $('playlist');
+{
+  const row = (tr, i, cls = '') => `<div class="v-pl-row${cls}"><i>${String(i + 1).padStart(3, '0')}</i><span>${tr.title}<small>${tr.artist}</small></span><b>${tr.year}</b></div>`;
+  playlistEl.innerHTML = `<div class="v-pl">
+      <div class="v-pl-head"><span class="v-tile-ico">${icons.music}</span><span class="v-pl-name">${PLAYLIST.name}</span><span class="v-pl-count"></span><span class="v-pl-active">Actief</span></div>
+      ${PLAYLIST.tracks.map((tr, i) => row(tr, i)).join('')}${row(PLAYLIST.expect, PLAYLIST.tracks.length, ' is-new')}
+    </div>
+    <div class="v-pl-side"><h3>Nummers toevoegen</h3>
+      <span class="v-chip">zoeken</span><span class="v-chip">een lijst plakken</span><span class="v-chip">Spotify-playlist overnemen</span>
+      <h3 class="is-second">En verder</h3>
+      <span class="v-chip">eigen kaartjes printen</span><span class="v-chip">delen via link of QR-code</span></div>`;
+}
+const plBox = playlistEl.querySelector('.v-pl');
+const plNew = playlistEl.querySelector('.v-pl-row.is-new');
+const plCount = playlistEl.querySelector('.v-pl-count');
+const plActive = playlistEl.querySelector('.v-pl-active');
+const plSide = [...playlistEl.querySelectorAll('.v-pl-side > *')];
+function drawPlaylist(t) {
+  const vis = 1 - ramp(t, END('pl3') - 0.4, END('pl3') - 0.05);
+  playlistEl.style.opacity = (t >= S('pl1') ? vis : 0).toFixed(3);
+  if (t < S('pl1') || vis <= 0) return;
+  const born = ramp(t, S('pl1') + 0.3, S('pl1') + 0.8, ease.out);
+  plBox.style.opacity = born.toFixed(3);
+  plBox.style.transform = `translateY(${px((1 - born) * 30)})`;
+  const added = ramp(t, M('added'), M('added') + 0.4, ease.out);
+  plNew.style.height = px(62 * added);
+  plNew.style.opacity = added.toFixed(3);
+  plNew.style.borderTopWidth = added > 0 ? '2px' : '0';
+  const n = PLAYLIST.tracks.length + (t >= M('added') ? 1 : 0);
+  if (plCount.textContent !== `${n} nummers`) plCount.textContent = `${n} nummers`;
+  plBox.classList.toggle('is-years', t >= M('years') && t < M('years') + 2.5);
+  const act = ramp(t, M('active'), M('active') + 0.35, ease.back);
+  plActive.style.opacity = clamp01(act * 3).toFixed(3);
+  plActive.style.transform = `scale(${Math.max(0, act).toFixed(3)})`;
+  plSide.forEach((c, i) => {
+    const p = ramp(t, S('pl1') + 0.7 + i * 0.22, S('pl1') + 1.1 + i * 0.22, ease.out);
     c.style.opacity = p.toFixed(3);
     c.style.transform = `translateX(${px((1 - p) * 30)})`;
   });
+  plSide[1].classList.toggle('is-on', t >= M('playlistOpen') + 0.6 && t < M('added') + 0.6); // "zoeken" is wat de telefoon nu laat zien
 }
 
 // ---------- slot: drie beloftes ----------
@@ -477,39 +678,18 @@ function drawCopy(t) {
     const o = p * (1 - ramp(t, c.t1 - 0.2, c.t1));
     c.el.style.opacity = o.toFixed(3);
     c.el.style.transform = `translateY(${px((1 - p) * 18)})`;
+    for (const chip of c.chips) chip.el.classList.toggle('is-on', t >= chip.t0 && t < chip.t1);
   }
 }
 function drawPhone(t) {
   const inP = ramp(t, S('intro') + 0.1, S('intro') + 0.9, ease.out);
   const outP = ramp(t, S('end'), S('end') + 0.55, ease.in);
-  phone.style.transform = `translate(${px(-outP * 700)}, ${px((1 - inP) * 1100)})`;
-  phone.style.visibility = inP <= 0 || outP >= 1 ? 'hidden' : 'visible';
+  // tijdens "Ieder een eigen telefoon" maakt de hoofdtelefoon plaats voor de drie kleinere
+  const away = Math.max(outP, ramp(t, M('trioIn'), M('trioIn') + 0.6, ease.in) * (1 - ramp(t, M('trioOut') + 0.25, M('trioOut') + 0.85, ease.out)));
+  phone.style.transform = `translate(${px(-away * 700)}, ${px((1 - inP) * 1100)})`;
+  phone.style.visibility = inP <= 0 || away >= 1 ? 'hidden' : 'visible';
 
-  // tik-indicator
-  let op = 0; let x = 0; let y = 0; let scale = 1; let ring = 0;
-  for (const tap of E.taps) {
-    const lead = tap.lead ?? 0.45;
-    if (t < tap.t - lead || t > tap.t + 0.5) continue;
-    x = tap.x; y = tap.y;
-    if (t < tap.t) { const p = ramp(t, tap.t - lead, tap.t - 0.08, ease.out); op = p; scale = 1.6 - 0.6 * p; } else {
-      const p = (t - tap.t) / 0.5;
-      op = 1 - ramp(t, tap.t + 0.2, tap.t + 0.5);
-      scale = p < 0.2 ? 1 - 0.2 * (p / 0.2) : 0.8 + 0.2 * clamp01((p - 0.2) / 0.3);
-      ring = p;
-    }
-  }
-  for (const d of E.drags || []) {
-    if (t < d.t0 - 0.3 || t > d.t1 + 0.25) continue;
-    const p = ramp(t, d.t0, d.t1);
-    x = d.x; y = lerp(d.y0, d.y1, p);
-    op = ramp(t, d.t0 - 0.3, d.t0 - 0.05) * (1 - ramp(t, d.t1, d.t1 + 0.25));
-    scale = 0.9; ring = 0;
-  }
-  tapEl.style.opacity = op.toFixed(3);
-  tapEl.style.transform = `translate(${px(x * PHONE.scale)}, ${px(30 + y * PHONE.scale)})`;
-  tapEl.firstChild.style.transform = `scale(${scale.toFixed(3)})`;
-  tapEl.lastChild.style.opacity = ring > 0 ? (1 - ring).toFixed(3) : '0';
-  tapEl.lastChild.style.transform = `scale(${(1 + ring * 1.5).toFixed(3)})`;
+  drawTap(tapEl, tapState(t, 'main'), PHONE.scale, 30); // tik-indicator
 
   // kader om een onderdeel van het scherm
   let hl = 0;
@@ -529,13 +709,21 @@ function drawPhone(t) {
 }
 
 window.renderFrame = async (t) => {
-  drawTitle(t); drawCopy(t); drawPhone(t); drawTable(t); drawDigital(t); drawPrint(t); drawBullets(t); drawEnd(t);
-  const name = frameAt(t);
+  drawTitle(t); drawCopy(t); drawPhone(t); drawTable(t); drawDigital(t); drawBingo(t); drawTrio(t); drawPrint(t);
+  drawMusic(t); drawPlaylist(t); drawBullets(t); drawEnd(t);
+  const jobs = [];
+  const name = frameAt(FR.main, t);
   if (name !== currentFrame) {
     currentFrame = name;
-    screenImg.src = `../__tmp/phone/${name}`;
-    await screenImg.decode();
+    screenImg.src = `../__tmp/phone/main/${name}`;
+    jobs.push(screenImg.decode());
   }
+  for (const p of sphones) {
+    if (p.n.style.visibility !== 'visible') continue;
+    const f = frameAt(FR[p.key], t);
+    if (f !== p.cur) { p.cur = f; p.img.src = `../__tmp/phone/${p.key}/${f}`; jobs.push(p.img.decode()); }
+  }
+  await Promise.all(jobs);
 };
 
 // Controle: past elke kop en ondertitel binnen de kolom?
@@ -544,11 +732,14 @@ await document.fonts.ready;
 for (const h of heads) {
   const title = h.el.querySelector('.v-title');
   const row = h.el.querySelector('.v-headrow');
-  if (row.scrollWidth > 1170) window.stageWarnings.push(`kop te breed (${row.scrollWidth}px): ${title.textContent}`);
+  const max = h.el.classList.contains('is-trio') ? 930 : 1170;
+  if (row.scrollWidth > max) window.stageWarnings.push(`kop te breed (${row.scrollWidth}px): ${title.textContent}`);
 }
 for (const c of caps) {
   const p = c.el.querySelector('p');
-  if (p.getBoundingClientRect().height > 43 * 1.3 * 2 + 4) window.stageWarnings.push(`ondertitel langer dan 2 regels: ${p.textContent}`);
+  // naast de telefoon: 2 regels van 43 px; boven de drie telefoons: 3 regels van 36 px
+  const max = c.trio ? 36 * 1.3 * 3 + 4 : 43 * 1.3 * 2 + 4;
+  if (p.getBoundingClientRect().height > max) window.stageWarnings.push(`ondertitel langer dan ${c.trio ? 3 : 2} regels: ${p.textContent}`);
 }
 await window.renderFrame(0);
 window.stageReady = true;
