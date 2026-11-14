@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>TimeTunesr uitlegvideo: decor</title>
+<!-- De huisstijl komt uit de app zelf: kleuren, typografie en de printopmaak van de kaarten. -->
+<link rel="stylesheet" href="../css/app.css">
+<link rel="stylesheet" href="stage.css">
+</head>
+<body>
+<div id="stage">
+  <div id="titlecard" class="v-layer">
+    <div class="v-title-logo" id="title-logo"></div>
+    <div class="v-title-word" id="title-word"></div>
+    <p class="v-title-tag">Luister. Raad het jaar. Bouw je tijdlijn.</p>
+    <p class="v-title-sub"><span>Zo werkt het spel</span></p>
+  </div>
+
+  <div id="copy" class="v-layer"></div>
+
+  <div id="table" class="v-layer">
+    <div class="v-felt"></div>
+    <div class="v-table-label">Op tafel</div>
+    <div class="v-counter" id="counter"></div>
+    <div class="v-axis" id="axis"><span>ouder</span><i></i><span>nieuwer</span></div>
+    <div class="v-pile-label" id="pile-label">stapel, QR-kant boven</div>
+    <div id="pile"></div>
+    <div id="cards"></div>
+    <div class="v-caret" id="caret"></div>
+    <div id="confetti"></div>
+  </div>
+  <div id="hand" class="v-layer"></div>
+
+  <div id="digital" class="v-layer"></div>
+  <div id="print" class="v-layer"></div>
+  <div id="bullets" class="v-layer"></div>
+
+  <div id="phone">
+    <div class="v-screen">
+      <div class="v-statusbar"><span>20:30</span><span class="v-status-icons"></span></div>
+      <img id="screen" alt="">
+      <div id="hl"></div>
+      <div id="cut"><span>Even later…</span></div>
+      <div id="tap"><i></i><b></b></div>
+    </div>
+  </div>
+
+  <div id="endcard" class="v-layer">
+    <div class="v-title-logo" id="end-logo"></div>
+    <div class="v-title-word" id="end-word"></div>
+    <p class="v-title-tag">Luister. Raad het jaar. Bouw je tijdlijn.</p>
+    <p class="v-end-line">Gratis spelen in je browser · geen account nodig</p>
+  </div>
+</div>
+<script type="module" src="stage.js"></script>
+</body>
+</html>

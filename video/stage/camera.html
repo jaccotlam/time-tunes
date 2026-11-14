@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>Nep-camerabeeld: een kaart schuift in beeld</title>
+<link rel="stylesheet" href="../css/app.css">
+<style>
+  html, body { margin: 0; width: 1280px; height: 720px; overflow: hidden; background: #241238; min-height: 0; }
+  #world { position: absolute; left: -80px; top: -80px; width: 1440px; height: 880px; transform-origin: 50% 50%; }
+  #felt {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(820px 560px at 44% 40%, rgba(255, 236, 214, .24), transparent 72%),
+      radial-gradient(1100px 760px at 86% 112%, rgba(0, 0, 0, .42), transparent 62%),
+      linear-gradient(160deg, #5a3986, #3f2869 55%, #332056);
+  }
+  #grain { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .16; }
+  #card {
+    position: absolute; left: 0; top: 0; width: 62mm; height: 62mm; margin: -31mm 0 0 -31mm;
+    background: #fff; border-radius: 5px; overflow: hidden;
+    box-shadow: 0 2px 3px rgba(0, 0, 0, .35), 0 16px 34px rgba(0, 0, 0, .45);
+    will-change: transform, filter;
+  }
+  #card .pc { outline: none; }
+  #vignette { position: absolute; inset: 0; background: radial-gradient(closest-side at 50% 50%, transparent 62%, rgba(0, 0, 0, .38)); pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="world">
+  <div id="felt"></div>
+  <canvas id="grain" width="720" height="440"></canvas>
+  <div id="card"></div>
+</div>
+<div id="vignette"></div>
+<script type="module">
+import { loadDeck, faces } from './cards.js';
+
+const q = new URLSearchParams(location.search);
+const deck = await loadDeck();
+const card = deck.get(q.get('card'));
+const cardEl = document.getElementById('card');
+const world = document.getElementById('world');
+cardEl.innerHTML = faces(card, q.get('base')).front;
+
+// Vilt-structuur van het tafelkleed (vaste ruis, dus elke opname is gelijk).
+{
+  const cv = document.getElementById('grain');
+  const g = cv.getContext('2d');
+  const img = g.createImageData(cv.width, cv.height);
+  let seed = 7;
+  for (let i = 0; i < img.data.length; i += 4) {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    const v = seed >>> 24;
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+}
+
+// Tijdlijn van het filmpje (seconden sinds de camera start); instelbaar via ?in0=&in1=&sharp=
+const T_IN0 = Number(q.get('in0') ?? 0.9); //   kaart begint in beeld te schuiven
+const T_IN1 = Number(q.get('in1') ?? 2.0); //   kaart ligt stil
+const T_SHARP = Number(q.get('sharp') ?? 2.6); // camera heeft scherpgesteld: QR leesbaar
+
+const clamp = (v) => Math.max(0, Math.min(1, v));
+const easeOut = (p) => 1 - (1 - p) ** 3;
+const SCALE = 1.56;
+const pose = (t) => {
+  const p = easeOut(clamp((t - T_IN0) / (T_IN1 - T_IN0)));
+  return { x: 1420 + (722 - 1420) * p, y: 1040 + (442 - 1040) * p, r: -24 + (-4 + 24) * p };
+};
+
+window.renderCam = (t) => {
+  // lichte beweging van de hand die de telefoon vasthoudt
+  const wx = Math.sin(t * 1.7) * 5 + Math.sin(t * 0.6 + 1) * 3;
+  const wy = Math.cos(t * 1.3) * 4 + Math.sin(t * 0.9) * 2;
+  const wr = Math.sin(t * 0.8) * 0.35;
+  world.style.transform = `translate(${wx.toFixed(2)}px, ${wy.toFixed(2)}px) rotate(${wr.toFixed(3)}deg)`;
+  const a = pose(t);
+  const b = pose(t - 1 / 30);
+  const speed = Math.hypot(a.x - b.x, a.y - b.y) * 30; // px/s
+  const motionBlur = Math.min(14, speed * 0.012);
+  const focusBlur = 7 * (1 - clamp((t - (T_IN1 + 0.1)) / (T_SHARP - T_IN1 - 0.1)) ** 2);
+  const blur = Math.max(motionBlur, focusBlur);
+  cardEl.style.transform = `translate(${a.x.toFixed(2)}px, ${a.y.toFixed(2)}px) rotate(${a.r.toFixed(3)}deg) scale(${SCALE})`;
+  cardEl.style.filter = blur > 0.05 ? `blur(${blur.toFixed(2)}px)` : 'none';
+};
+window.renderCam(0);
+window.camReady = true;
+</script>
+</body>
+</html>
