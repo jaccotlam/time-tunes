@@ -8,6 +8,8 @@ import * as cardScreen from './screens/card.js';
 import * as gameScreen from './screens/game.js';
 import * as printScreen from './screens/print.js';
 import * as rulesScreen from './screens/rules.js';
+import * as settingsScreen from './screens/settings.js';
+import * as spotify from './spotify.js';
 
 const routes = [
   { re: /^#?\/?$/, screen: startScreen, needsDeck: false },
@@ -16,6 +18,7 @@ const routes = [
   { re: /^#\/spel\/?$/, screen: gameScreen, needsDeck: true },
   { re: /^#\/print\/?$/, screen: printScreen, needsDeck: true },
   { re: /^#\/regels\/?$/, screen: rulesScreen, needsDeck: false },
+  { re: /^#\/instellingen\/?$/, screen: settingsScreen, needsDeck: false },
 ];
 
 const root = document.getElementById('app');
@@ -88,6 +91,9 @@ const unlockOnce = () => {
 window.addEventListener('pointerdown', unlockOnce, true);
 window.addEventListener('keydown', unlockOnce, true);
 
+// Back from the Spotify login (?code=..&state=..): cleans the URL before routing.
+spotify.handleRedirect();
+
 window.addEventListener('hashchange', route);
 route();
 
@@ -105,4 +111,4 @@ window.addEventListener('online', () => document.body.classList.remove('is-offli
 if (navigator.onLine === false) document.body.classList.add('is-offline');
 
 // expose for debugging / e2e
-window.__tt = { navigate, player, esc };
+window.__tt = { navigate, player, esc, spotify };

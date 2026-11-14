@@ -24,6 +24,7 @@ Op een telefoon in hetzelfde netwerk werkt alles behalve de camera-scanner, want
 | --- | --- |
 | `app/` | De complete site (dit is wat er gehost wordt) |
 | `app/data/deck.json` | Het kaartendeck (`id`, `title`, `artist`, `year`, `itunesId`, `previewUrl`, `trackViewUrl`) |
+| `app/js/spotify.js`, `spotify-match.js`, `pkce.js` | Spotify-koppeling: login (PKCE), afspelen op een Spotify-apparaat, kaart → nummer |
 | `app/js/logic.js` | Pure spellogica zonder DOM: QR-tekst parsen, plek controleren, beurten, winnaar, schudden |
 | `app/js/screens/` | De schermen: start, scannen, kaart afspelen, digitaal spel, printen, spelregels |
 | `app/vendor/` | jsQR (QR lezen, Apache-2.0) en qrcode-generator (QR maken, MIT), met licenties |
@@ -31,7 +32,7 @@ Op een telefoon in hetzelfde netwerk werkt alles behalve de camera-scanner, want
 | `tests/unit/` | `node --test` voor de spellogica |
 | `tests/e2e/` | Playwright-scripts (kaart scannen met nep-camera, digitaal spel, printen, PWA) |
 
-Routes (hash): `#/` start, `#/scan`, `#/c/042` (verborgen afspeelscherm voor kaart 042), `#/spel`, `#/print`, `#/regels`.
+Routes (hash): `#/` start, `#/scan`, `#/c/042` (verborgen afspeelscherm voor kaart 042), `#/spel`, `#/print`, `#/regels`, `#/instellingen`.
 
 ## Kaarten printen
 
@@ -52,4 +53,28 @@ De workflow `.github/workflows/pages.yml` publiceert de map `app/` bij elke push
 - Voor afspelen is internet nodig. De app zelf laadt na het eerste bezoek ook offline.
 - De **camera** werkt alleen via https of op localhost. iOS Safari heeft geen `BarcodeDetector`, daarom leest jsQR daar de QR-codes.
 - iOS staat geluid pas toe na een tik. Wie een kaart met de gewone camera-app opent, krijgt daarom een grote knop **Speel af**.
-- Volledige nummers via Spotify zouden voor elke speler Spotify Premium vereisen, plus een eigen geregistreerde Spotify-developer-app. Dat is bewust buiten deze versie gehouden.
+- Hele nummers via Spotify kan ook, maar vraagt Premium en een eenmalige koppeling; zie **Spotify koppelen**.
+
+## Spotify koppelen
+
+Naast de fragmenten van 30 seconden kan TimeTunesr hele nummers afspelen via Spotify. Kies dat bij **Instellingen** (`#/instellingen`).
+
+**Wat het doet.** De app speelt niet zelf, maar bedient via de Spotify Web API de Spotify-app op de telefoon (of een speaker met Spotify Connect). Inloggen gaat met Authorization Code + PKCE, dus zonder geheime sleutel in de site. Per kaart gebruikt de app het veld `spotifyId` uit `deck.json`; ontbreekt dat, dan zoekt hij het nummer op met het account van de speler (`track:"titel" artist:"artiest"`), kiest de beste match (live-, karaoke-, cover- en remixversies worden vermeden) en onthoudt die per kaart. De speler blijft verborgen: titel, artiest en hoes uit Spotify komen nooit op het scherm. Na de gekozen afspeelduur (30 s, 60 s of het hele nummer; standaard 60 s) en bij het verlaten van het afspeelscherm pauzeert Spotify. Lukt Spotify niet (geen Premium, nummer niet gevonden, sessie verlopen), dan valt de app terug op het fragment van 30 seconden en meldt dat kort. Vindt Spotify geen apparaat, dan vraagt de app de Spotify-app te openen en een apparaat te kiezen.
+
+**Wat de eigenaar eenmalig regelt** (de stappen staan ook in de app, onder *Zo koppel je Spotify*):
+
+1. Maak op [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) een app aan (Premium nodig).
+2. Vul bij *Redirect URIs* exact het adres in dat de app bij Instellingen toont: de app-URL zonder `#` of `?`, bijvoorbeeld `https://<gebruiker>.github.io/time-tunes/`. Spotify accepteert alleen https, of voor lokaal testen `http://127.0.0.1:<poort>/` (niet `localhost`).
+3. Vink **Web API** aan en kopieer de **Client ID**. Zet die in `app/config.js` (`SPOTIFY_CLIENT_ID`) om hem voor iedereen in te vullen, of laat spelers hem zelf invullen bij Instellingen.
+4. Voeg medespelers toe onder **User Management** (Development Mode: maximaal 5 accounts).
+
+**Beperkingen.** De eigenaar en elke speler hebben Spotify Premium nodig. De Spotify-app moet op het toestel open staan (of er moet een speaker beschikbaar zijn). Op het vergrendelscherm, in meldingen en in de Spotify-app is de titel te zien: niet spieken. Een iPhone-app op het beginscherm heeft eigen opslag, dus verbind vanuit die app zelf.
+
+**Kaarten vooraf koppelen.** `tools/link-spotify.mjs` zoekt voor alle kaarten het Spotify-nummer op met dezelfde matchregels (`app/js/spotify-match.js`) en schrijft `spotifyId` in `app/data/deck.json`. Hiervoor is ook de Client secret nodig, dus draai dit op je eigen computer en zet de secret nooit in de site:
+
+```bash
+SPOTIFY_CLIENT_ID=... SPOTIFY_CLIENT_SECRET=... node tools/link-spotify.mjs --dry-run   # alleen rapport
+SPOTIFY_CLIENT_ID=... SPOTIFY_CLIENT_SECRET=... node tools/link-spotify.mjs             # deck.json bijwerken
+```
+
+Het rapport noemt twijfelgevallen en kaarten zonder match met een link om te controleren; zet zo nodig zelf een `spotifyId` in het deck. Andere opties: `--sure-only`, `--only 001,042`, `--force`, `--report rapport.json`. De tool wacht tussen verzoeken en respecteert `Retry-After` bij 429.

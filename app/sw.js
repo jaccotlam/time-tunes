@@ -2,7 +2,8 @@
 // Strategy: network-first (with revalidation) for the app shell and deck, so a
 // new deploy is picked up on the next load whenever the phone is online; the
 // cache is only a fallback for offline use. Audio and the iTunes API are
-// cross-origin and are never cached here.
+// cross-origin and are never cached here; the same goes for Spotify
+// (api.spotify.com, accounts.spotify.com).
 // Bump VERSION when the list below changes; old caches are removed on activate.
 const VERSION = 'v1';
 const CACHE = `timetunesr-shell-${VERSION}`;
@@ -25,6 +26,13 @@ const SHELL = [
   'js/screens/game.js',
   'js/screens/print.js',
   'js/screens/rules.js',
+  'js/screens/settings.js',
+  'js/screens/devices.js',
+  'js/spotify.js',
+  'js/spotify-match.js',
+  'js/pkce.js',
+  'config.js',
+  'css/settings.css',
   'vendor/jsQR.js',
   'vendor/qrcode-generator.mjs',
   'data/deck.json',
@@ -55,7 +63,9 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return; // audio, iTunes lookup: straight to network
+  if (url.origin !== self.location.origin) return; // audio, iTunes, Spotify: straight to network, never cached
+  // Back from the Spotify login (?code=&state=): let the browser load it untouched.
+  if (req.mode === 'navigate' && url.searchParams.has('state') && (url.searchParams.has('code') || url.searchParams.has('error'))) return;
   if (req.headers.has('range')) return;
   event.respondWith(networkFirst(req));
 });
