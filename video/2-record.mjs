@@ -85,6 +85,24 @@ export async function record() {
     await page.getByTestId('screen-start').waitFor();
     await page.getByTestId('deck-info').filter({ hasText: 'kaarten in het deck' }).waitFor();
     await page.evaluate(() => document.fonts.ready);
+    // Warm de browsercache op voor de vier fragmenten die in de video starten, zodat het
+    // afspeelscherm niet onnodig lang op "Fragment wordt geladen…" blijft staan.
+    const warm = [TABLE.good, TABLE.bad, seedIds[2], seedIds[3]].map((id) => byId.get(id));
+    const warmed = await page.evaluate(async (cards) => Promise.all(cards.map(async (c) => {
+      let url = c.previewUrl;
+      try {
+        const json = await (await fetch(`https://itunes.apple.com/lookup?id=${c.itunesId}&country=NL`, { cache: 'no-store' })).json();
+        url = (json.results || []).find((r) => r.previewUrl)?.previewUrl || url;
+      } catch { /* dan de link uit het deck */ }
+      return new Promise((res) => {
+        const a = new Audio();
+        a.preload = 'auto'; a.muted = true;
+        a.oncanplaythrough = () => res(true); a.onerror = () => res(false);
+        setTimeout(() => res(false), 8000);
+        a.src = url;
+      });
+    })), warm);
+    console.log(`fragmenten voorgeladen: ${warmed.filter(Boolean).length}/${warm.length}`);
     await sleep(600);
 
     // ---------- opname van het scherm ----------
@@ -194,10 +212,11 @@ export async function record() {
     scene('s3');
     await page.getByTestId('screen-card').waitFor();
     await playing(`kaart ${TABLE.good}`);
+    mark('playA');
     await assertHidden(TABLE.good);
     await holdUntil(ev.scenes.at(-1).t + 5.6);
-    scene('s4'); await hold(5.4);
-    scene('s5'); await hold(3.9);
+    scene('s4'); await hold(5.2);
+    scene('s5'); await hold(3.8);
     scene('s5good'); await hold(3.0);
     await assertHidden(TABLE.good);
 
@@ -209,6 +228,7 @@ export async function record() {
     await page.waitForURL(new RegExp(`#/c/${TABLE.bad}$`), { timeout: 15000 });
     mark('detectB');
     await playing(`kaart ${TABLE.bad}`);
+    mark('playB');
     await assertHidden(TABLE.bad);
     await holdUntil(ev.marks.detectB + 2.8);
     scene('s5bad'); await hold(3.8);
@@ -297,7 +317,7 @@ export async function record() {
     await hold(0.8);
     await scrollTo(tops[0] - 64, 0.9);
     mark('printFront');
-    await hold(1.5);
+    await hold(1.3);
     scene('p2');
     await hold(0.5);
     await scrollTo(tops[1] - 64, 0.9);
@@ -312,7 +332,7 @@ export async function record() {
     // de tip over het beginscherm in de app krijgt een kader zodra de tekst ernaast erover gaat
     const hint = await page.getByTestId('install-hint').boundingBox();
     if (hint) ev.highlights.push({ t0: rel() + 1.5, t1: rel() + 5.3, ...hint });
-    await hold(5.6);
+    await hold(5.4);
     scene('end'); await hold(3.0);
     ev.duration = rel();
 
@@ -326,6 +346,7 @@ export async function record() {
     if (problems.length) throw new Error(`Opname afgekeurd:\n- ${problems.join('\n- ')}`);
     writeFileSync(join(TMP, 'events.json'), JSON.stringify(ev));
     const fps = frames.length / ev.duration;
+    console.log(`wachttijd tot het fragment speelt: kaart 1 ${(ev.marks.playA - ev.scenes.find((s) => s.id === 's3').t).toFixed(2)} s, kaart 2 ${(ev.marks.playB - ev.marks.detectB).toFixed(2)} s`);
     console.log(`opname klaar: ${ev.duration.toFixed(1)} s, ${frames.length} telefoonframes (${fps.toFixed(1)} fps gemiddeld) -> ${join(TMP, 'events.json')}`);
     return ev;
   } finally {

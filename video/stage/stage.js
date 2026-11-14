@@ -198,6 +198,8 @@ const markGood = el('div', 'v-mark is-good', icons.check);
 const markBad = el('div', 'v-mark is-bad', icons.cross);
 const ringGood = el('div', 'v-ring');
 cardsEl.append(ringGood, markGood, markBad);
+const guess = el('div', 'v-guess', 'welk jaar?');
+cardsEl.append(guess);
 const caret = $('caret');
 const counter = $('counter');
 const confettiEl = $('confetti');
@@ -272,6 +274,17 @@ function drawTable(t) {
     markBad.style.opacity = (clamp01(pop * 3) * b.op(t)).toFixed(3);
     markBad.style.transform = `translate(${px(b.x(t) + shake + 150)}, ${px(b.y(t) - 150)}) scale(${Math.max(0, pop).toFixed(3)})`;
     markBad.style.zIndex = '70';
+  }
+
+  // "welk jaar?" bij de kaart zolang hij nog dicht is
+  {
+    const a = pulse(t, t3 + 0.5, t4 + 4.1, 0.3, 0.25);
+    const c = pulse(t, dB + 0.4, dB + 2.1, 0.3, 0.25);
+    const useB = c > a;
+    const src = useB ? b : g;
+    const wob = 1 + 0.05 * Math.sin(t * 5);
+    guess.style.opacity = Math.max(a, c).toFixed(3);
+    guess.style.transform = `translate(${px(src.x(t) - 20)}, ${px(src.y(t) - 132)}) scale(${wob.toFixed(3)})`;
   }
 
   // scan-hoekjes rond de kaart die voor de camera wordt gehouden

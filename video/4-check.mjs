@@ -19,7 +19,8 @@ export function check(extraTimes = []) {
   const times = events.scenes.map((s, i) => {
     const end = events.scenes[i + 1]?.t ?? events.duration;
     return { t: s.t + (end - s.t) * 0.66, id: s.id };
-  }).concat(extraTimes.map((t) => ({ t, id: [...events.scenes].reverse().find((s) => s.t <= t)?.id || '?' })));
+  }).concat(extraTimes.filter((t) => t >= 0 && t < events.duration - 0.04)
+    .map((t) => ({ t, id: [...events.scenes].reverse().find((s) => s.t <= t)?.id || events.scenes[0].id })));
   times.sort((a, b) => a.t - b.t);
   for (const { t, id } of times) {
     const file = join(dir, `${t.toFixed(2).padStart(6, '0')}-${id}.png`);

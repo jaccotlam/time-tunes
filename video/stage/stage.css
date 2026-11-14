@@ -84,7 +84,7 @@ body {
 }
 .v-table-label { position: absolute; left: 36px; bottom: 26px; font-size: 21px; font-weight: 800; letter-spacing: .15em; text-transform: uppercase; color: rgba(255, 244, 230, .55); }
 .v-counter {
-  position: absolute; right: 30px; top: 20px; z-index: 90; padding: 8px 22px; border-radius: 999px; font-size: 25px; font-weight: 700;
+  position: absolute; right: 30px; bottom: 22px; z-index: 90; padding: 8px 22px; border-radius: 999px; font-size: 25px; font-weight: 700;
   background: rgba(23, 11, 36, .55); border: 2px solid var(--line); color: var(--text); white-space: nowrap; display: flex; align-items: center; gap: 10px;
 }
 .v-counter b { font-family: "Inter Display", Inter, sans-serif; font-weight: 900; color: var(--mustard); font-size: 29px; }
@@ -115,6 +115,7 @@ body {
 .v-brackets i:nth-child(3) { left: -112px; bottom: -112px; border-right: 0; border-top: 0; }
 .v-brackets i:nth-child(4) { right: -112px; bottom: -112px; border-left: 0; border-top: 0; }
 .v-brackets b { position: absolute; left: -92px; width: 184px; height: 4px; border-radius: 2px; background: var(--coral); box-shadow: 0 0 14px var(--coral); }
+.v-guess { position: absolute; left: 0; top: 0; padding: 7px 18px; border-radius: 999px; background: var(--mustard); color: var(--ink); font-size: 24px; font-weight: 800; white-space: nowrap; box-shadow: 0 8px 20px rgba(0, 0, 0, .45); opacity: 0; z-index: 80; }
 .v-caret { position: absolute; left: 0; top: 0; width: 0; height: 0; opacity: 0; }
 .v-caret::before { content: ""; position: absolute; left: -3px; top: -84px; width: 6px; height: 168px; border-radius: 3px; background: var(--mustard); box-shadow: 0 0 18px rgba(255, 198, 73, .8); }
 #confetti i { position: absolute; left: 0; top: 0; width: 14px; height: 22px; border-radius: 3px; }
