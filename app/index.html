@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>TimeTunesr</title>
+  <meta name="description" content="TimeTunesr: scan een kaart, luister naar het fragment en leg hem op de juiste plek in je tijdlijn.">
+  <meta name="theme-color" content="#170b24">
+  <meta name="color-scheme" content="dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="TimeTunesr">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="icons/icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/app.css">
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <div id="app" class="app" aria-live="polite">
+    <div class="boot" data-testid="boot">
+      <p>TimeTunesr wordt geladen…</p>
+      <noscript><p>Zet JavaScript aan om TimeTunesr te spelen.</p></noscript>
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="assertive" data-testid="toast" hidden></div>
+  <audio id="player" preload="auto" playsinline data-testid="audio"></audio>
+</body>
+</html>

@@ -1,0 +1,78 @@
+// TimeTunesr service worker.
+// Strategy: network-first (with revalidation) for the app shell and deck, so a
+// new deploy is picked up on the next load whenever the phone is online; the
+// cache is only a fallback for offline use. Audio and the iTunes API are
+// cross-origin and are never cached here.
+// Bump VERSION when the list below changes; old caches are removed on activate.
+const VERSION = 'v1';
+const CACHE = `timetunesr-shell-${VERSION}`;
+const SHELL = [
+  './',
+  'index.html',
+  'manifest.webmanifest',
+  'css/app.css',
+  'js/main.js',
+  'js/logic.js',
+  'js/deck.js',
+  'js/player.js',
+  'js/scanner.js',
+  'js/ui.js',
+  'js/screens/start.js',
+  'js/screens/scan.js',
+  'js/screens/card.js',
+  'js/screens/answer.js',
+  'js/screens/playerview.js',
+  'js/screens/game.js',
+  'js/screens/print.js',
+  'js/screens/rules.js',
+  'vendor/jsQR.js',
+  'vendor/qrcode-generator.mjs',
+  'data/deck.json',
+  'icons/icon.svg',
+  'icons/icon-192.png',
+  'icons/icon-512.png',
+  'icons/apple-touch-icon.png',
+];
+const NETWORK_TIMEOUT_MS = 4000;
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE)
+      .then((cache) => cache.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
+      .then(() => self.skipWaiting()),
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith('timetunesr-') && k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim()),
+  );
+});
+
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return; // audio, iTunes lookup: straight to network
+  if (req.headers.has('range')) return;
+  event.respondWith(networkFirst(req));
+});
+
+async function networkFirst(req) {
+  const cache = await caches.open(CACHE);
+  const isNav = req.mode === 'navigate';
+  const network = fetch(req, { cache: 'no-cache' }).then((res) => {
+    if (res && res.ok && res.type === 'basic') cache.put(isNav ? 'index.html' : req, res.clone());
+    return res;
+  });
+  const timeout = new Promise((resolve) => setTimeout(resolve, NETWORK_TIMEOUT_MS, null));
+  try {
+    const res = await Promise.race([network, timeout]);
+    if (res) return res;
+  } catch { /* offline: fall back to cache */ }
+  const cached = await cache.match(isNav ? 'index.html' : req, { ignoreSearch: isNav });
+  if (cached) return cached;
+  return network; // nothing cached: wait for the network after all
+}
