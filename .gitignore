@@ -6,3 +6,4 @@ Thumbs.db
 .env
 test-results/
 tools/.cache.json
+.claude/worktrees/
