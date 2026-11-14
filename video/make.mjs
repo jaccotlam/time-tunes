@@ -14,3 +14,4 @@ if (steps.includes('camera') || (want('camera') && !FILMS.every((f) => existsSyn
 if (want('record')) await record();
 if (want('render')) await render();
 if (want('check')) check();
+process.exit(0); // de lokale verbindingsserver van de opname houdt het proces anders open

@@ -13,8 +13,8 @@ export const camFile = (id) => join(ensureDir(join(TMP, 'camera')), `kaart-${id}
  * ondertitel te lezen; de tweede kaart gaat vlotter.
  */
 export const FILMS = [
-  { id: TABLE.good, in0: 2.6, in1: 3.7, sharp: 4.4 },
-  { id: TABLE.bad, in0: 0.7, in1: 1.5, sharp: 2.0 },
+  { id: TABLE.good, in0: 2.1, in1: 3.1, sharp: 3.7 },
+  { id: TABLE.bad, in0: 0.6, in1: 1.3, sharp: 1.8 },
 ];
 
 export async function makeCameraFilms(films = FILMS) {

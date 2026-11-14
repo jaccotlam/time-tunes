@@ -3,7 +3,8 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, extname, normalize, sep } from 'node:path';
-import { ROOT, STAGE_DIR, TMP, FFMPEG } from './config.mjs';
+import { writeFile } from 'node:fs/promises';
+import { ROOT, STAGE_DIR, TMP, FFMPEG, PUBLIC_URL, FPS } from './config.mjs';
 
 const require = createRequire(import.meta.url);
 export const { chromium } = require('playwright');
@@ -17,7 +18,7 @@ export function startServer(port = 8100 + Math.floor(Math.random() * 800)) {
     const proc = spawn(process.execPath, [join(ROOT, 'scripts/serve.mjs'), '--port', String(port), '--host', '127.0.0.1'],
       { stdio: ['ignore', 'pipe', 'inherit'] });
     proc.stdout.on('data', (d) => {
-      if (String(d).includes('draait op')) resolve({ url: `http://localhost:${port}/`, stop: () => proc.kill() });
+      if (String(d).includes('draait op')) resolve({ url: `http://127.0.0.1:${port}/`, stop: () => proc.kill() });
     });
     proc.on('error', reject);
     proc.on('exit', (code) => reject(new Error(`server gestopt (${code})`)));
@@ -28,7 +29,10 @@ export function startServer(port = 8100 + Math.floor(Math.random() * 800)) {
 export function launch(args = []) {
   const proxy = process.env.HTTPS_PROXY || process.env.https_proxy;
   return chromium.launch({
-    args: ['--autoplay-policy=no-user-gesture-required', '--force-color-profile=srgb', ...args],
+    // LocalNetworkAccessChecks uit: de app draait in de opname onder het publieke adres (zie aliasPublic)
+    // en moet dan nog steeds de lokale verbindingsserver van "Ieder een eigen telefoon" kunnen bereiken.
+    args: ['--autoplay-policy=no-user-gesture-required', '--force-color-profile=srgb',
+      '--disable-features=LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights', ...args],
     ...(proxy ? { proxy: { server: proxy, bypass: 'localhost,127.0.0.1' } } : {}),
   });
 }
@@ -53,6 +57,76 @@ export async function serveStage(context) {
   });
   await serve('__video', normalize(STAGE_DIR));
   await serve('__tmp', normalize(ensureDir(TMP)));
+}
+
+/**
+ * Laat een browsercontext de lokale app zien onder het publieke adres (PUBLIC_URL). De bestanden
+ * komen van de lokale server; er gaat niets naar de echte site. Zo staan in de video het echte
+ * adres in de lobby, in de QR-codes en op het printscherm, en geen "127.0.0.1:8123".
+ */
+export async function aliasPublic(context, server) {
+  const origin = new URL(PUBLIC_URL).origin;
+  await context.route(`${origin}/**`, async (route) => {
+    const url = route.request().url().split('#')[0];
+    if (!url.startsWith(PUBLIC_URL)) return route.fulfill({ status: 404, body: 'niet gevonden' });
+    try {
+      const res = await fetch(server.url + url.slice(PUBLIC_URL.length));
+      return await route.fulfill({ status: res.status, contentType: res.headers.get('content-type') || undefined, body: Buffer.from(await res.arrayBuffer()) });
+    } catch { return route.abort().catch(() => {}); }
+  });
+  return PUBLIC_URL;
+}
+
+/**
+ * Neem een pagina op als verliesvrije PNG-frames op ware pixelgrootte (viewport x deviceScaleFactor).
+ * De CDP-screencast meldt alleen dát er iets veranderd is (zijn eigen beelden zijn altijd 1 CSS-px
+ * per pixel en dus niet scherp op 1.1x of 0.9x); het beeld zelf komt van Page.captureScreenshot.
+ * `now()` geeft de opnametijd in seconden. Geeft { frames: [[t, bestand]], pause, resume, stop }.
+ */
+export async function capturePage(page, dir, prefix, now) {
+  ensureDir(dir);
+  const cdp = await page.context().newCDPSession(page);
+  const frames = []; const writes = [];
+  let busy = false; let dirty = false; let active = true; let stopped = false; let lastData = ''; let lastT = -1; let error = null;
+  async function grab() {
+    if (stopped || !active) return;
+    if (busy) { dirty = true; return; }
+    busy = true;
+    try {
+      do {
+        dirty = false;
+        const wait = lastT + 1 / FPS - 0.003 - now();
+        if (wait > 0) await sleep(wait * 1000);
+        if (stopped || !active) break;
+        const t = now();
+        const { data } = await cdp.send('Page.captureScreenshot', { format: 'png', optimizeForSpeed: true });
+        lastT = t;
+        if (data !== lastData) {
+          lastData = data;
+          const name = `${prefix}${String(frames.length).padStart(6, '0')}.png`;
+          frames.push([Number(t.toFixed(4)), name]);
+          writes.push(writeFile(join(dir, name), Buffer.from(data, 'base64')));
+        }
+      } while (dirty && !stopped && active);
+    } catch (e) { if (!stopped) error = e; } finally { busy = false; }
+  }
+  cdp.on('Page.screencastFrame', (ev) => {
+    cdp.send('Page.screencastFrameAck', { sessionId: ev.sessionId }).catch(() => {});
+    grab();
+  });
+  await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 10, everyNthFrame: 1 });
+  await grab();
+  return {
+    frames,
+    pause() { active = false; },
+    resume() { active = true; grab(); },
+    async stop() {
+      stopped = true;
+      await cdp.send('Page.stopScreencast').catch(() => {});
+      await Promise.all(writes);
+      if (error) throw error;
+    },
+  };
 }
 
 export function ffmpeg(args, opts = {}) {
