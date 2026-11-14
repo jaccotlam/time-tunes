@@ -13,6 +13,8 @@ import * as settingsScreen from './screens/settings.js';
 import * as spotify from './spotify.js';
 import * as playlistsScreen from './screens/playlists.js';
 import * as playlistScreen from './screens/playlist.js';
+import * as roomHostScreen from './screens/room-host.js';
+import * as roomPlayerScreen from './screens/room-player.js';
 
 const routes = [
   { re: /^#?\/?$/, screen: startScreen, needsDeck: false },
@@ -26,6 +28,8 @@ const routes = [
   { re: /^#\/playlists\/?$/, screen: playlistsScreen, needsDeck: false },
   { re: /^#\/playlists\/([A-Za-z0-9_-]+)\/?$/, screen: playlistScreen, needsDeck: false },
   { re: /^#\/pl\/(.+)$/, screen: playlistsScreen, needsDeck: false },
+  { re: /^#\/spelleider\/?$/, screen: roomHostScreen, needsDeck: true },
+  { re: /^#\/kamer(?:\/([A-Za-z]{4}))?\/?$/, screen: roomPlayerScreen, needsDeck: false },
 ];
 
 const root = document.getElementById('app');

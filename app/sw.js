@@ -51,6 +51,18 @@ const SHELL = [
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/apple-touch-icon.png',
+  'css/multi.css',
+  'js/multi/code.js',
+  'js/multi/match.js',
+  'js/multi/game.js',
+  'js/multi/protocol.js',
+  'js/multi/transport.js',
+  'js/multi/host-session.js',
+  'js/multi/client-session.js',
+  'js/screens/room-ui.js',
+  'js/screens/room-host.js',
+  'js/screens/room-player.js',
+  'vendor/peerjs.min.js',
 ];
 const NETWORK_TIMEOUT_MS = 4000;
 

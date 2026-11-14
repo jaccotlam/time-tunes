@@ -4,10 +4,11 @@ Een muziekpartyspel voor groepen: een gratis webapp plus fysieke kaarten met QR-
 Scan een kaart en de app speelt een fragment af, zonder titel, artiest of jaartal te tonen.
 Leg de kaart op de juiste plek in je eigen tijdlijn en draai hem om: achterop staan jaar, artiest en titel.
 
-Er zijn twee spellen, **Tijdlijn** en **Bingo**, en twee manieren van spelen:
+Er zijn twee spellen, **Tijdlijn** en **Bingo**, en drie manieren van spelen:
 
 - **Met kaartjes**: geprinte muziekkaarten met QR-code. Scan een kaart, luister en draai hem om voor het antwoord. Voor Bingo print je daarnaast bingokaarten en kruis je af met een pen.
 - **Alleen de app**: geen kaartjes nodig. Eén telefoon gaat rond; de app kiest de nummers, controleert de antwoorden en houdt de stand bij.
+- **Ieder een eigen telefoon**: de spelleider maakt een kamer, de rest doet mee met een code of QR-code en antwoordt tegelijk op de eigen telefoon; zie **Samen spelen**.
 
 ### Bingo
 
@@ -17,7 +18,25 @@ Elke kaart mengt makkelijke en moeilijke vakjes: per rij, kolom en diagonaal hoo
 
 Voorspelbaar potje (tests, uitlegvideo): zet `localStorage['timetunesr.bingoSeed.v1'] = '7'` (een geheel getal). Elk nieuw bingopotje gebruikt dan die zaaiwaarde: dezelfde kaarten en dezelfde volgorde van nummers. De lopende stand staat in `timetunesr.bingo.v1` (los van het tijdlijnspel in `timetunesr.game.v1`).
 
-De app is een installeerbare PWA (iPhone Safari en Android Chrome) in gewone HTML, CSS en JavaScript-modules. Er is geen build-stap en er zijn geen externe diensten nodig, behalve de 30-seconden-previews van Apple Music.
+De app is een installeerbare PWA (iPhone Safari en Android Chrome) in gewone HTML, CSS en JavaScript-modules. Er is geen build-stap en er zijn geen externe diensten nodig, behalve de 30-seconden-previews van Apple Music (en voor *Samen spelen* een PeerJS-broker om de telefoons te verbinden).
+
+## Samen spelen
+
+Met **Ieder een eigen telefoon** speelt iedereen op zijn eigen telefoon mee in één potje Bingo of Tijdlijn.
+
+- **Spelleider** (`#/spelleider`, startknop *Maak een kamer*): maakt een kamer met een code van 4 letters (zonder I, L en O). Dit toestel speelt de muziek (zet het op een speaker), bewaart de spelstand en beslist. De spelleider kiest het spel (Bingo 3×3/4×4 of Tijdlijn met een doel, standaard 10) en kan zelf meespelen (keuze bij het aanmaken). Code en QR-code staan in de lobby en zijn tijdens het spel bereikbaar via de knop *QR*.
+- **Spelers** (`#/kamer`, startknop *Doe mee*): vullen de code en hun naam in, of scannen de QR-code (die opent `#/kamer/ABCD`).
+- **Ritme**: nummer speelt → iedereen kiest op zijn eigen kaart/tijdlijn en zet zijn antwoord vast (wijzigen mag tot de onthulling) → de spelleider tikt *Onthul* (altijd beschikbaar; licht op als iedereen die online is heeft geantwoord) → antwoord, wie goed zat en tussenstand → *Volgend nummer*. Bij Bingo claimt iedereen per nummer één open vakje of past; een getypte artiest of titel keurt de spelleider-app tolerant (hoofdletters, accenten, lidwoorden, haakjes, *feat.*, *en*/*&* en kleine typefouten tellen niet; een ander getal wel) en de spelleider kan elk oordeel met één tik omdraaien. Wie in dezelfde ronde een volle lijn of het doel haalt, deelt de winst. *Nog een potje* speelt met dezelfde spelers.
+- **Niet spieken**: titel, artiest en jaar van het lopende nummer gaan pas bij de onthulling naar de spelers. Daarvoor staat het nummer niet in hun scherm en niet in de berichten die ze krijgen; elke speler krijgt alleen zijn eigen kaart of tijdlijn. Antwoorden worden op het toestel van de spelleider gecontroleerd.
+- **Robuust**: elke telefoon heeft een vast speler-id (localStorage) en komt na herladen of ontwaken vanzelf terug in hetzelfde potje met zijn eigen kaart en antwoord. Verbindingen herstellen zich met oplopende wachttijd, meteen opnieuw bij terugkeer naar de app, en met een hartslag elke 4 s (13 s stil = offline). De spelleider ziet wie offline is, wacht nooit op iemand en kan spelers verwijderen. Herlaadt de spelleider, dan komt dezelfde kamer met dezelfde code en stand terug. Wie halverwege instapt, begint zo ver als de speler die het verst achter ligt (Bingo: zoveel gratis vakjes, nooit meer dan 2 in één lijn; Tijdlijn: zoveel kaarten). Een app met een ander protocolversienummer krijgt een nette melding.
+
+**Hoe de verbinding werkt.** Er is geen eigen server. De telefoons vinden elkaar via een PeerJS-signaleringsserver ("broker"); daarna lopen de berichten rechtstreeks tussen de telefoons via WebRTC-datakanalen (stervorm: elke speler praat alleen met de spelleider). Standaard is dat de **gratis openbare broker `0.peerjs.com`** met de STUN/TURN-servers die PeerJS standaard meegeeft. Die dienst heeft geen garanties: als hij plat ligt of traag is, lukt meedoen niet of pas na een tijdje. Op hetzelfde wifi verbinden telefoons meestal rechtstreeks; via 4G of streng afgeschermde netwerken is soms TURN nodig. Peer-id van de spelleider: `timetunesr-kamer-<code>`.
+
+**Eigen broker.** Draai op een eigen server de npm-module `peer` (`npx peerjs --port 9000`, achter https) en vul in `app/config.js` `MULTI_SIGNAL` in (`host`, `port`, `path`, `secure`, `key`). Eigen STUN/TURN-servers gaan in `MULTI_ICE_SERVERS` (bv. `[{ urls: 'turn:turn.example.nl:3478', username: '…', credential: '…' }]`). Om iets uit te proberen zonder de code te wijzigen kan het ook per browser: `localStorage['timetunesr.multiSignal.v1'] = '{"host":"…","port":443,"path":"/","secure":true,"key":"peerjs"}'`.
+
+**Code**: `app/js/multi/` (pure spelmachine `game.js`, berichtprotocol `protocol.js`, tolerante antwoordvergelijking `match.js`, kamercodes `code.js`; daarnaast `transport.js` als kleine laag rond PeerJS, `host-session.js` en `client-session.js`), schermen `app/js/screens/room-*.js`, opmaak `app/css/multi.css`, PeerJS in `app/vendor/`. Opslag: spelleider `timetunesr.multiHost.v1`, speler `timetunesr.multiPlayerId.v1` en `timetunesr.multiJoin.v1`.
+
+**Testen en voorspelbaar potje.** `npm run test:e2e` start voor *Samen spelen* een lokale broker (devDependency `peer`, op 127.0.0.1) en laat een spelleider en meerdere telefoons (aparte browsercontexten) samen spelen; zie `tests/e2e/multi-helpers.mjs` (`startSignal`, `phone`, `createRoom`, `joinRoom`). Met `localStorage['timetunesr.multiSeed.v1'] = '7'` op het toestel van de spelleider krijgt elk potje dezelfde kaarten en dezelfde volgorde van nummers. `npm run test:e2e:public` doet één ronde via de echte openbare broker.
 
 ## Lokaal draaien
 
@@ -38,6 +57,7 @@ Op een telefoon in hetzelfde netwerk werkt alles behalve de camera-scanner, want
 | `app/data/deck.json` | Het kaartendeck (`id`, `title`, `artist`, `year`, `itunesId`, `previewUrl`, `trackViewUrl`) |
 | `app/js/spotify.js`, `spotify-match.js`, `pkce.js` | Spotify-koppeling: login (PKCE), afspelen op een Spotify-apparaat, kaart → nummer |
 | `app/js/logic.js` | Pure spellogica zonder DOM: QR-tekst parsen, plek controleren, beurten, winnaar, schudden |
+| `app/js/multi/` | *Samen spelen*: spelmachine, protocol, antwoordvergelijking, kamercodes, verbinding (PeerJS) |
 | `app/js/bingo.js` | Pure bingologica zonder DOM: kaarten genereren (zaaibare RNG), claims controleren, lijn en winnaar bepalen |
 | `app/js/screens/` | De schermen: start, scannen, kaart afspelen, Tijdlijn (digitaal), Bingo, printen, spelregels |
 | `app/css/bingo.css` | Opmaak van het bingospel en de printbare bingokaarten |
@@ -47,7 +67,7 @@ Op een telefoon in hetzelfde netwerk werkt alles behalve de camera-scanner, want
 | `tests/unit/` | `node --test` voor de spellogica |
 | `tests/e2e/` | Playwright-scripts (kaart scannen met nep-camera, Tijdlijn, Bingo, printen, PWA) |
 
-Routes (hash): `#/` start, `#/scan`, `#/c/042` (verborgen afspeelscherm voor kaart 042), `#/c/~<code>` (kaart van een eigen playlist), `#/spel` (Tijdlijn), `#/bingo`, `#/print` (of `#/print/<playlist-id>`), `#/regels`, `#/instellingen`, `#/playlists` (muziek kiezen), `#/playlists/<id>` (een playlist bewerken), `#/pl/<code>` (gedeelde playlist ontvangen).
+Routes (hash): `#/` start, `#/scan`, `#/c/042` (verborgen afspeelscherm voor kaart 042), `#/c/~<code>` (kaart van een eigen playlist), `#/spel` (Tijdlijn), `#/bingo`, `#/print` (of `#/print/<playlist-id>`), `#/regels`, `#/instellingen`, `#/playlists` (muziek kiezen), `#/playlists/<id>` (een playlist bewerken), `#/pl/<code>` (gedeelde playlist ontvangen), `#/spelleider` en `#/kamer/ABCD` (samen spelen).
 
 ## Eigen playlist
 
