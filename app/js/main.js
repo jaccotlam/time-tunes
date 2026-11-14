@@ -11,6 +11,8 @@ import * as rulesScreen from './screens/rules.js';
 import * as bingoScreen from './screens/bingo.js';
 import * as settingsScreen from './screens/settings.js';
 import * as spotify from './spotify.js';
+import * as roomHostScreen from './screens/room-host.js';
+import * as roomPlayerScreen from './screens/room-player.js';
 
 const routes = [
   { re: /^#?\/?$/, screen: startScreen, needsDeck: false },
@@ -21,6 +23,8 @@ const routes = [
   { re: /^#\/regels\/?$/, screen: rulesScreen, needsDeck: false },
   { re: /^#\/bingo\/?$/, screen: bingoScreen, needsDeck: true },
   { re: /^#\/instellingen\/?$/, screen: settingsScreen, needsDeck: false },
+  { re: /^#\/spelleider\/?$/, screen: roomHostScreen, needsDeck: true },
+  { re: /^#\/kamer(?:\/([A-Za-z]{4}))?\/?$/, screen: roomPlayerScreen, needsDeck: false },
 ];
 
 const root = document.getElementById('app');

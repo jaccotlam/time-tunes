@@ -53,6 +53,18 @@ export function render(root) {
         <p>Kies <em>Bingo</em> en kies 3×3 (snel potje) of 4×4 (standaard). De telefoon gaat rond: je ziet je eigen kaart, tikt een vakje aan en bevestigt. De app stempelt af en houdt ieders voortgang bij.</p>
       </section>
 
+      <section class="rule rule-multi" data-testid="rules-multi">
+        <h2><span class="rule-num">3</span>Ieder een eigen telefoon</h2>
+        <p>Speel Bingo of Tijdlijn samen, terwijl iedereen op zijn eigen telefoon antwoordt.</p>
+        <ol>
+          <li>De spelleider kiest <em>Maak een kamer</em>. Zijn toestel speelt de muziek: zet het op een speaker. De spelleider mag zelf ook meespelen.</li>
+          <li>De rest kiest <em>Doe mee</em> en vult de kamercode van 4 letters in, of scant de QR-code op het scherm van de spelleider.</li>
+          <li>Per nummer antwoordt iedereen tegelijk op zijn eigen kaart of tijdlijn en zet zijn antwoord vast. Wijzigen mag tot de onthulling.</li>
+          <li>De spelleider onthult. De app controleert alle antwoorden; bij een getypte artiest of titel tellen kleine typefouten niet, en bij twijfel draait de spelleider het oordeel met één tik om.</li>
+          <li>Halen meerdere spelers in dezelfde ronde een volle rij of het doel, dan delen ze de winst. Wie later instapt, begint zo ver als wie het verst achter ligt.</li>
+        </ol>
+      </section>
+
       <section class="rule rule-tips">
         <h2><span class="rule-num">★</span>Tips voor een feestje</h2>
         <ul>

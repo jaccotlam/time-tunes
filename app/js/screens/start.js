@@ -30,6 +30,7 @@ const gridIcon = ico('<rect x="3.5" y="3.5" width="17" height="17" rx="2.5" fill
 const timelineIcon = ico('<path d="M3 12h18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><rect x="4" y="5" width="4.5" height="5" rx="1" fill="currentColor"/><rect x="9.8" y="14" width="4.5" height="5" rx="1" fill="currentColor"/><rect x="15.5" y="5" width="4.5" height="5" rx="1" fill="currentColor"/>');
 const gearIcon = ico('<circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.8v2.6M12 18.6v2.6M21.2 12h-2.6M5.4 12H2.8M18.5 5.5l-1.8 1.8M7.3 16.7l-1.8 1.8M18.5 18.5l-1.8-1.8M7.3 7.3L5.5 5.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>');
 const cardsIcon = ico('<rect x="3" y="6" width="11" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2" transform="rotate(-8 8.5 13)"/><rect x="10" y="4" width="11" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>');
+const phonesIcon = ico('<rect x="2.5" y="5" width="8.5" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13" y="3" width="8.5" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5.5 17h2.5M16 15h2.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>');
 const phoneIcon = ico('<rect x="6.5" y="2.5" width="11" height="19" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10.5 18.5h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>');
 
 function entry({ href, testid, icon, title, text, cls = '' }) {
@@ -58,6 +59,13 @@ export function render(root, { install }) {
         <h2 class="mode-title" id="mode-app-title">${phoneIcon}<span>Alleen de app</span><small>geen kaartjes nodig, geef de telefoon door</small></h2>
         ${entry({ href: '#/spel', testid: 'start-digital', icon: timelineIcon, title: 'Tijdlijn', text: 'Leg elk nummer op de goede plek in je eigen tijdlijn.', cls: 'entry-app' })}
         ${entry({ href: '#/bingo', testid: 'start-bingo', icon: gridIcon, title: 'Bingo', text: 'Claim vakjes op je eigen bingokaart. Eerst een volle rij wint.', cls: 'entry-app' })}
+      </section>
+      <section class="mode mode-multi" data-testid="mode-multi" aria-labelledby="mode-multi-title">
+        <h2 class="mode-title" id="mode-multi-title">${phonesIcon}<span>Ieder een eigen telefoon</span><small>samen één potje, iedereen antwoordt tegelijk</small></h2>
+        <div class="entry-pair">
+          ${entry({ href: '#/spelleider', testid: 'start-host', icon: icons.music, title: 'Maak een kamer', text: 'Jouw toestel speelt de muziek.', cls: 'entry-multi' })}
+          ${entry({ href: '#/kamer', testid: 'start-join', icon: icons.users, title: 'Doe mee', text: 'Met de code van de spelleider.', cls: 'entry-multi' })}
+        </div>
       </section>
     </nav>
     <div class="start-links">
