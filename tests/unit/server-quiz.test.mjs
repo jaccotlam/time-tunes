@@ -159,8 +159,9 @@ test('quiz: vangnet start de klok zonder melding van de muziektelefoon; herstart
   assert.equal(h2.last('state').view.phase, 'revealed');
 });
 
-test('quiz: protocolversie 2, oude app krijgt nette melding', async () => {
+test('quiz: protocolversie (2 of hoger), oude app krijgt nette melding', async () => {
   const { core } = setup();
-  assert.equal(V, 2);
+  assert.ok(V >= 2);
   assert.equal(http(core, 'POST', '/rooms', { v: 1, id: 'owner01' }).status, 409);
+  assert.equal(http(core, 'POST', '/rooms', { v: V - 1, id: 'owner01' }).status, 409);
 });

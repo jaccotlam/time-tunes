@@ -479,6 +479,10 @@ export function createServerClientSession({ code, name }) {
     },
     /** The leader is away long enough: this phone takes the lead (and plays the music). */
     takeOver() { link.send({ t: 'lead' }); },
+    /** "Mix van de groep": add songs to / withdraw this phone's part. False when offline. */
+    mixAdd(tracks) { return link.send({ t: 'mix-add', tracks }); },
+    mixClear() { return link.send({ t: 'mix-clear' }); },
+    get online() { return link.online; },
     leave() {
       link.send({ t: 'leave' });
       store.remove(JOIN_KEY);
@@ -511,6 +515,7 @@ export function createServerHostSession() {
   let lostLead = false;
   let closing = false;
   let offLifecycle = null;
+  const received = []; // every message from the server (tests check that nothing leaks)
   const listeners = new Set();
   const emit = () => { for (const fn of listeners) { try { fn(api); } catch (e) { console.error(e); } } };
 
@@ -570,6 +575,7 @@ export function createServerHostSession() {
         onFatal: (e) => fatal(e),
         onMessage: (m) => {
           if (closing) return;
+          if (received.length < 3000) received.push(m);
           if (m.t === 'backup' && m.snap && ident && m.snap.code === ident.code) { store.set(BACKUP_KEY, { code: ident.code, snap: m.snap }); return; }
           if (m.t === 'error') {
             if (m.code === 'notfound') { link.retry({ force: true }); return; }
@@ -642,10 +648,18 @@ export function createServerHostSession() {
       store.set('timetunesr.multiSettings.v1', s);
       send({ t: 'settings', patch });
     },
-    start(cards) {
+    /** Start a game: with `mix` the server takes the songs from the "Mix van de groep" (play: the music source here). */
+    start(cards, { mix = false, play = 'preview' } = {}) {
       const fixed = store.get(MULTI_SEED_KEY, null);
-      send({ t: 'start', cards: cardsForServer(cards), ...(Number.isInteger(fixed) ? { seed: fixed >>> 0 } : {}) });
+      // with the mix the own music still goes along: a quiz takes its wrong answers from it
+      send({ t: 'start', cards: cardsForServer(cards), mix, play, ...(Number.isInteger(fixed) ? { seed: fixed >>> 0 } : {}) });
     },
+    mixAdd(tracks) { return !!link?.send({ t: 'mix-add', tracks }); },
+    mixClear() { return !!link?.send({ t: 'mix-clear' }); },
+    get online() { return !!link?.online; },
+    get received() { return received; },
+    /** This phone's member id in the room (for its own part of the mix). */
+    get memberId() { return ident?.id || null; },
     answer(answer) {
       const g = st?.view?.game;
       if (!g) return;

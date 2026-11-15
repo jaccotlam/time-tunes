@@ -114,6 +114,8 @@ export function render(root) {
         <li>Op het vergrendelscherm, in de meldingen en in de Spotify-app zelf staan titel en artiest. <b>Dus niet spieken!</b> Leg de telefoon met het scherm naar beneden.</li>
         <li>Wordt een nummer niet gevonden op Spotify, of lukt afspelen niet, dan hoor je automatisch het fragment van 30 seconden.</li>
         <li>Op een iPhone heeft de app op het beginscherm een eigen opslag. Verbind daarom vanuit de app zelf, niet vanuit Safari.</li>
+        <li data-testid="spotify-help-both-uris">Draait TimeTunesr op meer dan één adres (bijvoorbeeld <code>https://jaccotlam.github.io/time-tunes/</code> én <code>https://time-tunes.jaccotlam.workers.dev/</code>)? Registreer dan <b>elk adres</b> als Redirect-URI; inloggen gebeurt op het adres waar de app open staat.</li>
+        <li data-testid="spotify-help-top">Je <b>meest geluisterde nummers</b> (bij een eigen playlist, of <em>Doe mijn favorieten erbij</em> in een kamer) vragen één extra toestemming. Iedereen die meedoet logt zelf in en moet bij <em>User Management</em> staan. Spotify noemt soms het jaar van een heruitgave; de app controleert het jaar daarom bij Apple Music en markeert twijfel met <em>controleer het jaar</em>.</li>
       </ul>
     </details>`;
   }

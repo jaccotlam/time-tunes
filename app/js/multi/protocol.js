@@ -110,8 +110,10 @@ export function viewFor(room, pid, presence = {}) {
   }
   if (revealed && g.current && g.results) {
     const r = g.results[pid] || null;
+    const cur = g.songs[g.current];
     game.reveal = {
-      song: songInfo(g.songs[g.current]),
+      // a song from the "Mix van de groep" says whose favourite it was (names only, after the reveal)
+      song: Array.isArray(cur.by) && cur.by.length ? { ...songInfo(cur), by: cur.by.map(String).slice(0, 13) } : songInfo(cur),
       mine: r ? { ...r, label: describeAnswer(g, pid, answerFromResult(r)) } : null,
       // before the reveal: what the timeline / card looked like when you answered
       before: g.kind === 'timeline' && g.prev?.[pid] ? g.prev[pid].timeline.map((id) => songInfo(g.songs[id])) : null,

@@ -7,11 +7,16 @@ import {
   BUILTIN_ID, BUILTIN_NAME, NAME_MAX, MIN_TRACKS, readiness, decodeShare, importBackup, validYear,
 } from '../playlist-logic.js';
 import { icons, esc, toast } from '../ui.js';
+import * as spotify from '../spotify.js';
+import * as top from '../spotify-top.js';
+import { TOP_AUTO_KEY, TOP_DEFAULT_COUNT } from './playlist.js';
+import { DEFAULT_RANGE } from '../multi/mix.js';
 
 export const name = 'playlists';
 
 const plural = (n, one, more) => `${n} ${n === 1 ? one : more}`;
 const uploadIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 15V4M7.5 8.5L12 4l4.5 4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 19.5h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
+const spotifyIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7.2 9.6c3.4-1 6.9-.7 9.8.9M7.8 12.6c2.8-.8 5.6-.5 7.9.8M8.5 15.4c2.1-.5 4.1-.3 5.9.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 const editIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
 
 export function render(root, { params, navigate }) {
@@ -65,6 +70,11 @@ export function render(root, { params, navigate }) {
         </div>
         <p class="small muted">Daarna voeg je nummers toe: zoeken, een lijst plakken of een Spotify-playlist overnemen.</p>
       </form>
+      <section class="set-card pl-top-quick" aria-labelledby="pl-top-quick-title">
+        <h2 id="pl-top-quick-title">Wat jij het meest luistert</h2>
+        <button class="btn btn-secondary" type="button" data-act="top-create" data-testid="playlist-top-create">${spotifyIcon}<span>Maak een playlist van mijn meest geluisterde nummers</span></button>
+        <p class="small muted">Een soort Wrapped: je ${TOP_DEFAULT_COUNT} meest geluisterde nummers van het afgelopen half jaar uit Spotify, met fragmenten en jaartallen van Apple Music. Je logt daarvoor zelf in bij Spotify; zolang de Spotify-app van de eigenaar in Development Mode staat, moet die je account eerst toevoegen (maximaal 5 accounts).</p>
+      </section>
       <section class="set-card pl-backup">
         <h2>Back-up terugzetten</h2>
         <p class="small muted">Een bestand dat je eerder met <em>Exporteer</em> hebt bewaard. Er komt een nieuwe playlist bij; er wordt niets overschreven.</p>
@@ -95,7 +105,23 @@ export function render(root, { params, navigate }) {
     }
   }
 
+  /** One tap: a new playlist filled with the top songs (via the Spotify login when needed). */
+  function topCreate() {
+    if (!spotify.getClientId()) { toast(top.MESSAGES['no-client'], { kind: 'warn', ms: 7000 }); return; }
+    const problem = spotify.environmentProblem();
+    if (problem && !top.canRead()) { toast(spotify.errorMessage(problem), { kind: 'warn', ms: 6000 }); return; }
+    const p = store.create('Mijn meest geluisterd');
+    if (!p) { toast('Opslaan lukte niet: de opslag van de browser is vol of uitgeschakeld.', { kind: 'warn', ms: 5000 }); return; }
+    try { sessionStorage.setItem(TOP_AUTO_KEY, JSON.stringify({ id: p.id, range: DEFAULT_RANGE, count: TOP_DEFAULT_COUNT })); } catch { /* ignore */ }
+    if (top.canRead()) { navigate(`#/playlists/${p.id}`); return; }
+    spotify.connect(`#/playlists/${p.id}`, { top: true }).catch((err) => {
+      toast(top.errorMessage(err), { kind: 'warn', ms: 6000 });
+      navigate(`#/playlists/${p.id}`);
+    });
+  }
+
   function onClick(e) {
+    if (e.target.closest('[data-act="top-create"]')) { topCreate(); return; }
     const a = e.target.closest('[data-act="activate"]');
     if (!a || !root.contains(a)) return;
     const id = store.setActive(a.dataset.id);

@@ -66,6 +66,11 @@ const SHELL = [
   'js/multi/server-protocol.js',
   'js/multi/server-session.js',
   'js/multi/quiz.js',
+  'js/multi/mix.js',
+  'js/multi/mix-share.js',
+  'js/spotify-top.js',
+  'js/apple-match.js',
+  'js/screens/room-mix.js',
 ];
 const NETWORK_TIMEOUT_MS = 4000;
 

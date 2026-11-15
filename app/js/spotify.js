@@ -10,6 +10,8 @@ const API = 'https://api.spotify.com/v1';
 export const SCOPES = 'user-read-playback-state user-modify-playback-state';
 /** Extra scopes to read the user's own (and collaborative) playlists, asked for only when importing. */
 export const PLAYLIST_SCOPES = 'playlist-read-private playlist-read-collaborative';
+/** Extra scope to read the user's most played songs (GET /me/top/tracks), asked for only when needed. */
+export const TOP_SCOPES = 'user-top-read';
 const MARKET = 'NL'; // with a user token Spotify uses the user's own country instead
 const NO_MATCH_RETRY_MS = 3 * 24 * 3600 * 1000;
 const PENDING_MAX_AGE_MS = 30 * 60 * 1000;
@@ -23,10 +25,18 @@ const K = {
   profile: 'timetunesr.spotify.profile.v1',
   matches: 'timetunesr.spotify.matches.v1',
   extraScopes: 'timetunesr.spotify.playlistScopes.v1',
+  topScopes: 'timetunesr.spotify.topScopes.v1',
 };
 
-/** Scopes to ask for: playback, plus playlist reading once the player wanted to import a playlist. */
-const wantedScopes = () => (store.get(K.extraScopes, false) === true ? `${SCOPES} ${PLAYLIST_SCOPES}` : SCOPES);
+/**
+ * Scopes to ask for: playback, plus playlist reading once the player wanted to import a
+ * playlist, plus top songs once the player wanted to use those (each asked for only then).
+ */
+const wantedScopes = () => [
+  SCOPES,
+  store.get(K.extraScopes, false) === true ? PLAYLIST_SCOPES : '',
+  store.get(K.topScopes, false) === true ? TOP_SCOPES : '',
+].filter(Boolean).join(' ');
 
 /** Does the current token carry all of these (space-separated) scopes? */
 export function hasScopes(scopes) {
@@ -256,12 +266,13 @@ export async function api(path, { method = 'GET', query, body, keepalive = false
 /* ---------- login ---------- */
 
 /** Start the PKCE login; the browser leaves for accounts.spotify.com. */
-export async function connect(returnHash = location.hash || '#/', { playlists = false } = {}) {
+export async function connect(returnHash = location.hash || '#/', { playlists = false, top = false } = {}) {
   const clientId = getClientId();
   if (!clientId) throw new SpotifyError('no-client');
   const problem = environmentProblem();
   if (problem) throw new SpotifyError(problem);
   if (playlists) store.set(K.extraScopes, true);
+  if (top) store.set(K.topScopes, true);
   const verifier = pkce.randomString(64);
   const state = pkce.randomString(32);
   const challenge = await pkce.codeChallenge(verifier);

@@ -5,6 +5,9 @@
 // (the spelleider's backup is deleted first, so it can not be a restore from the phone).
 // Then a short Quiz: a question closed by the server's timer (the Durable Object alarm) and a
 // restart in the middle of a question (same question, the clock starts again with the music).
+// Then the "Mix van de groep": the spelleider and a player add their favourites (fake Spotify
+// and iTunes), wrangler restarts (the phones forget their own copy, so the songs can only come
+// from Durable Object storage), and a game from the mix is played.
 // Not part of `npm run test:e2e` (needs the workerd binary); run: npm run test:e2e:cf
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -13,6 +16,7 @@ import { join } from 'node:path';
 import { launch, assert, ROOT } from './helpers.mjs';
 import { phone, createRoom, joinRoom, waitForPlayers, serverHost } from './multi-helpers.mjs';
 import { installFakeItunes } from './fake-itunes.mjs';
+import { mixPhone, ACCOUNTS, PLAYBACK, TOP, shareFavourites, waitShared, myShared } from './multi-mix.e2e.mjs';
 import { SERVER_PROTOCOL_VERSION } from '../../app/js/multi/server-protocol.js';
 
 const PORT = 8790 + Math.floor(Math.random() * 100);
@@ -105,6 +109,7 @@ export default async function run() {
     await joinRoom(QP, `${URL_}/`, qcode, 'Quinn');
     await waitForPlayers(QH, 1);
     await QH.getByTestId('room-game-quiz').check();
+    await QH.getByTestId('room-quiz-time-15').evaluate((el) => el.scrollIntoView({ block: 'center' }));
     await QH.getByTestId('room-quiz-time-15').check();
     await QH.locator('[data-testid="room-quiz-time-15"]:checked').waitFor();
     await QH.getByTestId('room-start').click();
@@ -129,6 +134,47 @@ export default async function run() {
     await QP.locator('[data-view="revealed"]').first().waitFor({ timeout: 15000 });
     assert((await QP.evaluate(() => window.__ttRoom.session.view.game.round)) === 3, 'question 3 answered and revealed after the restart');
     assert(QH.errors.length === 0 && QP.errors.length === 0, `no page errors in the quiz (${[...QH.errors, ...QP.errors].join('; ')})`);
+    // ---------- Mix van de groep: contributions survive a restart (Durable Object storage) ----------
+    const mh = await mixPhone(browser, local, `${URL_}/`, ACCOUNTS.ilse, { seed: 7, token: `${PLAYBACK} ${TOP}` });
+    const MH = mh.page;
+    await MH.goto(`${URL_}/#/spelleider`);
+    const mcode = await createRoom(MH);
+    const mp = await mixPhone(browser, local, `${URL_}/`, ACCOUNTS.bram, { token: `${PLAYBACK} ${TOP}` });
+    const MP = mp.page;
+    await joinRoom(MP, `${URL_}/`, mcode, 'Bram');
+    await waitForPlayers(MH, 1);
+    await MH.getByTestId('room-size-3').check();
+    await shareFavourites(MP);
+    await shareFavourites(MH);
+    await waitShared(MP, 10);
+    await waitShared(MH, 10);
+    const contributed = new Map([...(await myShared(MP)), ...(await myShared(MH))].map((t) => [t.spotifyId, t]));
+    await MH.waitForFunction(() => document.querySelector('[data-testid="mix-counts"]')?.dataset.contributors === '2', null, { timeout: 20000 });
+    const total = Number(await MH.getByTestId('mix-counts').getAttribute('data-total'));
+    assert(total === contributed.size, `two phones added their favourites: ${total} songs in the Durable Object`);
+    // the phones forget their own copy: after the restart the songs can only come from the server's storage
+    for (const pg of [MH, MP]) { await pg.evaluate(() => localStorage.removeItem('timetunesr.mixShare.v1')); await pg.goto('about:blank'); }
+    await stopWrangler(wr);
+    wr = await startWrangler(persist);
+    await MH.goto(`${URL_}/#/spelleider`);
+    await MP.goto(`${URL_}/#/kamer/${mcode}`);
+    await MH.locator('[data-testid="screen-room-host"][data-view="lobby"] [data-testid="conn-status"][data-state="online"]').waitFor({ timeout: 40000 });
+    await MH.waitForFunction((n) => Number(document.querySelector('[data-testid="mix-counts"]')?.dataset.total) === n, total, { timeout: 20000 });
+    assert(true, `after the restart the room still has the ${total} contributed songs`);
+    await MH.getByTestId('room-music-mix').check();
+    await MP.getByTestId('room-music-is-mix').waitFor({ timeout: 20000 });
+    await MH.getByTestId('room-start').click();
+    await MP.locator('[data-testid="play-panel"]').waitFor({ timeout: 20000 });
+    const ms = (await serverHost(MH)).song;
+    assert(contributed.has(ms.spotifyId) && contributed.get(ms.spotifyId).title === ms.title, `a game from the mix: "${ms.title}" is a contributed song`);
+    const pm = JSON.stringify(await MP.evaluate(() => window.__ttRoom.session.received));
+    assert(![...contributed.values()].some((t) => pm.includes(JSON.stringify(t.title)) && t.spotifyId !== ms.spotifyId) && !pm.includes(JSON.stringify(ms.title)), 'nothing of the mix reached the player before the reveal');
+    await MP.getByTestId('answer-pass').click();
+    await MH.locator('[data-testid="room-reveal"][data-ready="true"]').waitFor({ timeout: 20000 });
+    await MH.getByTestId('room-reveal').click();
+    await MP.getByTestId('room-song-by').waitFor({ timeout: 20000 });
+    assert(true, 'one round from the mix over the Cloudflare version, with whose favourite it was');
+    assert(MH.errors.length === 0 && MP.errors.length === 0, `no page errors in the mix part (${[...MH.errors, ...MP.errors].join('; ')})`);
     assert(H.errors.length === 0 && P.errors.length === 0, `no page errors (${[...H.errors, ...P.errors].join('; ')})`);
   } finally {
     await browser.close();
