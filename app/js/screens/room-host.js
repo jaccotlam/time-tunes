@@ -7,6 +7,11 @@ import { createHostSession, storedRoom } from '../multi/host-session.js';
 import { usesServer, createServerHostSession, storedServerHost } from '../multi/server-session.js';
 import { DEFAULT_GOAL } from '../logic.js';
 import { QUIZ_COUNTS, QUIZ_TIMES, QUIZ_MIN_SONGS, quizTypesFor } from '../multi/quiz.js';
+import * as spotify from '../spotify.js';
+import { createMixShare, forgetMixShare } from '../multi/mix-share.js';
+import {
+  mixBlockHtml, mixServerOnlyHtml, mixKey, onMixChange, mixShortage,
+} from './room-mix.js';
 import { icons, esc, toast, vibrate, store } from '../ui.js';
 import { playerViewHtml, mountPlayerView } from './playerview.js';
 import {
@@ -28,14 +33,34 @@ export function render(root, { deck, navigate }) {
     const n = session.takeNotice?.();
     if (n) toast(n.message, { kind: 'warn' });
     if (session.lostLead) { handBack(); return; }
+    ms?.sync(session.meta);
     draw();
   });
+  /** Music source of this phone: whole songs via Spotify, or the 30-second fragments. */
+  const playSource = () => (spotify.getSettings().source === 'spotify' && spotify.isConnected() ? 'spotify' : 'preview');
+
+  /** The own mix panel belongs to this room and this phone's place in it. */
+  function ensureMix() {
+    if (!viaServer || !session) return;
+    const code = session.code;
+    const id = session.memberId;
+    const key = code && id ? `${code}|${id}` : '';
+    if (key === msFor) return;
+    ms?.destroy();
+    ms = null;
+    msFor = key;
+    if (!key) return;
+    const s = session;
+    ms = createMixShare({ code, memberId: () => s.memberId, session: s, returnHash: '#/spelleider', onChange: () => draw() });
+  }
   let viewName = null;
   let drawnKind = '';
   let unmountPv = null;
   let loadedFor = null; // "round:cardId" loaded in the hidden player
   let startedHere = false; // a round started by a tap on this page may autoplay
   let sheetOpen = false;
+  let ms = null; // this phone's own "Doe mijn favorieten erbij" (room server only)
+  let msFor = '';
   const regions = {};
   const keys = {};
 
@@ -79,14 +104,14 @@ export function render(root, { deck, navigate }) {
     const body = {
       setup: '<div data-region="main"></div>',
       connecting: '<div data-region="main"></div>',
-      lobby: `<div data-region="status"></div><div data-region="join"></div><div data-region="players"></div><div data-region="main"></div><div data-region="cta"></div>`,
+      lobby: `<div data-region="status"></div><div data-region="join"></div><div data-region="players"></div><div data-region="main"></div><div data-region="mix"></div><div data-region="cta"></div>`,
       answering: `<div data-region="status"></div><div data-region="quiz"></div>
         <div class="place-player" data-region="pv">${playerViewHtml({ compact: true })}</div>
-        <div data-region="players"></div><div data-region="own"></div><div data-region="cta"></div>`,
+        <div data-region="players"></div><div data-region="own"></div><div data-region="mix"></div><div data-region="cta"></div>`,
       revealed: `<div data-region="status"></div><div data-region="main"></div>
         <div class="place-player" data-region="pv">${playerViewHtml({ compact: true })}</div>
-        <div data-region="own"></div><div data-region="players"></div><div data-region="cta"></div>`,
-      won: '<div data-region="status"></div><div data-region="main"></div><div data-region="players"></div>',
+        <div data-region="own"></div><div data-region="players"></div><div data-region="mix"></div><div data-region="cta"></div>`,
+      won: '<div data-region="status"></div><div data-region="main"></div><div data-region="players"></div><div data-region="mix"></div>',
     }[vn];
     const quiz = r?.game?.kind === 'quiz' && vn !== 'lobby';
     document.body.classList.toggle('tt-quiz', quiz); // wide screens: the quiz big enough to read from the couch
@@ -149,9 +174,15 @@ export function render(root, { deck, navigate }) {
     region('sheet', JSON.stringify([sheetOpen, r.code]), () => (sheetOpen ? sheetHtml(r.code) : ''));
     // a spelleider screen that does not lead (somebody took over) does not play the music
     if (regions.pv) regions.pv.hidden = !leads();
+    ensureMix();
+    const mixMeta = viaServer ? JSON.stringify([m?.mix, playSource()]) : '';
+    region('mix', `${vn}|${r.settings.music}|${viaServer ? mixKey(ms, m) : 'p2p'}`, () => {
+      if (!viaServer) return vn === 'lobby' ? mixServerOnlyHtml() : '';
+      return ms ? mixBlockHtml(ms, m, { inGame: vn !== 'lobby', music: r.settings.music }) : '';
+    });
     if (vn === 'lobby') {
-      region('main', JSON.stringify([r.settings, r.players.length]), lobbyHtml);
-      region('cta', JSON.stringify([r.players.length, r.settings, leads()]), () => (leads() ? lobbyCta() : ''));
+      region('main', JSON.stringify([r.settings, r.players.length, mixMeta, leads()]), lobbyHtml);
+      region('cta', JSON.stringify([r.players.length, r.settings, leads(), mixMeta]), () => (leads() ? lobbyCta() : ''));
     } else if (vn === 'answering' && kind === 'quiz') {
       const now = serverNow();
       const q = sv.game.quiz;
@@ -308,6 +339,7 @@ export function render(root, { deck, navigate }) {
           <button class="icon-btn" type="button" data-action="goal-plus" aria-label="Meer kaarten" data-testid="room-goal-plus">${icons.plus}</button>
         </div><p class="muted small">Doel (standaard ${DEFAULT_GOAL}); de startkaart telt mee.</p>`}
       </fieldset>
+      ${viaServer ? musicHtml() : ''}
     </form>`;
   }
 
@@ -320,15 +352,42 @@ export function render(root, { deck, navigate }) {
       <p class="room-label">Aantal vragen</p>${pick('qcount', QUIZ_COUNTS, s.questions, (n) => `${n}`, 'room-quiz-count')}
       <p class="room-label">Soort vragen</p>${pick('qtype', Object.keys(types), s.qtype, (k) => types[k], 'room-quiz-type')}
       <p class="room-label">Bedenktijd</p>${pick('qtime', QUIZ_TIMES, s.think, (n) => `${n} s`, 'room-quiz-time')}
-      <p class="muted small" data-testid="room-quiz-summary">Muziek: <b>${esc(deck.name || 'TimeTunesr-deck')}</b>. ${max < s.questions ? `Er staan maar ${cards.length} nummers in, dus ${max} vragen.` : `${max} vragen.`} Goed = 500 punten plus tot 500 voor snelheid, en een kleine bonus voor een reeks goede antwoorden.</p>
+      <p class="muted small" data-testid="room-quiz-summary">${s.music === 'mix' && viaServer ? 'Muziek: <b>Mix van de groep</b>. De foute antwoorden bij artiest en titel komen uit jouw eigen muziek, zodat niemand vooraf de favorieten van een ander ziet.' : `Muziek: <b>${esc(deck.name || 'TimeTunesr-deck')}</b>. ${max < s.questions ? `Er staan maar ${cards.length} nummers in, dus ${max} vragen.` : `${max} vragen.`}`} Goed = 500 punten plus tot 500 voor snelheid, en een kleine bonus voor een reeks goede antwoorden.</p>
       ${onlyYears && s.qtype !== 'year' ? `<p class="warn small" data-testid="room-quiz-years-only">In deze muziek staan te weinig verschillende ${!quizTypes.artist ? 'artiesten' : 'titels'} voor vier antwoorden: die vragen worden jaarvragen.</p>` : ''}
     </div>`;
+  }
+
+  /** Via the server: the music of the game, the leader's own deck or the "Mix van de groep". */
+  function musicHtml() {
+    const r = session.room;
+    const s = r.settings;
+    const mix = session.meta?.mix;
+    const src = playSource();
+    const short = mixShortage(mix, s, r.players.length, src);
+    const isMix = s.music === 'mix';
+    const can = short.missing === 0;
+    const extra = src === 'preview' && (mix?.total || 0) > (mix?.preview || 0)
+      ? ` ${(mix.total - mix.preview)} zonder Apple Music-fragment tellen niet mee bij fragmenten van 30 seconden.` : '';
+    return `<fieldset class="room-music" data-testid="room-music">
+        <legend>Welke muziek?</legend>
+        <div class="size-pick">
+          <label class="size-opt"><input type="radio" name="music" value="deck" ${!isMix ? 'checked' : ''} data-testid="room-music-deck">
+            <span class="size-box"><b>Jouw muziek</b><small>${esc(deck.name || 'TimeTunesr-deck')} · ${cards.length} nummers</small></span></label>
+          <label class="size-opt"><input type="radio" name="music" value="mix" ${isMix ? 'checked' : ''} ${can || isMix ? '' : 'disabled'} data-testid="room-music-mix">
+            <span class="size-box"><b>Mix van de groep</b><small data-testid="room-mix-have" data-have="${short.have}">${short.have} nummers van ${mix?.contributors || 0} ${mix?.contributors === 1 ? 'speler' : 'spelers'}</small></span></label>
+        </div>
+        ${can ? (isMix ? `<p class="muted small" data-testid="room-mix-ok">Genoeg nummers: de server stelt de lijst eerlijk samen uit ieders favorieten (dubbele één keer, zekere jaartallen eerst).${esc(extra)}</p>` : '')
+    : `<p class="${isMix ? 'warn' : 'muted'} small mix-need" data-testid="room-mix-need" data-missing="${short.missing}">${isMix ? 'Te weinig nummers in de mix. ' : ''}Voor ${esc(gameName(s.game))}${s.game === 'bingo' ? ` ${s.size}×${s.size}` : s.game === 'quiz' ? ` (${s.questions} vragen)` : ` (doel ${s.goal})`} zijn er minstens ${short.need} nodig: nog ${short.missing}. Laat spelers op hun eigen telefoon <b>Doe mijn favorieten erbij</b> kiezen.${esc(extra)}</p>`}
+      </fieldset>`;
   }
 
   function lobbyCta() {
     const r = session.room;
     const n = r.players.length;
-    const ok = n >= 1 && (r.settings.game === 'quiz' ? viaServer && cards.length >= QUIZ_MIN_SONGS : cards.length >= n + 2);
+    const isMix = viaServer && r.settings.music === 'mix';
+    const ok = n >= 1 && (r.settings.game === 'quiz' && !viaServer ? false
+      : isMix ? mixShortage(session.meta?.mix, r.settings, n, playSource()).missing === 0
+        : r.settings.game === 'quiz' ? cards.length >= QUIZ_MIN_SONGS : cards.length >= n + 2);
     return `<div class="sticky-cta">
       <button class="btn btn-primary btn-xl" type="button" data-action="start" data-testid="room-start" ${ok ? '' : 'disabled'}>${icons.play}<span>${n ? `Start ${esc(gameName(r.settings.game))} (${n} ${n === 1 ? 'speler' : 'spelers'})` : 'Wacht op spelers'}</span></button>
     </div>`;
@@ -438,7 +497,7 @@ export function render(root, { deck, navigate }) {
       case 'again':
         startedHere = true;
         player.unlock();
-        guard(() => session.start(cards));
+        guard(() => (viaServer ? session.start(cards, { mix: session.room?.settings.music === 'mix', play: playSource() }) : session.start(cards)));
         window.scrollTo(0, 0);
         break;
       case 'reveal':
@@ -461,8 +520,10 @@ export function render(root, { deck, navigate }) {
         session.copyDiag?.().then((ok) => toast(ok ? 'Diagnose gekopieerd. Plak hem in een bericht.' : 'Kopiëren lukte niet.', { kind: ok ? 'info' : 'warn' }));
         break;
       case 'reclaim': guard(() => session.reclaim()); break;
+      case 'mix-share': ms?.share(); break;
+      case 'mix-withdraw': ms?.withdraw(); break;
       case 'close-room':
-        if (window.confirm('Kamer sluiten? Het spel stopt voor iedereen.')) { player.stop(); loadedFor = null; session.close(); }
+        if (window.confirm('Kamer sluiten? Het spel stopt voor iedereen.')) { player.stop(); loadedFor = null; forgetMixShare(session.code); session.close(); }
         break;
       default:
     }
@@ -470,7 +531,9 @@ export function render(root, { deck, navigate }) {
 
   function onChange(e) {
     const t = e.target;
-    if (t.name === 'game') guard(() => session.setSettings({ game: t.value }));
+    if (onMixChange(ms, e)) { draw(); return; }
+    if (t.name === 'music') guard(() => session.setSettings({ music: t.value === 'mix' ? 'mix' : 'deck' }));
+    else if (t.name === 'game') guard(() => session.setSettings({ game: t.value }));
     else if (t.name === 'size') guard(() => session.setSettings({ size: Number(t.value) }));
     else if (t.name === 'qcount') guard(() => session.setSettings({ questions: Number(t.value) }));
     else if (t.name === 'qtype') guard(() => session.setSettings({ qtype: t.value }));
@@ -528,6 +591,7 @@ export function render(root, { deck, navigate }) {
     document.body.classList.remove('tt-quiz');
     if (unmountPv) unmountPv();
     unsub?.();
+    ms?.destroy();
     session.destroy();
     session = null;
     unsub = null;

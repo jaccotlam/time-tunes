@@ -4,9 +4,12 @@ import * as store from '../playlists.js';
 import * as itunes from '../itunes.js';
 import * as spotify from '../spotify.js';
 import * as spl from '../spotify-playlists.js';
+import * as top from '../spotify-top.js';
+import { appleMatch } from '../apple-match.js';
+import { RANGES, DEFAULT_RANGE, rangeLabel } from '../multi/mix.js';
 import {
   parseLines, rankSearch, matchLine, trackFromItunes, itunesYear, readiness, validYear, padN,
-  encodeShare, newShareId, exportPlaylist, MIN_TRACKS, MAX_TRACKS, NAME_MAX, parseSpotifyPlaylistId, pickYear, FUN_MIN,
+  encodeShare, newShareId, exportPlaylist, MIN_TRACKS, MAX_TRACKS, NAME_MAX, parseSpotifyPlaylistId, FUN_MIN,
 } from '../playlist-logic.js';
 import { icons, esc, toast } from '../ui.js';
 import { qrSvg, defaultBaseUrl } from './print.js';
@@ -20,6 +23,13 @@ export const QR_MAX = 700;
 const QR_MAX_PARTS = 8;
 const PRINT_BASE_KEY = 'timetunesr.printBase.v1';
 const TAB_KEY = 'timetunesr.playlistTab';
+/** Spotify tab: 'playlist' (take over a playlist) or 'top' (my most played songs); kept over the Spotify login. */
+const SP_MODE_KEY = 'timetunesr.playlistSpMode';
+/** Set by "Maak een playlist van mijn meest geluisterde nummers": { id, range, count } -> fill right away. */
+export const TOP_AUTO_KEY = 'timetunesr.playlistTopAuto';
+export const TOP_COUNTS = [20, 30, 50];
+export const TOP_DEFAULT_COUNT = 30;
+const TOP_PREF_KEY = 'timetunesr.topChoice.v1';
 
 const searchIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M15.5 15.5L21 21" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>';
 const editIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
@@ -29,7 +39,6 @@ const spotifyIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" foc
 const listIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 6h11M9 12h11M9 18h11" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="4.5" cy="6" r="1.5" fill="currentColor"/><circle cx="4.5" cy="12" r="1.5" fill="currentColor"/><circle cx="4.5" cy="18" r="1.5" fill="currentColor"/></svg>';
 
 const plural = (n, one, more) => `${n} ${n === 1 ? one : more}`;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Base URL for links and QR codes: the print address when the owner set one (hosted app). */
 export function shareBase() {
@@ -53,10 +62,29 @@ export function render(root, { params, navigate }) {
 
   let alive = true;
   let tab = 'search';
+  let spMode = 'playlist';
+  let topAuto = null; // { range, count }: fill from the top songs as soon as Spotify allows it
   try { // back from the Spotify permission page: open the Spotify tab again
     if (sessionStorage.getItem(TAB_KEY) === 'spotify') tab = 'spotify';
     sessionStorage.removeItem(TAB_KEY);
+    if (sessionStorage.getItem(SP_MODE_KEY) === 'top') spMode = 'top';
+    sessionStorage.removeItem(SP_MODE_KEY);
+    const auto = JSON.parse(sessionStorage.getItem(TOP_AUTO_KEY) || 'null');
+    if (auto && auto.id === id) { topAuto = auto; tab = 'spotify'; spMode = 'top'; }
   } catch { /* ignore */ }
+  const topPref = (() => {
+    let p = null;
+    try { p = JSON.parse(localStorage.getItem(TOP_PREF_KEY) || 'null'); } catch { /* ignore */ }
+    return {
+      range: RANGES.some((r) => r.key === p?.range) ? p.range : DEFAULT_RANGE,
+      count: TOP_COUNTS.includes(p?.count) ? p.count : TOP_DEFAULT_COUNT,
+    };
+  })();
+  const tp = {
+    busy: false, status: '', error: '',
+    range: RANGES.some((r) => r.key === topAuto?.range) ? topAuto.range : topPref.range,
+    count: TOP_COUNTS.includes(topAuto?.count) ? topAuto.count : topPref.count,
+  };
   let renaming = false;
   let filter = '';
   let onlyCheck = false;
@@ -367,17 +395,97 @@ export function render(root, { params, navigate }) {
   function drawSpotify() {
     if (tab !== 'spotify') return;
     const pane = slot('pane');
+    const modes = `<div class="seg pl-sp-modes" role="group" aria-label="Wat neem je over uit Spotify?">
+        <button type="button" class="seg-btn" data-act="sp-mode" data-mode="playlist" data-testid="pl-sp-mode-playlist" aria-pressed="${spMode === 'playlist'}">Playlist overnemen</button>
+        <button type="button" class="seg-btn" data-act="sp-mode" data-mode="top" data-testid="pl-sp-mode-top" aria-pressed="${spMode === 'top'}">Mijn meest geluisterd</button>
+      </div>`;
+    pane.innerHTML = modes + (spMode === 'top' ? topHtml() : playlistPaneHtml());
+  }
+
+  function topHtml() {
+    const note = `<p class="small muted pl-sp-note" data-testid="pl-top-note">Spotify kent je meest geluisterde nummers per periode. Het jaartal van Spotify is soms dat van een heruitgave of verzamelalbum; daarom zoekt de app elk nummer ook op bij Apple Music, voor het fragment én het vroegste jaar. Twijfel? Dan staat er <b>controleer het jaar</b>. Wat Apple Music niet heeft, speelt alleen via Spotify. Zolang de Spotify-app van de eigenaar in Development Mode staat, moet jouw account daar zijn toegevoegd (maximaal 5).</p>`;
+    if (!top.canRead()) {
+      if (!spotify.getClientId()) return `<p class="set-empty" data-testid="pl-top-no-client">${esc(top.MESSAGES['no-client'])} Je kunt ook zelf een Client ID invullen bij <a href="#/instellingen">Instellingen</a>.</p>${note}`;
+      const connected = spotify.isConnected();
+      return `<p class="set-empty" data-testid="pl-top-scope">${connected
+        ? 'Je bent verbonden met Spotify, maar de app mag je meest geluisterde nummers nog niet lezen. Geef daarvoor één keer opnieuw toestemming; je komt daarna hier terug.'
+        : 'Log in bij Spotify om je meest geluisterde nummers op te halen. Je komt daarna hier terug.'}</p>
+        ${tp.error ? `<p class="set-error" data-testid="pl-top-error" role="alert">${esc(tp.error)}</p>` : ''}
+        <button class="btn btn-primary" type="button" data-act="top-connect" data-testid="pl-top-connect">${spotifyIcon}<span>${connected ? 'Geef toestemming' : 'Log in bij Spotify'}</span></button>${note}`;
+    }
+    const opt = (list, cur, label) => list.map((v) => `<option value="${esc(v.key ?? v)}" ${String(v.key ?? v) === String(cur) ? 'selected' : ''}>${esc(label(v))}</option>`).join('');
+    return `<form class="pl-top" data-testid="pl-top-form" autocomplete="off">
+        <div class="pl-top-row">
+          <label class="pl-label">Periode
+            <select name="range" data-testid="pl-top-range" ${tp.busy ? 'disabled' : ''}>${opt(RANGES, tp.range, (r) => r.label)}</select></label>
+          <label class="pl-label">Aantal
+            <select name="count" data-testid="pl-top-count" ${tp.busy ? 'disabled' : ''}>${opt(TOP_COUNTS, tp.count, (n) => `${n} nummers`)}</select></label>
+        </div>
+        <button class="btn btn-primary" type="submit" data-testid="pl-top-import" ${tp.busy ? 'disabled' : ''}>${spotifyIcon}<span>${tp.busy ? 'Bezig…' : 'Haal mijn top op'}</span></button>
+      </form>
+      ${tp.status ? `<p class="pl-status small" data-testid="pl-top-status" role="status">${esc(tp.status)}</p>` : ''}
+      ${tp.error ? `<p class="set-error" data-testid="pl-top-error" role="alert">${esc(tp.error)}</p>` : ''}
+      ${note}`;
+  }
+
+  async function topImport() {
+    if (tp.busy) return;
+    tp.busy = true; tp.error = ''; tp.status = `Je meest geluisterde nummers ophalen (${rangeLabel(tp.range).toLowerCase()})…`;
+    try { localStorage.setItem(TOP_PREF_KEY, JSON.stringify({ range: tp.range, count: tp.count })); } catch { /* ignore */ }
+    drawSpotify();
+    try {
+      const tracks = await top.topTracks({ range: tp.range, limit: tp.count });
+      if (!alive) return;
+      const res = store.addTracks(id, tracks.map((t) => ({
+        spotifyId: t.spotifyId, title: t.title, artist: t.artist, album: t.album, year: t.spYear, yearSure: false, match: 'pending',
+      })));
+      tp.status = `${plural(res.added.length, 'nummer', 'nummers')} uit je meest geluisterde (${rangeLabel(tp.range).toLowerCase()}) toegevoegd${res.duplicates ? ` (${res.duplicates} stonden er al in)` : ''}${res.full ? `; de playlist is vol (max. ${MAX_TRACKS})` : ''}. Fragmenten en jaartallen worden nu opgezocht.`;
+      fresh(); drawHead(); drawList();
+      startMatching();
+    } catch (e) {
+      if (!alive) return;
+      tp.status = '';
+      tp.error = top.errorMessage(e);
+    } finally {
+      tp.busy = false;
+      if (alive) drawSpotify();
+    }
+  }
+
+  function topConnect() {
+    try {
+      sessionStorage.setItem(TAB_KEY, 'spotify');
+      sessionStorage.setItem(SP_MODE_KEY, 'top');
+      sessionStorage.setItem(TOP_AUTO_KEY, JSON.stringify({ id, range: tp.range, count: tp.count }));
+    } catch { /* ignore */ }
+    spotify.connect(`#/playlists/${id}`, { top: true }).catch((err) => {
+      try { sessionStorage.removeItem(TOP_AUTO_KEY); } catch { /* ignore */ }
+      tp.error = top.errorMessage(err);
+      drawSpotify();
+    });
+  }
+
+  /** Back from the Spotify login (or from the quick start on the playlists screen): fill right away. */
+  function maybeAutoTop() {
+    if (!topAuto || !alive) return;
+    const st = spotify.getStatus();
+    if (st.busy === 'connecting') return; // the token exchange is still running
+    topAuto = null;
+    try { sessionStorage.removeItem(TOP_AUTO_KEY); } catch { /* ignore */ }
+    if (top.canRead()) { topImport(); return; }
+    if (st.error) { tp.error = top.errorMessage({ code: st.error }); drawSpotify(); }
+  }
+
+  function playlistPaneHtml() {
     const limits = `<p class="small muted pl-sp-note" data-testid="pl-spotify-limits">Spotify geeft alleen de nummers van playlists die je <b>zelf hebt gemaakt of waaraan je meewerkt</b>; playlists van anderen (ook die van Spotify zelf) kan de app niet lezen. Voor de fragmenten van 30 seconden zoekt de app elk nummer daarna op bij Apple Music; wat daar niet te vinden is, speelt alleen via Spotify.</p>`;
     if (!spotify.isConnected()) {
-      pane.innerHTML = `<p class="set-empty" data-testid="pl-spotify-off">Om een Spotify-playlist over te nemen, koppel je eerst Spotify bij <a href="#/instellingen" data-testid="pl-spotify-settings">Instellingen</a>.</p>${limits}`;
-      return;
+      return `<p class="set-empty" data-testid="pl-spotify-off">Om een Spotify-playlist over te nemen, koppel je eerst Spotify bij <a href="#/instellingen" data-testid="pl-spotify-settings">Instellingen</a>.</p>${limits}`;
     }
     if (!spl.canRead()) {
-      pane.innerHTML = `<p class="set-empty" data-testid="pl-spotify-scope">Je bent verbonden met Spotify, maar de app mag je playlists nog niet lezen. Geef daarvoor één keer opnieuw toestemming; je komt daarna hier terug.</p>
+      return `<p class="set-empty" data-testid="pl-spotify-scope">Je bent verbonden met Spotify, maar de app mag je playlists nog niet lezen. Geef daarvoor één keer opnieuw toestemming; je komt daarna hier terug.</p>
         <button class="btn btn-primary" type="button" data-act="sp-connect" data-testid="pl-spotify-connect">${spotifyIcon}<span>Geef toestemming voor playlists</span></button>${limits}`;
-      return;
     }
-    pane.innerHTML = `<form class="pl-search" data-testid="pl-spotify-form" autocomplete="off">
+    return `<form class="pl-search" data-testid="pl-spotify-form" autocomplete="off">
         <input type="text" name="link" placeholder="Link van een Spotify-playlist" aria-label="Link of ID van de Spotify-playlist" data-testid="pl-spotify-input" autocapitalize="off" spellcheck="false" ${sp.busy ? 'disabled' : ''}>
         <button class="btn btn-primary btn-small" type="submit" data-testid="pl-spotify-import" ${sp.busy ? 'disabled' : ''}>Haal op</button>
       </form>
@@ -445,24 +553,19 @@ export function render(root, { params, navigate }) {
     while (alive && !match.ctrl.signal.aborted) {
       const t = todo()[0];
       if (!t) break;
-      const primary = String(t.artist).split(',')[0].trim();
-      let results = [];
+      let hit = null;
       try {
-        results = await itunes.search(`${primary} ${t.title.replace(/\s+-\s+.*$/, '').replace(/[([].*?[)\]]/g, ' ')}`, { limit: 15, signal: match.ctrl.signal });
+        hit = await appleMatch(t, { signal: match.ctrl.signal });
       } catch (e) {
         if (e.code === 'aborted') break;
-        if (e.code === 'rate' || e.code === 'unreachable') { await sleep(Math.max(itunes.pausedFor(), 20000)); continue; }
-        results = [];
       }
       if (!alive) break;
-      const m = matchLine({ artist: primary, title: t.title, query: '' }, results);
       const cur = fresh().tracks.find((x) => x.n === t.n);
       if (cur && cur.match === 'pending') {
-        if (m.best && m.score >= 0.7 && !fresh().tracks.some((x) => x.itunesId === Number(m.best.trackId) && x.n !== t.n)) {
-          const y = pickYear(m.best, results, [cur.year]);
+        if (hit && !fresh().tracks.some((x) => x.itunesId === hit.itunesId && x.n !== t.n)) {
           store.updateTrack(id, t.n, {
-            itunesId: Number(m.best.trackId), previewUrl: m.best.previewUrl || null, trackViewUrl: m.best.trackViewUrl || null,
-            year: y.year ?? cur.year, yearSure: y.sure && m.status === 'found', match: undefined,
+            itunesId: hit.itunesId, previewUrl: hit.previewUrl, trackViewUrl: hit.trackViewUrl,
+            year: hit.year ?? cur.year, yearSure: hit.yearSure, match: undefined,
           });
         } else {
           store.updateTrack(id, t.n, { match: 'none', yearSure: false });
@@ -651,6 +754,12 @@ export function render(root, { params, navigate }) {
         spotify.connect(`#/playlists/${id}`, { playlists: true }).catch((err) => toast(spotify.errorMessage(err), { kind: 'warn', ms: 5000 }));
         break;
       case 'sp-mine': spotifyMine(); break;
+      case 'sp-mode':
+        if (spMode === a.dataset.mode) return;
+        spMode = a.dataset.mode === 'top' ? 'top' : 'playlist';
+        drawSpotify();
+        break;
+      case 'top-connect': topConnect(); break;
       case 'sp-pick': spotifyImport(a.dataset.spId); break;
       case 'remove-track': {
         const n = Number(a.dataset.n);
@@ -697,6 +806,7 @@ export function render(root, { params, navigate }) {
     const f = e.target;
     if (f.matches('[data-testid="pl-search-form"]')) runSearch(f.elements.q.value);
     else if (f.matches('[data-testid="pl-spotify-form"]')) spotifyImport(f.elements.link.value);
+    else if (f.matches('[data-testid="pl-top-form"]')) topImport();
     else if (f.matches('[data-testid="pl-rename-form"]')) {
       store.rename(id, f.elements.name.value);
       renaming = false;
@@ -726,6 +836,8 @@ export function render(root, { params, navigate }) {
     if (t.matches('[data-testid="pl-year"]')) setYear(t);
     else if (t.matches('[data-act="paste-choice"]')) pasteChoice(Number(t.dataset.i), t.value);
     else if (t.matches('[data-act="only-check"]')) { onlyCheck = t.checked; drawList(); }
+    else if (t.matches('[data-testid="pl-top-range"]')) tp.range = t.value;
+    else if (t.matches('[data-testid="pl-top-count"]')) tp.count = Number(t.value) || TOP_DEFAULT_COUNT;
   }
 
   function onKey(e) {
@@ -751,12 +863,17 @@ export function render(root, { params, navigate }) {
     if (!fresh()) { navigate('#/playlists'); return; }
     drawHead(); drawList();
   });
-  const unsubSp = spotify.subscribe(() => { if (alive && tab === 'spotify') drawSpotify(); });
+  const unsubSp = spotify.subscribe(() => {
+    if (!alive) return;
+    if (topAuto) maybeAutoTop();
+    if (tab === 'spotify') drawSpotify();
+  });
 
   drawHead();
   drawPane();
   drawList();
   startMatching();
+  maybeAutoTop();
 
   return () => {
     alive = false;

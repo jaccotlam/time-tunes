@@ -264,3 +264,29 @@ button.quiz-opt.is-chosen { opacity: 1; border-color: var(--mustard); background
   body.tt-quiz .is-quiz .podium-names b { font-size: 1.6rem; }
   body.tt-quiz .is-quiz .sticky-cta { max-width: 560px; margin: 0 auto; width: 100%; }
 }
+/* ---------- Mix van de groep ---------- */
+.mix-block { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: var(--radius-lg, 18px); border: 1px solid var(--line); background: rgba(0, 0, 0, .18); }
+details.mix-block > summary { cursor: pointer; list-style: none; }
+details.mix-block > summary::-webkit-details-marker { display: none; }
+details.mix-block[open] > summary { margin-bottom: 10px; }
+.mix-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mix-counts { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 700; }
+.mix-counts .ico { width: 20px; height: 20px; flex: none; color: var(--mustard); }
+.mix-panel { display: flex; flex-direction: column; gap: 10px; }
+.mix-panel p { margin: 0; }
+.mix-panel .room-h { margin: 0; }
+.mix-consent { padding: 10px 12px; border-radius: 12px; background: rgba(255, 198, 73, .1); border: 1px solid rgba(255, 198, 73, .35); font-weight: 600; }
+.mix-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mix-form .pl-label { display: flex; flex-direction: column; gap: 4px; font-size: .88rem; color: var(--muted); }
+.mix-done { display: flex; align-items: flex-start; gap: 8px; }
+.mix-done .ico { width: 20px; height: 20px; flex: none; color: var(--good); margin-top: 2px; }
+.mix-mine summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+.mix-mine ul { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: .9rem; }
+.mix-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.mix-note { color: var(--muted); }
+.mix-need { margin: 6px 0 0; }
+.mix-by { margin: 6px 0 0; text-align: center; color: var(--muted); font-size: .95rem; }
+.mix-by b { color: var(--text); }
+.room-music .size-opt input:disabled + .size-box { opacity: .55; }
+.mix-tap { display: block; margin-top: 4px; font-size: .82rem; }
+details.mix-block[open] .mix-tap { display: none; }

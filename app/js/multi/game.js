@@ -61,6 +61,8 @@ export function normalizeSettings(s = {}) {
     size: SIZES.includes(Number(s.size)) ? Number(s.size) : DEFAULT_SIZE,
     goal: Math.max(MIN_GOAL, Math.min(MAX_GOAL, Math.round(Number(s.goal) || DEFAULT_GOAL))),
     ...normalizeQuizSettings(s),
+    // where the songs come from: the leader's own deck, or the "Mix van de groep" (room server only)
+    music: s.music === 'mix' ? 'mix' : 'deck',
   };
 }
 
@@ -131,11 +133,11 @@ export function playableCards(cards) {
  * Start a game with everybody in the room. `cards`: full deck cards (id, year, title, artist,
  * previewUrl ...); they are kept in the state so a reload can go on even when the deck changes.
  */
-export function startGame(room, { cards, seed = Date.now(), now = Date.now() }) {
+export function startGame(room, { cards, seed = Date.now(), now = Date.now(), pool = null }) {
   if (!room.players.length) throw new GameError('empty', 'Er doet nog niemand mee.');
   const valid = playableCards(cards).map((c) => ({ ...c, id: String(c.id), year: Number(c.year) }));
   const { game: kind, size, goal } = room.settings;
-  if (kind === 'quiz') return startQuiz(room, valid, seed, now);
+  if (kind === 'quiz') return startQuiz(room, valid, seed, now, pool);
   if (valid.length < room.players.length + 2) throw new GameError('deck', 'Er staan te weinig kaarten in het deck.');
   const rand = seededRandom(seed >>> 0);
   const songs = Object.fromEntries(valid.map((c) => [c.id, c]));
@@ -379,21 +381,25 @@ export function finishByPile(room) {
 
 /* ---------- Quiz (room server only; the clock is the server's) ---------- */
 
-function startQuiz(room, valid, seed, now) {
+/** pool: other songs for wrong artist / title answers (a quiz from the mix); default the quiz's own songs. */
+function startQuiz(room, valid, seed, now, pool = null) {
   const { questions, qtype, think } = room.settings;
   if (valid.length < QUIZ_MIN_SONGS) throw new GameError('deck', `Voor de quiz zijn minstens ${QUIZ_MIN_SONGS} nummers nodig.`);
   const rand = seededRandom(seed >>> 0);
   const songs = Object.fromEntries(valid.map((c) => [c.id, c]));
   const total = Math.min(questions, valid.length);
   const pile = shuffle(valid.map((c) => c.id), rand).slice(0, total);
-  const available = quizTypesFor(valid);
+  const others = Array.isArray(pool) && pool.length
+    ? shuffle(playableCards(pool), rand).slice(0, 400).map((c, i) => ({ id: `pool${i}`, title: String(c.title || ''), artist: String(c.artist || ''), year: Number(c.year) }))
+    : null;
+  const available = quizTypesFor(others ? [...valid, ...others] : valid);
   const types = questionTypes(qtype, total, available, rand);
   const per = Object.fromEntries(room.players.map((p) => [p.id, { score: 0, streak: 0, right: 0 }]));
   const game = {
     kind: 'quiz', seed: seed >>> 0, size: null, goal: null, songs, pile, per,
     round: 0, current: null, answers: {}, results: null, prev: null,
     roundWinners: [], winners: [], winLines: {}, endedBy: null, joins: 0,
-    quiz: { total, think, qtype, types, available, q: null, openedAt: null, startedAt: null, deadline: null, ranks: null, prevRanks: null, counts: null },
+    quiz: { total, think, qtype, types, available, pool: others, q: null, openedAt: null, startedAt: null, deadline: null, ranks: null, prevRanks: null, counts: null },
   };
   return startQuizRound({ ...room, game, phase: 'answering' }, now);
 }
@@ -408,7 +414,7 @@ function startQuizRound(room, now) {
   const current = pile.shift();
   const round = g.round + 1;
   const type = g.quiz.types[round - 1] || 'year';
-  const q = makeQuestion(Object.values(g.songs), g.songs[current], type, questionRand(g.seed, round));
+  const q = makeQuestion(g.quiz.pool || Object.values(g.songs), g.songs[current], type, questionRand(g.seed, round));
   const scores = quizScores(g);
   // places before this question (to show who climbs); nothing to climb while everybody is level
   const prevRanks = new Set(Object.values(scores)).size > 1 ? quizRanks(scores) : null;

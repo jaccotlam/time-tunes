@@ -23,6 +23,12 @@ async function shot(page, name) {
   await page.waitForTimeout(350);
   await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true });
 }
+/** A lobby option: scrolled to the middle first, so the sticky start button does not cover it. */
+async function segCheck(page, testid) {
+  const el = page.getByTestId(testid);
+  await el.evaluate((e) => e.scrollIntoView({ block: 'center' }));
+  await el.check();
+}
 const view = (page) => page.evaluate(() => window.__ttRoom?.session?.view || null);
 const received = (page) => page.evaluate(() => window.__ttRoom?.session?.received || []);
 
@@ -94,10 +100,10 @@ export default async function run() {
     // ---------- lobby: Quiz with its settings ----------
     await H.getByTestId('room-game-quiz').check();
     await H.getByTestId('room-quiz-settings').waitFor();
-    await H.getByTestId('room-quiz-time-15').check();
+    await segCheck(H, 'room-quiz-time-15');
     await H.locator('[data-testid="room-quiz-time-15"]:checked').waitFor();
-    await H.getByTestId('room-quiz-count-10').check();
-    await H.getByTestId('room-quiz-type-mix').check();
+    await segCheck(H, 'room-quiz-count-10');
+    await segCheck(H, 'room-quiz-type-mix');
     assert(/Verjaardag/.test(await H.getByTestId('room-quiz-summary').textContent()), 'the quiz plays the spelleider\'s own playlist');
     await A.waitForFunction(() => /Quiz/.test(document.querySelector('[data-testid="room-wait"]')?.textContent || '') && /15 s/.test(document.querySelector('[data-testid="room-wait"]').textContent));
     assert(true, 'players see "Quiz (10 vragen, 15 s bedenktijd, …)" in the lobby');

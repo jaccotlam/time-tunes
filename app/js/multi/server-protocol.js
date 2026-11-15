@@ -4,7 +4,9 @@
 //
 //   phone -> server: hello {v, code, id, token, name}
 //                    answer {round, answer}, withdraw {}, leave {}
-//                    leader only: settings {patch}, start {cards, seed?}, reveal {}, override {pid},
+//                    mix-add {tracks} / mix-clear {}: add to / withdraw this phone's part of the
+//                      "Mix van de groep" (see mix.js); every member, also the spelleider
+//                    leader only: settings {patch}, start {cards, seed?, play?}, reveal {}, override {pid},
 //                                 next {}, lobby {}, remove {pid},
 //                                 playing {round} (Quiz: the song plays, the thinking time starts)
 //                    owner or leader: close {}
@@ -13,11 +15,13 @@
 //                    backup {snap} (owner only: copy of the room for a server restart)
 // Plain-text "ping" / "pong" keep the connection (and a sleeping host) awake.
 // meta.now is the server's clock (ms): the phones show the Quiz countdown in server time.
+// The state's meta has `mix` {total, preview, sure, contributors, mine}: counts only, never titles.
 //
 // Version 2 (November 2026): the Quiz (settings questions/qtype/think, playing, the quiz part of
-// the view). A phone with another version gets a clear message (health / hello / POST /rooms).
+// the view). Version 3 (November 2026): "Mix van de groep" (mix-add, mix-clear, settings.music,
+// start.play, meta.mix). A phone with another version gets a clear message (health / hello / POST /rooms).
 
-export const SERVER_PROTOCOL_VERSION = 2;
+export const SERVER_PROTOCOL_VERSION = 3;
 /** Largest message from a phone (the deck at the start of a game). */
 export const MAX_CLIENT_MESSAGE = 512 * 1024;
 /** Every other message is small. */
@@ -31,7 +35,7 @@ export const CLIENT_PING_MS = 10000;
 /** Nothing heard for this long: the connection is dead. */
 export const STALE_MS = 25000;
 
-const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing'];
+const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing', 'mix-add', 'mix-clear'];
 const SERVER_TYPES = ['welcome', 'state', 'error', 'backup'];
 export const LEADER_TYPES = ['settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'playing'];
 
@@ -102,6 +106,7 @@ export const ERROR_TITLES = {
   expired: 'De kamer is verlopen',
   busy: 'De kamer is te druk',
   ratelimit: 'Te veel berichten',
+  mix: 'Mix van de groep',
 };
 
 /** Base addresses for a configured server ("https://x.y", "wss://x.y/", "x.y") -> { http, ws } or null. */

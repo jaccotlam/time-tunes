@@ -6,6 +6,8 @@ import { createClientSession, storedJoin, forgetJoin } from '../multi/client-ses
 import { cleanName } from '../multi/game.js';
 import { usesServer, createServerClientSession, wakeServer, SERVER_HOST_KEY } from '../multi/server-session.js';
 import { ERROR_TITLES } from '../multi/server-protocol.js';
+import { createMixShare, forgetMixShare } from '../multi/mix-share.js';
+import { mixBlockHtml, mixServerOnlyHtml, mixKey, onMixChange } from './room-mix.js';
 import { icons, esc, toast, vibrate, store } from '../ui.js';
 import {
   patch, connBadge, playersHtml, standingsHtml, answerPanelHtml, answerController, myResultHtml, songHtml,
@@ -28,6 +30,7 @@ export function render(root, { params, navigate }) {
   let viewName = null;
   let joinError = '';
   let lastPhaseKey = '';
+  let ms = null; // "Doe mijn favorieten erbij" (room server only)
   const regions = {};
   const keys = {};
 
@@ -43,8 +46,13 @@ export function render(root, { params, navigate }) {
       const n = session.takeNotice();
       if (n) toast(n.message, { kind: 'warn' });
       if (session.meta?.leader && !session.meta.owner) { becomeLeader(); return; }
+      ms?.sync(session.meta);
       draw();
     });
+    if (viaServer) {
+      const s = session;
+      ms = createMixShare({ code, memberId: () => s.playerId, session: s, returnHash: `#/kamer/${code}`, onChange: () => draw() });
+    }
     session.start();
     draw();
   }
@@ -55,6 +63,8 @@ export function render(root, { params, navigate }) {
     if (!ident.token) return;
     store.set(SERVER_HOST_KEY, ident);
     unsub?.();
+    ms?.destroy();
+    ms = null;
     session.destroy();
     session = null;
     navigate('#/spelleider');
@@ -89,8 +99,9 @@ export function render(root, { params, navigate }) {
       <div class="room-status" data-region="status"></div>
       <div class="room-main" data-region="main"></div>
       <div class="room-side" data-region="players"></div>
+      <div class="room-mix" data-region="mix"></div>
     </section>`;
-    for (const k of ['status', 'main', 'players']) { regions[k] = root.querySelector(`[data-region="${k}"]`); keys[k] = null; }
+    for (const k of ['status', 'main', 'players', 'mix']) { regions[k] = root.querySelector(`[data-region="${k}"]`); keys[k] = null; }
     const h = root.querySelector('h1');
     if (h) { h.setAttribute('tabindex', '-1'); h.focus({ preventScroll: true }); }
   }
@@ -125,6 +136,12 @@ export function render(root, { params, navigate }) {
       ? JSON.stringify(['q', v.game.round, v.game.quiz.options, v.game.quiz.choice, !!v.game.quiz.deadline, quizLeft(v.game.quiz, now) > 0, !!session.pending, v.game.quiz.answered, !!v.game.mine])
       : vn === 'answering' ? `a|${ctl.key()}|${!!session.pending}` : JSON.stringify([vn, joinError, v?.game, v?.settings, v?.you, session?.error, st === 'notfound', vn === 'connecting' && session?.diag ? [st, diagKey(session.diag)] : '']);
     region('main', mainKey, build);
+    const inRoom = v && ['lobby', 'answering', 'revealed', 'won'].includes(vn);
+    region('mix', inRoom ? `${vn === 'lobby'}|${v.settings.music}|${viaServer ? mixKey(ms, session.meta) : 'p2p'}` : '', () => {
+      if (!inRoom) return '';
+      if (!viaServer || !ms) return vn === 'lobby' ? mixServerOnlyHtml() : '';
+      return mixBlockHtml(ms, session.meta, { inGame: vn !== 'lobby', music: v.settings.music });
+    });
   }
 
   function serverNow() { return session?.serverNow ? session.serverNow() : Date.now(); }
@@ -218,6 +235,7 @@ export function render(root, { params, navigate }) {
       <span class="room-check" aria-hidden="true">${icons.check}</span>
       <h2>Je doet mee, ${esc(v.you?.name || '')}!</h2>
       <p class="muted">Wacht tot de spelleider het spel start. Gekozen spel: <b>${esc(gameName(v.settings.game))}</b>${v.settings.game === 'bingo' ? ` (${v.settings.size}×${v.settings.size})` : v.settings.game === 'quiz' ? ` (${esc(quizSettingsText(v.settings))})` : ` (doel ${v.settings.goal} kaarten)`}.</p>
+      ${v.settings.music === 'mix' ? '<p class="muted" data-testid="room-music-is-mix">Muziek: <b>Mix van de groep</b>, de favorieten van de spelers.</p>' : ''}
       <p class="muted small">Je scherm blijft aan zolang je in de kamer bent (als je telefoon dat toestaat). Valt hij toch op slot, dan kom je vanzelf terug in het spel.</p>
     </div>`;
   }
@@ -311,17 +329,22 @@ export function render(root, { params, navigate }) {
     switch (a.dataset.action) {
       case 'leave':
         if (!window.confirm('Wil je de kamer verlaten? Je kunt later opnieuw meedoen, maar met een nieuwe kaart.')) return;
+        forgetMixShare(session.code);
+        ms?.destroy();
+        ms = null;
         session.leave();
         setTimeout(() => navigate('#/'), 250); // let the goodbye reach the host first
         break;
       case 'retry': session?.retry(); break;
+      case 'mix-share': ms?.share(); break;
+      case 'mix-withdraw': ms?.withdraw(); break;
       case 'takeover': session?.takeOver?.(); break;
       case 'copy-diag':
         session?.copyDiag?.().then((ok) => toast(ok ? 'Diagnose gekopieerd. Plak hem in een bericht.' : 'Kopiëren lukte niet.', { kind: ok ? 'info' : 'warn' }));
         break;
       case 'reload': location.reload(); break;
       case 'other-code':
-        if (session) { session.destroy(); unsub?.(); session = null; }
+        if (session) { ms?.destroy(); ms = null; session.destroy(); unsub?.(); session = null; }
         forgetJoin();
         navigate('#/kamer');
         break;
@@ -333,6 +356,8 @@ export function render(root, { params, navigate }) {
   root.addEventListener('click', onClick);
   root.addEventListener('input', ctl.onInput);
   root.addEventListener('keydown', ctl.onKeyDown);
+  const onChange = (e) => { if (onMixChange(ms, e)) draw(); };
+  root.addEventListener('change', onChange);
 
   const releaseAwake = keepAwake();
   // Back in the same room (reload, phone woke up, link opened again): join without asking.
@@ -354,10 +379,12 @@ export function render(root, { params, navigate }) {
     root.removeEventListener('click', onClick);
     root.removeEventListener('input', ctl.onInput);
     root.removeEventListener('keydown', ctl.onKeyDown);
+    root.removeEventListener('change', onChange);
     releaseAwake();
     clearInterval(ticker);
     clearInterval(quizTicker);
     unsub?.();
+    ms?.destroy();
     session?.destroy();
   };
 }

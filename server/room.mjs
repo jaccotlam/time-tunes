@@ -21,6 +21,9 @@ import {
 } from '../app/js/multi/server-protocol.js';
 import { startQuizClock, quizRoundOver, quizNextEvent } from '../app/js/multi/game.js';
 import { QUIZ_START_FALLBACK_MS } from '../app/js/multi/quiz.js';
+import {
+  addToContribution, contributionTotal, mixStats, mixMinimum, buildMix, MixError, MIX_PER_PLAYER,
+} from '../app/js/multi/mix.js';
 import { sha256Hex } from './sha256.mjs';
 
 export const ROOM_IDLE_MS = 6 * 60 * 60 * 1000; // a room with no activity for 6 hours expires
@@ -30,6 +33,16 @@ export const RATE_WINDOW_MS = 10000;
 export const RATE_MAX_MESSAGES = 80; // per connection per window (pings excluded)
 export const RATE_MAX_PINGS = 30;
 const SPECTATOR = '!spectator';
+
+/**
+ * Stored state of a room (Durable Object storage / memory). Rooms stored before the
+ * "Mix van de groep" (protocol 1) have no `mix`: they get an empty one, nothing else changes.
+ */
+export function migrateState(state) {
+  if (!state || typeof state !== 'object') return null;
+  if (!state.mix || typeof state.mix !== 'object' || Array.isArray(state.mix)) state.mix = {};
+  return state;
+}
 
 export function randomToken(bytes = 24) {
   const b = new Uint8Array(bytes);
@@ -79,6 +92,8 @@ export class RoomHub {
     this.conns = new Map(); // connId -> { mid, lastSeen, win, count, pings }
     this.dirty = false;
     this.backupKey = '';
+    this.mixVersion = 0;
+    this.mixCache = null;
   }
 
   // ---------- lifecycle ----------
@@ -103,6 +118,7 @@ export class RoomHub {
       leaderAwaySince: t,
       members: { [ownerId]: { th: hashToken(token) } },
       room: G.createRoom({ code: this.code, host: hostPlays ? { id: ownerId, name: ownerName } : null, settings }),
+      mix: {}, // "Mix van de groep": { memberId: { at, tracks } }, never sent to any phone
     };
     this.persist();
     return { code: this.code, token };
@@ -131,6 +147,7 @@ export class RoomHub {
       members,
       room: restartQuizQuestion(snap.room, t),
       restoredAt: t,
+      mix: {}, // contributions are not in the backup: the phones send them again
     };
     this.persist();
     return { code: this.code, restored: true };
@@ -147,7 +164,7 @@ export class RoomHub {
 
   /** Load the persisted state (CF: after the object was evicted) and the open connections. */
   load(state, conns = []) {
-    this.state = state || null;
+    this.state = migrateState(state);
     for (const c of conns) this.conns.set(c.connId, { mid: c.mid || null, lastSeen: c.lastSeen || this.now(), win: this.now(), count: 0, pings: 0 });
   }
 
@@ -308,10 +325,30 @@ export class RoomHub {
       case 'settings': s.room = G.setSettings(r, m.patch && typeof m.patch === 'object' ? m.patch : {}); break;
       case 'start': {
         if (r.phase !== 'lobby' && r.phase !== 'won') throw new G.GameError('busy', 'Het spel is al bezig.');
-        const cards = cleanCards(m.cards);
         const seed = Number.isInteger(m.seed) ? m.seed >>> 0 : (Math.random() * 2 ** 32) >>> 0;
+        const mix = r.settings.music === 'mix';
+        const cards = mix ? this.mixCards({ seed, play: m.play }) : cleanCards(m.cards);
+        // a quiz from the mix takes its wrong artists / titles from the leader's own music, never
+        // from other players' favourites (those would show up before they are played)
+        const pool = mix && r.settings.game === 'quiz' ? cleanCards(m.cards) : null;
         const now = this.now();
-        s.room = r.phase === 'won' ? G.playAgain(r, { cards, seed, now }) : G.startGame(r, { cards, seed, now });
+        s.room = r.phase === 'won' ? G.playAgain(r, { cards, seed, now, pool }) : G.startGame(r, { cards, seed, now, pool });
+        if (mix) s.room = { ...s.room, game: { ...s.room.game, mix: true, play: m.play === 'spotify' ? 'spotify' : 'preview' } };
+        break;
+      }
+      case 'mix-add': {
+        const cur = s.mix[mid]?.tracks || [];
+        const out = addToContribution(cur, m.tracks, { roomTotal: contributionTotal(s.mix) });
+        if (out.added) { s.mix[mid] = { at: this.now(), tracks: out.list }; this.mixVersion++; }
+        if (out.refused) {
+          this.sendTo(connId, { t: 'error', code: 'mix', message: out.list.length >= MIX_PER_PLAYER ? `Je deelt al het maximum van ${MIX_PER_PLAYER} nummers.` : 'Niet alle nummers konden worden toegevoegd (ongeldig, of de mix van deze kamer is vol).' });
+        }
+        if (!out.added) return;
+        break;
+      }
+      case 'mix-clear': {
+        if (!s.mix[mid]) return;
+        this.dropContribution(mid);
         break;
       }
       case 'reveal': s.room = G.reveal(r, { now: this.now() }); break;
@@ -323,6 +360,7 @@ export class RoomHub {
         if (pid === s.ownerId || pid === mid) throw new G.GameError('host', 'De spelleider kan zichzelf niet verwijderen.');
         s.room = G.removePlayer(r, pid);
         delete s.members[pid];
+        this.dropContribution(pid);
         for (const [other, oc] of [...this.conns]) {
           if (oc.mid === pid) {
             this.sendTo(other, { t: 'error', code: 'removed', message: 'De spelleider heeft je uit de kamer gehaald.' });
@@ -337,6 +375,7 @@ export class RoomHub {
         s.room = G.removePlayer(r, mid);
         s.room = { ...s.room, removed: s.room.removed.filter((x) => x !== mid) }; // may join again later
         delete s.members[mid];
+        this.dropContribution(mid);
         if (s.leaderId === mid) { s.leaderId = s.ownerId; s.leaderAwaySince = this.online(s.ownerId) ? null : this.now(); }
         this.conns.delete(connId);
         this.deps.drop?.(connId, 1000, 'leave');
@@ -362,6 +401,51 @@ export class RoomHub {
       default: return;
     }
     this.changed();
+  }
+
+  /** Songs for a game from the "Mix van de groep" (throws a GameError when there are too few). */
+  mixCards({ seed, play }) {
+    const s = this.state;
+    const names = Object.fromEntries(Object.keys(s.mix).map((pid) => [pid, s.room.players.find((p) => p.id === pid)?.name || (pid === s.ownerId ? s.ownerName : 'Speler')]));
+    try {
+      return buildMix(s.mix, {
+        seed,
+        source: play === 'spotify' ? 'spotify' : 'preview',
+        need: mixMinimum(s.room.settings, s.room.players.length),
+        names,
+      });
+    } catch (e) {
+      if (e instanceof MixError) {
+        const left = e.need - e.have;
+        throw new G.GameError('mix', `Te weinig nummers in de mix van de groep: nog ${left} nodig (${e.have} van ${e.need}).`);
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * A member withdraws (or leaves): forget the songs, and take the ones nobody else added
+   * out of a running game from the mix (songs already played stay where they are).
+   */
+  dropContribution(mid) {
+    const s = this.state;
+    if (!s.mix[mid]) return;
+    delete s.mix[mid];
+    this.mixVersion++;
+    const g = s.room.game;
+    if (!g?.mix) return;
+    const songs = { ...g.songs };
+    const pile = [];
+    for (const id of g.pile) {
+      const c = songs[id];
+      if (c?.from?.includes(mid)) {
+        if (c.from.length === 1) { delete songs[id]; continue; }
+        const keep = c.from.map((f, i) => [f, c.by?.[i]]).filter(([f]) => f !== mid);
+        songs[id] = { ...c, from: keep.map((x) => x[0]), by: keep.map((x) => x[1] || 'Speler') };
+      }
+      pile.push(id);
+    }
+    s.room = { ...s.room, game: { ...g, songs, pile } };
   }
 
   /** Close the room for everybody and forget it. */
@@ -401,7 +485,17 @@ export class RoomHub {
       takeoverMs: TAKEOVER_MS,
       restored: !!s.restoredAt,
       now: this.now(), // the server's clock, for the Quiz countdown
+      // "Mix van de groep": counts only, never a title
+      mix: { ...this.mixCounts(), mine: s.mix[mid]?.tracks?.length || 0 },
     };
+  }
+
+  /** Counts of the mix, worked out again only when a contribution changed. */
+  mixCounts() {
+    if (!this.mixCache || this.mixCache.version !== this.mixVersion || this.mixCache.state !== this.state.mix) {
+      this.mixCache = { version: this.mixVersion, state: this.state.mix, stats: mixStats(this.state.mix) };
+    }
+    return this.mixCache.stats;
   }
 
   /** What the leader's screen needs to run the room (no future songs, the running one only for the music phone). */
@@ -467,7 +561,11 @@ export class RoomHub {
     const key = JSON.stringify([s.room.phase, g?.round, g?.seed, s.room.players.map((p) => p.id), s.room.removed.length, s.room.settings, s.leaderId, g?.results && Object.values(g.results).map((x) => x.correct)]);
     if (key === this.backupKey) return;
     this.backupKey = key;
-    const snap = { v: 1, code: s.code, createdAt: s.createdAt, ownerId: s.ownerId, ownerName: s.ownerName, leaderId: s.leaderId, members: s.members, room: s.room };
+    // A game from the mix holds other players' favourites: those never go to the owner's
+    // phone. Its backup is the room in the lobby (after a restore the phones send their
+    // contributions again and the leader starts a new game).
+    const room = g?.mix ? G.backToLobby(s.room) : s.room;
+    const snap = { v: 1, code: s.code, createdAt: s.createdAt, ownerId: s.ownerId, ownerName: s.ownerName, leaderId: s.leaderId, members: s.members, room };
     this.sendTo(connId, { t: 'backup', snap });
   }
 

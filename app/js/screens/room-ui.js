@@ -348,7 +348,10 @@ export function myResultHtml(view) {
 /** The revealed song (same answer card as elsewhere in the app). */
 export function songHtml(view) {
   const s = view.game.reveal?.song;
-  return s ? answerHtml({ year: s.year, artist: s.artist, title: s.title }) : '';
+  if (!s) return '';
+  const by = Array.isArray(s.by) && s.by.length
+    ? `<p class="mix-by" data-testid="room-song-by">Uit de favorieten van <b>${s.by.map(esc).join(' &amp; ')}</b></p>` : '';
+  return answerHtml({ year: s.year, artist: s.artist, title: s.title }) + by;
 }
 
 /** Who had it right this round (players see everybody's outcome after the reveal). */
@@ -626,6 +629,7 @@ export function quizRevealHtml(view, { host = false, onlyMine = false } = {}) {
       <p class="quiz-num">Vraag ${g.round} van ${q.total} · ${esc(q.prompt)}</p>
       <p class="quiz-correct" data-testid="quiz-correct" data-answer="${rv.answer}"><span class="quiz-letter">${LETTER[rv.answer]}</span><b>${esc(q.options[rv.answer])}</b></p>
       ${g.reveal?.song ? `<p class="quiz-song" data-testid="quiz-song">${esc(g.reveal.song.artist)} · ${esc(g.reveal.song.title)} · ${esc(g.reveal.song.year)}</p>` : ''}
+      ${g.reveal?.song?.by?.length ? `<p class="mix-by" data-testid="room-song-by">Uit de favorieten van <b>${g.reveal.song.by.map(esc).join(' &amp; ')}</b></p>` : ''}
       <ul class="quiz-dist" aria-label="Zoveel spelers kozen elk antwoord">
         ${q.options.map((o, i) => `<li class="${i === rv.answer ? 'is-right' : ''}${mine && mine.choice === i ? ' is-mine' : ''}" data-testid="quiz-count-${i}" data-count="${rv.counts[i]}">
           <span class="quiz-letter">${LETTER[i]}</span><span class="quiz-dist-text">${esc(o)}</span>
