@@ -81,15 +81,26 @@ export async function aliasPublic(context, server) {
  * Neem een pagina op als verliesvrije PNG-frames op ware pixelgrootte (viewport x deviceScaleFactor).
  * De CDP-screencast meldt alleen dát er iets veranderd is (zijn eigen beelden zijn altijd 1 CSS-px
  * per pixel en dus niet scherp op 1.1x of 0.9x); het beeld zelf komt van Page.captureScreenshot.
- * `now()` geeft de opnametijd in seconden. Geeft { frames: [[t, bestand]], pause, resume, stop }.
+ * `now()` geeft de opnametijd in seconden. Geeft { frames: [[t, bestand]], pause, resume, setMode, stop }.
+ *
+ * setMode('cast') schakelt tijdelijk over op de beelden van de screencast zelf (PNG, 1 CSS-px per
+ * pixel, het decor rekt ze op). Dat is voor het scanscherm: daar is de pagina zo druk met de camera
+ * dat een screenshot 0,1 s kost (9 beelden per seconde), terwijl de screencast de 30 wel haalt.
  */
 export async function capturePage(page, dir, prefix, now) {
   ensureDir(dir);
   const cdp = await page.context().newCDPSession(page);
   const frames = []; const writes = [];
   let busy = false; let dirty = false; let active = true; let stopped = false; let lastData = ''; let lastT = -1; let error = null;
+  let mode = 'shot'; let pending = null; let timer = null;
+  const keep = (t, data) => {
+    const name = `${prefix}${String(frames.length).padStart(6, '0')}.png`;
+    frames.push([Number(t.toFixed(4)), name]);
+    writes.push(writeFile(join(dir, name), Buffer.from(data, 'base64')));
+    lastT = t;
+  };
   async function grab() {
-    if (stopped || !active) return;
+    if (stopped || !active || mode !== 'shot') return;
     if (busy) { dirty = true; return; }
     busy = true;
     try {
@@ -97,31 +108,46 @@ export async function capturePage(page, dir, prefix, now) {
         dirty = false;
         const wait = lastT + 1 / FPS - 0.003 - now();
         if (wait > 0) await sleep(wait * 1000);
-        if (stopped || !active) break;
+        if (stopped || !active || mode !== 'shot') break;
         const t = now();
         const { data } = await cdp.send('Page.captureScreenshot', { format: 'png', optimizeForSpeed: true });
+        if (mode !== 'shot') break; // intussen overgeschakeld: dit beeld is al ingehaald
         lastT = t;
-        if (data !== lastData) {
-          lastData = data;
-          const name = `${prefix}${String(frames.length).padStart(6, '0')}.png`;
-          frames.push([Number(t.toFixed(4)), name]);
-          writes.push(writeFile(join(dir, name), Buffer.from(data, 'base64')));
-        }
+        if (data !== lastData) { lastData = data; keep(t, data); }
       } while (dirty && !stopped && active);
     } catch (e) { if (!stopped) error = e; } finally { busy = false; }
   }
   cdp.on('Page.screencastFrame', (ev) => {
     cdp.send('Page.screencastFrameAck', { sessionId: ev.sessionId }).catch(() => {});
-    grab();
+    if (mode === 'shot') { grab(); return; }
+    if (stopped || !active) return;
+    // 'cast': bewaar het beeld van de screencast zelf, hoogstens 30 per seconde, en altijd het laatste van een beweging
+    const t = now();
+    clearTimeout(timer);
+    if (t - lastT >= 1 / FPS - 0.004) { pending = null; keep(t, ev.data); } else {
+      pending = [t, ev.data];
+      timer = setTimeout(() => { if (pending && mode === 'cast' && !stopped) keep(...pending); pending = null; }, 45);
+    }
   });
-  await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 10, everyNthFrame: 1 });
+  const cast = (m) => cdp.send('Page.startScreencast', m === 'cast' ? { format: 'png', everyNthFrame: 1 } : { format: 'jpeg', quality: 10, everyNthFrame: 1 });
+  await cast(mode);
   await grab();
   return {
     frames,
     pause() { active = false; },
     resume() { active = true; grab(); },
+    async setMode(m) {
+      if (m === mode || stopped) return;
+      clearTimeout(timer); pending = null;
+      mode = m;
+      lastData = '';
+      await cdp.send('Page.stopScreencast').catch(() => {});
+      await cast(m);
+      grab();
+    },
     async stop() {
       stopped = true;
+      clearTimeout(timer);
       await cdp.send('Page.stopScreencast').catch(() => {});
       await Promise.all(writes);
       if (error) throw error;

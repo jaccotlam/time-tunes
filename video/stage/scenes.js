@@ -52,7 +52,7 @@ export const SCENES = [
 
   { id: 'set1', layout: 'music', kicker: 'De muziek', badge: 'music', title: 'Fragment of heel nummer', caption: 'Standaard hoor je fragmenten van 30 seconden, zonder account. Hele nummers kan ook: via Spotify Premium.' },
 
-  { id: 'pl1', layout: 'playlist', kicker: OWN, badge: 'music', title: 'Speel met je eigen nummers', caption: 'Maak bij ‘Eigen playlists’ een playlist. Zoek een nummer en tik erop om het toe te voegen.' },
+  { id: 'pl1', layout: 'playlist', kicker: OWN, badge: 'music', title: 'Speel met je eigen nummers', caption: 'Bij ‘Eigen playlists’ maak je je eigen lijst. Zoek een nummer en tik erop om het toe te voegen.' },
   { id: 'pl2', layout: 'playlist', kicker: OWN, badge: 'music', title: 'Speel met je eigen nummers', caption: 'Het jaartal komt er vanzelf bij. Klopt het niet? Pas het per nummer aan.' },
   { id: 'pl3', layout: 'playlist', kicker: OWN, badge: 'music', title: 'Speel met je eigen nummers', caption: 'Tik op ‘Speel met deze playlist’: alle spelvormen gebruiken nu jouw muziek.' },
 

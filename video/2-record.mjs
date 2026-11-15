@@ -12,7 +12,7 @@
 // (delen: cards, print, digital, bingo, multi, music, playlist; titel, intro en slot horen er altijd bij).
 import { copyFileSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ROOT, TMP, PUBLIC_URL, TABLE, DIGITAL, BINGO, PRINT_BINGO, MULTI, PLAYLIST, PHONE, SMALL_PHONE } from './config.mjs';
+import { ROOT, VIDEO_DIR, TMP, PUBLIC_URL, TABLE, DIGITAL, BINGO, PRINT_BINGO, MULTI, PLAYLIST, PHONE, SMALL_PHONE } from './config.mjs';
 import { startServer, launch, ensureDir, sleep, aliasPublic, capturePage } from './lib.mjs';
 import { camFile } from './1-camera.mjs';
 import { SCENES } from './stage/scenes.js';
@@ -150,24 +150,60 @@ export async function record() {
     await page.getByTestId('screen-start').waitFor();
     await page.getByTestId('deck-info').filter({ hasText: `${deckCards.length} kaarten` }).waitFor();
     await page.evaluate(() => document.fonts.ready);
-    // Warm de browsercache op voor de fragmenten die in de video starten, zodat het
-    // afspeelscherm niet onnodig lang op "Fragment wordt geladen…" blijft staan.
-    const warm = [TABLE.good, TABLE.bad, seedIds[2], plan.song, BINGO.nearWin.card].map((id) => byId.get(id));
-    const warmed = await page.evaluate(async (cards) => Promise.all(cards.map(async (c) => {
-      let url = c.previewUrl;
-      try {
-        const json = await (await fetch(`https://itunes.apple.com/lookup?id=${c.itunesId}&country=NL`, { cache: 'no-store' })).json();
-        url = (json.results || []).find((r) => r.previewUrl)?.previewUrl || url;
-      } catch { /* dan de link uit het deck */ }
-      return new Promise((res) => {
-        const a = new Audio();
-        a.preload = 'auto'; a.muted = true;
-        a.oncanplaythrough = () => res(true); a.onerror = () => res(false);
-        setTimeout(() => res(false), 8000);
-        a.src = url;
+    /**
+     * Haal voor de nummers die in de video starten nu alvast de verse fragment-link op (dezelfde
+     * iTunes-lookup die de app per kaart doet) en laad het fragment in de browsercache. In de video
+     * krijgt de app het antwoord op die lookup meteen terug, zodat het afspeelscherm niet onnodig lang
+     * op "Fragment wordt geladen…" staat en Apples limiet op zoekvragen de opname niet kan breken.
+     */
+    async function warmUp(context, onPage, cards) {
+      const got = await onPage.evaluate(async (list) => Promise.all(list.map(async (c) => {
+        let url = c.previewUrl; let body = null;
+        try {
+          const res = await fetch(`https://itunes.apple.com/lookup?id=${c.itunesId}&country=NL`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+          const text = await res.text();
+          const hit = (JSON.parse(text).results || []).find((r) => r.previewUrl);
+          if (res.ok && hit) { url = hit.previewUrl; body = text; }
+        } catch { /* dan de link uit het deck */ }
+        const loaded = await new Promise((done) => {
+          const a = new Audio();
+          a.preload = 'auto'; a.muted = true;
+          a.oncanplaythrough = () => done(true); a.onerror = () => done(false);
+          setTimeout(() => done(false), 8000);
+          a.src = url;
+        });
+        return { id: String(c.itunesId), body, loaded };
+      })), cards.map((c) => ({ itunesId: c.itunesId, previewUrl: c.previewUrl })));
+      const answers = new Map(got.filter((g) => g.body).map((g) => [g.id, g.body]));
+      await context.route('https://itunes.apple.com/lookup?**', (route) => {
+        const body = answers.get(new URL(route.request().url()).searchParams.get('id'));
+        if (!body) return route.continue();
+        return route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', headers: { 'access-control-allow-origin': '*' }, body });
       });
-    })), warm);
-    console.log(`fragmenten voorgeladen: ${warmed.filter(Boolean).length}/${warm.length}`);
+      return `${got.filter((g) => g.loaded).length}/${got.length} geladen, ${answers.size}/${got.length} met verse link`;
+    }
+    console.log('fragmenten:', await warmUp(ctx, page, [TABLE.good, TABLE.bad, seedIds[2], plan.song, BINGO.nearWin.card].map((id) => byId.get(id))));
+
+    // De zoekvraag van "Eigen playlist" wordt nu alvast aan iTunes gesteld; in de video krijgt de app
+    // dat antwoord meteen terug. Apple staat maar ±20 zoekvragen per minuut toe: mislukt het (te veel
+    // vragen, geen internet), dan dient het bewaarde antwoord in itunes-zoekresultaat.json.
+    if (want('playlist')) {
+      const searchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(PLAYLIST.query)}&entity=song&country=NL&limit=25`;
+      let body = await page.evaluate(async (url) => {
+        try {
+          const res = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+          return res.ok ? await res.text() : null;
+        } catch { return null; }
+      }, searchUrl);
+      try { if (!(JSON.parse(body).results.length > 0)) body = null; } catch { body = null; }
+      console.log(`zoekresultaat voor "${PLAYLIST.query}": ${body ? 'vers van iTunes' : 'bewaard antwoord (iTunes gaf nu geen antwoord)'}`);
+      body ||= readFileSync(join(VIDEO_DIR, 'itunes-zoekresultaat.json'), 'utf8');
+      await ctx.route('https://itunes.apple.com/search?**', async (route) => {
+        if (!decodeURIComponent(route.request().url()).includes(`term=${PLAYLIST.query}`)) return route.continue();
+        await sleep(450); // zo lang doet iTunes er ongeveer over
+        return route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', headers: { 'access-control-allow-origin': '*' }, body });
+      });
+    }
 
     // ---------- de drie telefoons van "Ieder een eigen telefoon" ----------
     const main = { key: 'main', page, dims: PHONE };
@@ -188,12 +224,14 @@ export async function record() {
         await p.page.getByTestId('deck-info').filter({ hasText: `${deckCards.length} kaarten` }).waitFor();
         await p.page.evaluate(() => document.fonts.ready);
       }));
+      // het toestel van de spelleider speelt de muziek: het eerste nummer van het potje alvast laden
+      if (byId.has(MULTI.firstSong)) console.log('fragment spelleider:', await warmUp(trio[0].page.context(), trio[0].page, [byId.get(MULTI.firstSong)]));
     }
     const [host, pa, pb] = trio;
     await sleep(600);
 
     // ---------- opname van de schermen ----------
-    const T0 = Date.now() / 1000;
+    let T0 = Date.now() / 1000;
     const rel = () => Date.now() / 1000 - T0;
     for (const p of [main, ...trio]) {
       p.cap = await capturePage(p.page, join(phoneDir, p.key), 'f', rel);
@@ -201,6 +239,9 @@ export async function record() {
       if (p !== main) p.cap.pause(); // pas opnemen als ze in beeld komen
     }
     await sleep(300);
+    // de video begint hier: wat er al is opgenomen, is het beginbeeld (t = 0)
+    T0 = Date.now() / 1000;
+    for (const c of captures) for (const f of c.frames) f[0] = 0;
 
     const ev = {
       scenes: [], marks: {}, taps: [], drags: [], cuts: [], highlights: [],
@@ -292,32 +333,34 @@ export async function record() {
     }
 
     // ================= het draaiboek =================
-    scene('title'); await hold(3.0);
-    scene('intro'); await hold(5.4);
+    scene('title'); await hold(2.7);
+    scene('intro'); await hold(4.7);
     // drie manieren: het startscherm heeft er een blok voor elk
     scene('modes');
-    await highlight(page.getByTestId('mode-cards'), 0.7, 2.3);
-    await highlight(page.getByTestId('mode-app'), 2.3, 3.9);
-    await highlight(page.getByTestId('mode-multi'), 3.9, 5.5);
-    mark('modeCards', 0.7); mark('modeApp', 2.3); mark('modeMulti', 3.9);
-    await hold(5.6);
+    await highlight(page.getByTestId('mode-cards'), 0.5, 1.9);
+    await highlight(page.getByTestId('mode-app'), 1.9, 3.3);
+    await highlight(page.getByTestId('mode-multi'), 3.3, 4.8);
+    mark('modeCards', 0.5); mark('modeApp', 1.9); mark('modeMulti', 3.3);
+    await hold(4.9);
 
     // --- met kaartjes: Tijdlijn ---
     if (want('cards')) {
-      scene('s1'); await hold(2.5);
+      scene('s1'); await hold(2.3);
       await tap('start-scan');
       scene('s2');
+      await main.cap.setMode('cast'); // het scanscherm: vloeiend camerabeeld gaat voor (zie capturePage)
       await page.locator('[data-testid="viewfinder"][data-state="scanning"]').waitFor({ timeout: 8000 });
       await page.waitForURL(new RegExp(`#/c/${TABLE.good}$`), { timeout: 15000 });
       scene('s3');
       await page.getByTestId('screen-card').waitFor();
+      await main.cap.setMode('shot');
       await playing(`kaart ${TABLE.good}`);
       mark('playA');
       await assertHidden(byId.get(TABLE.good));
-      await holdUntil(ev.scenes.at(-1).t + 5.0);
+      await holdUntil(ev.scenes.at(-1).t + 4.3);
       scene('s4'); await hold(5.0);
-      scene('s5'); await hold(3.6);
-      scene('s5good'); await hold(2.8);
+      scene('s5'); await hold(3.3);
+      scene('s5good'); await hold(2.6);
       await assertHidden(byId.get(TABLE.good));
 
       scene('s5next');
@@ -325,14 +368,17 @@ export async function record() {
       await hold(0.3);
       await tap('next-card', { lead: 0.45 });
       mark('scanTapB');
+      await main.cap.setMode('cast');
       await page.waitForURL(new RegExp(`#/c/${TABLE.bad}$`), { timeout: 15000 });
       mark('detectB');
+      await page.getByTestId('screen-card').waitFor();
+      await main.cap.setMode('shot');
       await playing(`kaart ${TABLE.bad}`);
       mark('playB');
       await assertHidden(byId.get(TABLE.bad));
       await holdUntil(ev.marks.detectB + 2.7);
       scene('s5bad'); await hold(3.6);
-      scene('s6'); await hold(4.6);
+      scene('s6'); await hold(4.2);
       await assertHidden(byId.get(TABLE.bad));
       await home(0.45);
       await hold(0.3);
@@ -340,16 +386,16 @@ export async function record() {
 
     // --- met kaartjes: zelf printen ---
     if (want('print')) {
-      scene('p1'); await hold(0.8);
+      scene('p1'); await hold(0.6);
       await page.evaluate((v) => window.__ttRandom.push(v), randomFor(PRINT_BINGO.seed)); // vaste bingokaarten op het printscherm
       await tap('start-print', { lead: 0.45 });
       await page.locator('[data-testid="print-sheet"]').first().waitFor({ timeout: 10000 });
       if (await page.getByTestId('print-base-warn').isVisible()) problems.push('printscherm toont een waarschuwing over het adres');
       if ((await page.getByTestId('print-base-url').inputValue()) !== PUBLIC_URL) problems.push('printscherm gebruikt niet het publieke adres voor de QR-codes');
-      await hold(0.9);
+      await hold(0.6);
       await scrollTo(await pageTop(page.getByTestId('print-sheet').first()) - 64, 0.8); // voorkant helemaal, daaronder het begin van de achterkant
       mark('printFront');
-      await hold(2.6);
+      await hold(2.3);
       scene('p2');
       await scrollTo(0, 0.6);
       await tap(optionOf('print-kind-bingo'), { lead: 0.45 });
@@ -357,18 +403,18 @@ export async function record() {
       if (await page.getByTestId('print-bingo-card').first().getAttribute('data-signature') !== printSignature) {
         throw new Error('Printscherm: andere bingokaarten dan verwacht (zaaiwaarde niet gebruikt?)');
       }
-      await hold(0.5);
+      await hold(0.4);
       await scrollTo(await pageTop(page.getByTestId('print-bingo-sheet').first()) - 64, 0.8);
       mark('printBingo');
-      await hold(2.9);
-      await scrollTo(0, 0.45);
+      await hold(2.3);
+      await scrollTo(0, 0.3);
       await home(0.35);
       await hold(0.2);
     }
 
     // --- alleen de app: Tijdlijn ---
     if (want('digital')) {
-      scene('d1'); await hold(1.2);
+      scene('d1'); await hold(1.0);
       await page.evaluate((v) => window.__ttRandom.push(v), randomFor(seed)); // de zaaiwaarde voor dit potje
       await tap('start-digital');
       await page.locator('[data-testid="screen-game"][data-view="setup"]').waitFor();
@@ -388,7 +434,7 @@ export async function record() {
       }
       logScores(g);
       ev.digital.turns.push({ t: rel(), player: g.current });
-      await hold(1.0);
+      await hold(0.8);
       await tap('start-turn', { lead: 0.45 });
       scene('d2');
       await page.locator('[data-testid="screen-game"][data-view="place"]').waitFor();
@@ -407,21 +453,21 @@ export async function record() {
       scene('d3');
       await page.locator('[data-testid="result"][data-correct="true"]').waitFor({ timeout: 3000 });
       logScores(await gameState());
-      await hold(3.6);
+      await hold(2.9);
       await home();
       await hold(0.2);
     }
 
     // --- alleen de app: Bingo ---
     if (want('bingo')) {
-      scene('b1'); await hold(0.9);
+      scene('b1'); await hold(0.7);
       await tap('start-bingo', { lead: 0.45 });
       await page.locator('[data-testid="screen-bingo"][data-view="setup"]').waitFor();
       mark('bingoSetup');
       if ((await page.getByTestId('bingo-player-name-0').inputValue()) !== BINGO.names[0] || !(await page.getByTestId(`bingo-size-${BINGO.size}`).isChecked())) {
         throw new Error('Bingo: namen of kaartformaat staan niet klaar');
       }
-      await hold(1.3);
+      await hold(1.0);
       await tap('bingo-start', { lead: 0.45 });
       await page.getByTestId('bingo-handoff').waitFor();
       mark('bingoDeal');
@@ -430,14 +476,14 @@ export async function record() {
         || b.players.map((p) => p.card.join()).join('|') !== plan.cards.map((c) => c.join()).join('|')) {
         throw new Error('Bingo: de app deelde andere kaarten of nummers uit dan verwacht');
       }
-      await hold(1.0);
+      await hold(0.8);
       await tap('bingo-start-turn', { lead: 0.45 });
       await page.locator('[data-testid="screen-bingo"][data-view="claim"]').waitFor();
       await playing('bingo, beurt 1');
       await assertHidden(byId.get(plan.song));
-      await hold(1.3);
+      await hold(1.0);
       scene('b2');
-      await hold(1.2);
+      await hold(1.1);
       await tap(`bingo-cell-${plan.first}`, { lead: 0.45 });
       await snap({ selected: plan.first });
       await hold(0.8);
@@ -447,7 +493,7 @@ export async function record() {
       await page.locator('[data-testid="bingo-result"][data-correct="true"]').waitFor({ timeout: 3000 });
       await snap();
       if (await page.getByTestId(`bingo-cell-${plan.first}`).getAttribute('data-state') !== 'stamped') problems.push('bingo: goed geclaimd vakje is niet afgestempeld');
-      await hold(3.6);
+      await hold(3.1);
 
       {
         // sprong in de tijd: de telefoon toont "Even later…" terwijl de stand van een paar rondes later
@@ -473,7 +519,7 @@ export async function record() {
         cut.t1 = rel() + 0.3;
       }
       await assertHidden(byId.get(BINGO.nearWin.card));
-      await hold(1.6);
+      await hold(1.3);
       await tap(`bingo-cell-${plan.win}`, { lead: 0.45 });
       await snap({ selected: plan.win });
       await hold(0.8);
@@ -483,7 +529,7 @@ export async function record() {
       mark('bingoWin');
       b = await snap();
       if ((await page.locator('[data-testid="bingo-card"] [data-win="true"]').count()) !== BINGO.size || !b.winLine) problems.push('bingo: de winnende lijn is niet gemarkeerd');
-      await hold(3.4);
+      await hold(2.8);
       await home();
       await hold(0.2);
     }
@@ -495,11 +541,11 @@ export async function record() {
       scene('m1');
       mark('trioIn');
       for (const p of phones) p.cap.resume();
-      await hold(1.9); // de drie telefoons schuiven in beeld
+      await hold(1.7); // de drie telefoons schuiven in beeld
       main.cap.pause();
       await tap('start-host', { on: host });
       await host.page.getByTestId('host-setup-form').waitFor();
-      await hold(1.0);
+      await hold(0.8);
       await host.page.evaluate((vals) => window.__ttRandom.push(...vals),
         [...MULTI.code].map((ch) => (CODE_ALPHABET.indexOf(ch) + 0.5) / CODE_ALPHABET.length)); // de kamercode (zie config.mjs)
       await tap('host-create', { on: host });
@@ -510,7 +556,7 @@ export async function record() {
       if (code !== MULTI.code) throw new Error(`Kamer: code ${code} in plaats van ${MULTI.code}`);
       if ((await host.page.getByTestId('room-link').textContent()).trim() !== `${PUBLIC_URL}#/kamer/${code}`) problems.push('kamer: de link in de lobby is niet het publieke adres');
       if (await host.page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) problems.push('kamer: de lobby is breder dan het scherm (QR-code valt buiten beeld)');
-      await hold(2.0);
+      await hold(1.5);
 
       scene('m2');
       await hold(0.5);
@@ -533,7 +579,7 @@ export async function record() {
       for (const p of players) {
         if ((await p.page.getByTestId('room-code').textContent()).trim() !== code) problems.push(`kamer: ${p.key} zit niet in kamer ${code}`);
       }
-      await hold(2.0);
+      await hold(1.3);
 
       scene('m3');
       await hold(0.3);
@@ -547,9 +593,9 @@ export async function record() {
       const room = await hostRoom(host.page);
       const song = room.game.songs[room.game.current];
       if (!song?.title || !Number.isFinite(song.year)) throw new Error('Samen spelen: het lopende nummer is niet te lezen uit de spelstand');
-      console.log(`samen spelen: ${song.year} ${song.artist} - ${song.title}`);
+      console.log(`samen spelen: ${song.year} ${song.artist} - ${song.title}${String(song.id) === MULTI.firstSong ? '' : ' (niet het verwachte nummer: pas MULTI.firstSong aan)'}`);
       for (const p of phones) await assertHidden(song, { on: p });
-      await hold(1.6);
+      await hold(1.3);
       // Anouk kiest een vakje dat klopt, Bram een vakje dat niet klopt: zo zie je straks beide uitkomsten.
       const views = await Promise.all(players.map((p) => p.page.evaluate(() => window.__ttRoom.session.view.game.mine)));
       const pick = (mine, correct, prefer) => {
@@ -570,7 +616,7 @@ export async function record() {
       await host.page.waitForFunction((n) => Number(document.querySelector('[data-testid="room-answered"]')?.dataset.done) >= n, players.length, { timeout: 15000 });
       mark('allAnswered');
       for (const p of phones) await assertHidden(song, { on: p });
-      await hold(1.5);
+      await hold(1.2);
 
       scene('m4');
       await hold(0.4);
@@ -585,7 +631,7 @@ export async function record() {
       }
       if ((await host.page.getByTestId('room-standings').count()) !== 1) problems.push('samen spelen: geen tussenstand bij de spelleider');
       ev.multi.song = { title: song.title, artist: song.artist, year: song.year };
-      await hold(4.6);
+      await hold(3.9);
       mark('trioOut');
       main.cap.resume();
       await hold(0.9); // de drie telefoons schuiven weg, de hoofdtelefoon komt terug
@@ -594,16 +640,16 @@ export async function record() {
 
     // --- de muziek: fragment of Spotify (alleen het instellingenscherm, geen verbinding) ---
     if (want('music') || want('playlist')) {
-      scene('set1'); await hold(0.9);
+      scene('set1'); await hold(0.7);
       await tap('start-settings', { lead: 0.45 });
       await page.getByTestId('screen-settings').waitFor();
       mark('settings');
       if (await page.getByTestId('spotify-env-warning').count()) problems.push('instellingenscherm toont een waarschuwing over het adres');
       if (!(await page.getByTestId('source-preview').isChecked())) problems.push('muziekbron staat niet op het fragment van 30 seconden');
-      await highlight(optionOf('source-preview'), 0.5, 2.7);
-      await highlight(optionOf('source-spotify'), 2.7, 5.2);
-      mark('srcPreview', 0.5); mark('srcSpotify', 2.7);
-      await hold(5.3);
+      await highlight(optionOf('source-preview'), 0.4, 2.4);
+      await highlight(optionOf('source-spotify'), 2.4, 4.5);
+      mark('srcPreview', 0.4); mark('srcSpotify', 2.4);
+      await hold(4.6);
     }
 
     // --- eigen playlist ---
@@ -611,11 +657,11 @@ export async function record() {
       scene('pl1');
       await tap('settings-playlists', { lead: 0.5 });
       await page.getByTestId('screen-playlists').waitFor();
-      await hold(0.9);
+      await hold(0.7);
       await tap(page.locator(`[data-testid="playlist-open"][data-deck-id="${PLAYLIST.id}"]`), { lead: 0.45 });
       await page.getByTestId('screen-playlist').waitFor();
       mark('playlistOpen');
-      await hold(0.8);
+      await hold(0.6);
       await tap('pl-search-input', { lead: 0.4 });
       await page.keyboard.type(PLAYLIST.query, { delay: 60 });
       await tap('pl-search-go', { lead: 0.35 });
@@ -626,11 +672,11 @@ export async function record() {
       if (!found.startsWith(`${PLAYLIST.expect.title} ${PLAYLIST.expect.artist}`) || !found.includes(String(PLAYLIST.expect.year))) {
         throw new Error(`Eigen playlist: het eerste zoekresultaat is "${found}"`);
       }
-      await hold(1.0);
+      await hold(0.8);
       await tap(first, { lead: 0.5 });
       await page.waitForFunction((n) => document.querySelectorAll('[data-testid="pl-track"]').length === n, PLAYLIST.tracks.length + 1, { timeout: 8000 });
       mark('added');
-      await hold(1.3);
+      await hold(1.1);
 
       scene('pl2');
       await scrollTo(await pageTop(page.getByTestId('pl-tracks')) - 96, 0.9);
@@ -641,17 +687,17 @@ export async function record() {
       if (yLast.y + yLast.height > PHONE.height) problems.push('eigen playlist: de lijst met nummers past niet in beeld');
       ev.highlights.push({ t0: rel() + 0.4, t1: rel() + 2.9, x: yFirst.x - 4, y: yFirst.y - 4, width: yFirst.width + 8, height: yLast.y + yLast.height - yFirst.y + 8 });
       mark('years', 0.4);
-      await hold(3.0);
+      await hold(2.5);
 
       scene('pl3');
       await scrollTo(0, 0.7);
       await tap('pl-activate', { lead: 0.5 });
       await page.getByTestId('pl-is-active').waitFor({ timeout: 5000 });
       mark('active');
-      await hold(1.9);
+      await hold(1.6);
       await tap('pl-back', { lead: 0.4 });
       await page.getByTestId('screen-playlists').waitFor();
-      await hold(0.7);
+      await hold(0.5);
       await home(0.4);
     } else if (want('music')) {
       await home(0.4);
@@ -662,9 +708,9 @@ export async function record() {
     // onderaan het startscherm staan de tip over het beginscherm en de gekozen muziek
     await page.getByTestId('deck-info').filter({ hasText: want('playlist') ? PLAYLIST.name : 'TimeTunesr-deck' }).waitFor();
     await scrollTo(await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight), 0.7);
-    await highlight(page.getByTestId('install-hint'), 0.5, 3.6);
-    await hold(3.9);
-    scene('end'); await hold(3.4);
+    await highlight(page.getByTestId('install-hint'), 0.5, 3.3);
+    await hold(3.5);
+    scene('end'); await hold(3.2);
     ev.duration = rel();
 
     for (const c of captures) await c.stop();
