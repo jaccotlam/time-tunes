@@ -238,7 +238,7 @@ export function render(root, { params = [] } = {}) {
     const value = clientDraft ?? spotify.getClientId();
     const check = cleanClientId(value);
     const msg = value ? clientIdMessage(check) : null;
-    return `<p>Je ziet nu je nieuwe app (anders: tik erop en dan op <b>“Settings”</b>). Onder <b>“Basic Information”</b> staat <b>“Client ID”</b>: een rij van 32 cijfers en letters. Kopieer die en plak hem hier.</p>
+    return `<p>Je ziet nu je nieuwe app. Tik rechtsboven op <b>“Settings”</b>. Bovenaan die pagina staat <b>“Client ID”</b>: een rij van 32 cijfers en letters. Kopieer die en plak hem hier.</p>
       <p class="warn small" data-testid="wiz-secret-note">Niet de <b>“Client secret”</b>: die heb je niet nodig en deel je met niemand.</p>
       <label class="set-field" for="client-id">
         <span class="set-label">Client ID</span>
@@ -264,7 +264,7 @@ export function render(root, { params = [] } = {}) {
       <ol class="wiz-ol">
         <li>Open je app in het dashboard en tik op <b>“Settings”</b>.</li>
         <li>Kies het tabblad <b>“User Management”</b>.</li>
-        <li>Vul zijn naam en het <b>e-mailadres van zijn Spotify-account</b> in en tik op <b>“Add new user”</b>.</li>
+        <li>Vul zijn naam en het <b>e-mailadres van zijn Spotify-account</b> in en tik op de knop om hem toe te voegen (<b>“Add user”</b>).</li>
       </ol>
       <p class="small muted">Spotify staat maximaal <b>5 accounts</b> toe. Dit kan ook later.</p>
     </div>
