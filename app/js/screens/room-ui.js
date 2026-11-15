@@ -88,7 +88,7 @@ export function playersHtml(view, { host = false, removable = false } = {}) {
 export function standingsHtml(view) {
   const g = view.game;
   const list = view.players.filter((p) => p.playing).slice().sort((a, b) => b.score - a.score);
-  const unit = g.kind === 'bingo' ? 'vakjes' : `van ${g.goal}`;
+  const unit = g.kind === 'bingo' ? 'vakjes' : g.kind === 'quiz' ? 'punten' : `van ${g.goal}`;
   const winners = new Set(g.winnerIds || []);
   const roundWinners = new Set(g.reveal?.roundWinners || []);
   return `<ol class="ranking room-standings" data-testid="room-standings" aria-label="Tussenstand">
@@ -411,7 +411,7 @@ export function keepAwake() {
 }
 
 /** Name of the game for titles. */
-export const gameName = (kind) => (kind === 'timeline' ? 'Tijdlijn' : 'Bingo');
+export const gameName = (kind) => (kind === 'timeline' ? 'Tijdlijn' : kind === 'quiz' ? 'Quiz' : 'Bingo');
 
 /* ---------- room server: step-by-step diagnosis, leader away ---------- */
 
@@ -506,4 +506,153 @@ export function leaderAwayHtml(meta, { awayMs }) {
     ? `<button class="btn btn-primary" type="button" data-action="takeover" data-testid="room-takeover">${icons.music}<span>Neem de leiding over</span></button>`
     : `<p class="muted small" data-testid="room-takeover-wait">Over ${left} s kun je zo nodig de leiding overnemen.</p>`}
   </div>`;
+}
+
+/* ---------- Quiz ---------- */
+
+const LETTER = ['A', 'B', 'C', 'D'];
+const plural = (n, one, more) => `${n} ${n === 1 ? one : more}`;
+const QTYPE_LABEL = { mix: 'jaar, artiest en titel door elkaar', year: 'jaartallen', artist: 'artiesten', title: 'titels' };
+
+/** "10 vragen, 20 s bedenktijd, …" for the lobby of a player. */
+export const quizSettingsText = (s) => `${s.questions} vragen, ${s.think} s bedenktijd, ${QTYPE_LABEL[s.qtype] || QTYPE_LABEL.mix}`;
+
+/** Seconds left on the quiz clock (server time), or null while the clock waits for the music. */
+export function quizLeft(q, serverNow) {
+  if (!q?.deadline) return null;
+  return Math.max(0, Math.ceil((q.deadline - serverNow) / 1000));
+}
+
+function clockHtml(q, serverNow) {
+  const left = quizLeft(q, serverNow);
+  const pct = left == null ? 100 : Math.max(0, Math.min(100, ((q.deadline - serverNow) / (q.think * 1000)) * 100));
+  return `<div class="quiz-clock${left == null ? ' is-waiting' : ''}${left != null && left <= 5 ? ' is-low' : ''}" data-testid="quiz-timer" data-deadline="${q.deadline || ''}" data-think="${q.think}" data-left="${left ?? ''}" role="timer" aria-live="off">
+    <span class="quiz-clock-bar" aria-hidden="true"><i style="width:${pct.toFixed(1)}%"></i></span>
+    <b class="quiz-clock-num">${left == null ? '…' : left}</b>
+  </div>`;
+}
+
+/** Keep every quiz clock on the page running between redraws (no re-render, so no lost taps). Returns true when one ran out. */
+export function tickQuizClocks(root, serverNow) {
+  let expired = false;
+  for (const el of root.querySelectorAll('[data-testid="quiz-timer"][data-deadline]')) {
+    const deadline = Number(el.dataset.deadline);
+    if (!deadline) continue;
+    const ms = deadline - serverNow;
+    const left = Math.max(0, Math.ceil(ms / 1000));
+    if (String(left) !== el.dataset.left) {
+      el.dataset.left = String(left);
+      el.querySelector('.quiz-clock-num').textContent = String(left);
+      el.classList.toggle('is-low', left <= 5);
+      if (left === 0) expired = true;
+    }
+    const bar = el.querySelector('.quiz-clock-bar i');
+    if (bar) bar.style.width = `${Math.max(0, Math.min(100, (ms / (Number(el.dataset.think) * 1000)) * 100)).toFixed(1)}%`;
+  }
+  return expired;
+}
+
+/**
+ * The question with its four answers. `selectable`: this phone answers (a player, or the
+ * spelleider who plays along); otherwise it only shows (the spelleider's big screen).
+ */
+export function quizQuestionHtml(view, { selectable = false, serverNow = Date.now(), sending = false, testid = 'quiz-question', own = false } = {}) {
+  const g = view.game;
+  const q = g.quiz;
+  const started = !!q.deadline;
+  const left = quizLeft(q, serverNow);
+  const chosen = q.choice;
+  const open = selectable && !!g.mine && started && left > 0 && chosen == null && !sending;
+  let state = '';
+  if (selectable) {
+    if (!g.mine) state = '<p class="quiz-state" data-testid="quiz-state" data-state="none">Je doet vanaf de volgende vraag mee.</p>';
+    else if (chosen != null) state = `<p class="quiz-state is-locked" data-testid="quiz-state" data-state="locked">${icons.check}<span>Je antwoord staat vast: <b>${LETTER[chosen]}</b>. Wacht op de anderen…</span></p>`;
+    else if (sending) state = '<p class="quiz-state" data-testid="quiz-state" data-state="sending">Versturen…</p>';
+    else if (!started) state = '<p class="quiz-state" data-testid="quiz-state" data-state="waiting">Luister… de klok start zodra de muziek speelt.</p>';
+    else if (left === 0) state = '<p class="quiz-state" data-testid="quiz-state" data-state="late">De tijd is om.</p>';
+    else state = '<p class="quiz-state" data-testid="quiz-state" data-state="open">Kies snel: hoe sneller goed, hoe meer punten.</p>';
+  }
+  return `<section class="quiz-q${own ? ' is-own' : ''}" data-testid="${testid}" data-type="${esc(q.type)}" data-round="${g.round}">
+    ${own ? '' : `<div class="quiz-top">
+      <p class="quiz-num" data-testid="quiz-num">Vraag ${g.round} van ${q.total}</p>
+      ${clockHtml(q, serverNow)}
+    </div>
+    <h2 class="quiz-prompt" data-testid="quiz-prompt">${esc(q.prompt)}</h2>`}
+    <div class="quiz-options${selectable ? '' : ' is-show'}">
+      ${q.options.map((o, i) => `${selectable ? `<button type="button" class="quiz-opt${chosen === i ? ' is-chosen' : ''}" data-action="quiz-pick" data-choice="${i}" data-testid="quiz-option-${i}" ${open ? '' : 'disabled'} aria-pressed="${chosen === i}">` : `<div class="quiz-opt" data-testid="quiz-show-option-${i}">`}
+        <span class="quiz-letter" aria-hidden="true">${LETTER[i]}</span><span class="quiz-text">${esc(o)}</span>${selectable ? '</button>' : '</div>'}`).join('')}
+    </div>
+    ${own ? '' : `<p class="quiz-answered muted" data-testid="quiz-answered" data-done="${q.answered}" data-total="${q.playing}">${q.answered} van ${q.playing} ${q.playing === 1 ? 'heeft' : 'hebben'} geantwoord</p>`}
+    ${state}
+  </section>`;
+}
+
+/** Who climbed this question (only the climbers: the screen stays calm). */
+function riseHtml(r) {
+  if (r.prevRank == null || r.prevRank <= r.rank) return '';
+  return `<small class="quiz-rise is-up" data-testid="quiz-rise" title="${r.prevRank - r.rank} ${r.prevRank - r.rank === 1 ? 'plek' : 'plekken'} gestegen">▲ ${r.prevRank - r.rank}</small>`;
+}
+
+/** Ranking with shared places ("2." twice when equal). */
+export function quizRankingHtml(view, { limit = Infinity, testid = 'quiz-ranking', points = true } = {}) {
+  const list = (view.game.quiz.ranking || []).slice(0, limit);
+  const me = view.you?.id;
+  return `<ol class="quiz-rank" data-testid="${testid}">
+    ${list.map((r) => `<li class="${r.id === me ? 'is-you' : ''}" data-name="${esc(r.name)}" data-rank="${r.rank}" data-score="${r.score}">
+      <span class="quiz-rank-place">${r.rank}.</span><span class="quiz-rank-name">${esc(r.name)}${r.id === me ? ' <small>(jij)</small>' : ''}</span>
+      ${riseHtml(r)}${points && r.points ? `<small class="quiz-rank-plus">+${r.points}</small>` : ''}<b>${r.score}</b></li>`).join('')}
+  </ol>`;
+}
+
+/** After a question: the right answer, how many chose what, the own result (on a phone that plays). */
+export function quizRevealHtml(view, { host = false, onlyMine = false } = {}) {
+  const g = view.game;
+  const q = g.quiz;
+  const rv = q.reveal;
+  if (!rv) return '';
+  const max = Math.max(1, ...rv.counts);
+  const mine = rv.mine;
+  let own = '';
+  if (mine) {
+    const cls = mine.none ? 'is-none' : mine.correct ? 'is-good' : 'is-bad';
+    const text = mine.none ? 'Geen antwoord: 0 punten' : mine.correct ? `Goed! +${mine.points} punten` : 'Helaas, fout: 0 punten';
+    own = `<div class="result room-result ${cls}" data-testid="quiz-my-result" data-correct="${mine.none ? 'none' : mine.correct}" data-points="${mine.points}">
+      ${mine.correct ? `<span class="result-icon">${icons.check}</span>` : !mine.none ? `<span class="result-icon">${icons.cross}</span>` : ''}<span class="result-text">${esc(text)}</span></div>
+      <p class="result-explain" data-testid="quiz-my-rank" data-rank="${mine.rank}">Je staat <b>${mine.rank}e</b>${mine.prevRank && mine.prevRank > mine.rank ? ` (was ${mine.prevRank}e)` : ''} met ${plural(g.mine?.score ?? 0, 'punt', 'punten')}.</p>`;
+  }
+  if (onlyMine) return own;
+  return `${own}
+    <section class="quiz-reveal" data-testid="quiz-reveal">
+      <p class="quiz-num">Vraag ${g.round} van ${q.total} · ${esc(q.prompt)}</p>
+      <p class="quiz-correct" data-testid="quiz-correct" data-answer="${rv.answer}"><span class="quiz-letter">${LETTER[rv.answer]}</span><b>${esc(q.options[rv.answer])}</b></p>
+      ${g.reveal?.song ? `<p class="quiz-song" data-testid="quiz-song">${esc(g.reveal.song.artist)} · ${esc(g.reveal.song.title)} · ${esc(g.reveal.song.year)}</p>` : ''}
+      <ul class="quiz-dist" aria-label="Zoveel spelers kozen elk antwoord">
+        ${q.options.map((o, i) => `<li class="${i === rv.answer ? 'is-right' : ''}${mine && mine.choice === i ? ' is-mine' : ''}" data-testid="quiz-count-${i}" data-count="${rv.counts[i]}">
+          <span class="quiz-letter">${LETTER[i]}</span><span class="quiz-dist-text">${esc(o)}</span>
+          <span class="quiz-dist-bar" aria-hidden="true"><i style="width:${Math.round((rv.counts[i] / max) * 100)}%"></i></span><b>${rv.counts[i]}</b></li>`).join('')}
+      </ul>
+    </section>
+    <h2 class="room-h">Tussenstand</h2>
+    ${quizRankingHtml(view, { limit: host ? 6 : Infinity })}`;
+}
+
+/** The end: podium for the top three (shared places together) and the whole ranking. */
+export function quizPodiumHtml(view) {
+  const list = view.game.quiz.ranking || [];
+  const me = list.find((r) => r.id === view.you?.id);
+  const steps = [2, 1, 3].map((place) => {
+    const who = list.filter((r) => r.rank === place);
+    return `<div class="podium-step is-p${place}" data-testid="quiz-podium-${place}" data-names="${esc(who.map((r) => r.name).join('|'))}">
+      <span class="podium-names">${who.length ? who.map((r) => `<b>${esc(r.name)}</b><small>${r.score}</small>`).join('') : '<small>—</small>'}</span>
+      <span class="podium-block">${place}</span></div>`;
+  }).join('');
+  const w = view.game.winners;
+  return `<div class="winner quiz-end" data-testid="quiz-end">
+      <span class="winner-trophy">${icons.trophy}</span>
+      <h2 class="winner-name" data-testid="room-winner-name">${w.length === 1 ? `${esc(w[0])} wint de quiz!` : `Gedeelde winst: ${w.map(esc).join(' & ')}`}</h2>
+      ${me ? `<p class="room-you-won" data-testid="quiz-my-place" data-rank="${me.rank}">Jij bent ${me.rank}e met ${plural(me.score, 'punt', 'punten')}.</p>` : ''}
+    </div>
+    <div class="podium" data-testid="quiz-podium">${steps}</div>
+    <h2 class="room-h">Eindstand</h2>
+    ${quizRankingHtml(view, { testid: 'quiz-final-ranking', points: false })}`;
 }

@@ -21,6 +21,9 @@ export function storedRoom() {
   return G.isValidRoom(r) && isValidCode(r.code) ? r : null;
 }
 
+/** The Quiz needs the room server (its clock): without one it is Bingo. */
+const noQuiz = (s) => (s?.game === 'quiz' ? { ...s, game: 'bingo' } : s);
+
 export function createHostSession() {
   let room = storedRoom();
   let transport = null;
@@ -219,13 +222,13 @@ export function createHostSession() {
       room = G.createRoom({
         code: makeFreshCode(tried),
         host: hostPlays ? { id: hostId(), name: hostName || 'Spelleider' } : null,
-        settings: store.get('timetunesr.multiSettings.v1', {}) || {},
+        settings: noQuiz(store.get('timetunesr.multiSettings.v1', {}) || {}),
       });
       changed();
       openTransport();
     },
     setSettings(patch) {
-      room = G.setSettings(room, patch);
+      room = G.setSettings(room, noQuiz(patch));
       store.set('timetunesr.multiSettings.v1', room.settings);
       changed();
     },

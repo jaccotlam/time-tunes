@@ -3,18 +3,24 @@
 //
 // Rhythm of a round: a song plays -> every player answers on their own phone
 // ('answering') -> the host reveals ('revealed') -> next song, or the winner screen ('won').
-// Two games: Bingo (claim one open square per song, or pass) and Tijdlijn (place the song
-// in your own timeline). Players who complete a line / reach the goal in the same round
+// Three games: Bingo (claim one open square per song, or pass), Tijdlijn (place the song
+// in your own timeline) and Quiz (four answers per song, speed counts; room server only,
+// the rules in quiz.js). Players who complete a line / reach the goal in the same round
 // share the win. Reuses the rules of logic.js and bingo.js.
+// The Quiz runs on a clock: its transitions take `now` (server time, ms).
 import { seededRandom, shuffle, isCorrectPlacement, correctSlots, DEFAULT_GOAL } from '../logic.js';
 import {
   generateCard, cardSignature, checkSquare, parseYearGuess, findBingo, markCount, bestLine,
   SQUARES, SIZES, DEFAULT_SIZE,
 } from '../bingo.js';
 import { matchArtist, matchTitle } from './match.js';
+import {
+  normalizeQuizSettings, quizTypesFor, questionTypes, makeQuestion, quizPoints, quizRanks, questionRand,
+  QUIZ_GRACE_MS, QUIZ_MIN_SONGS, LETTERS,
+} from './quiz.js';
 
 export const MAX_ROOM_PLAYERS = 12;
-export const GAMES = ['bingo', 'timeline'];
+export const GAMES = ['bingo', 'timeline', 'quiz'];
 export const MIN_GOAL = 3;
 export const MAX_GOAL = 30;
 /** Mark of a square stamped for free when somebody joins halfway (see lateStart). */
@@ -54,6 +60,7 @@ export function normalizeSettings(s = {}) {
     game: GAMES.includes(s.game) ? s.game : 'bingo',
     size: SIZES.includes(Number(s.size)) ? Number(s.size) : DEFAULT_SIZE,
     goal: Math.max(MIN_GOAL, Math.min(MAX_GOAL, Math.round(Number(s.goal) || DEFAULT_GOAL))),
+    ...normalizeQuizSettings(s),
   };
 }
 
@@ -124,10 +131,11 @@ export function playableCards(cards) {
  * Start a game with everybody in the room. `cards`: full deck cards (id, year, title, artist,
  * previewUrl ...); they are kept in the state so a reload can go on even when the deck changes.
  */
-export function startGame(room, { cards, seed = Date.now() }) {
+export function startGame(room, { cards, seed = Date.now(), now = Date.now() }) {
   if (!room.players.length) throw new GameError('empty', 'Er doet nog niemand mee.');
   const valid = playableCards(cards).map((c) => ({ ...c, id: String(c.id), year: Number(c.year) }));
   const { game: kind, size, goal } = room.settings;
+  if (kind === 'quiz') return startQuiz(room, valid, seed, now);
   if (valid.length < room.players.length + 2) throw new GameError('deck', 'Er staan te weinig kaarten in het deck.');
   const rand = seededRandom(seed >>> 0);
   const songs = Object.fromEntries(valid.map((c) => [c.id, c]));
@@ -156,9 +164,10 @@ export function startGame(room, { cards, seed = Date.now() }) {
 }
 
 /** Draw the next song. Ends the game when the songs run out. */
-export function startRound(room) {
+export function startRound(room, { now = Date.now() } = {}) {
   const g = room.game;
   if (!g) throw new GameError('nogame', 'Er is geen spel bezig.');
+  if (g.kind === 'quiz') return startQuizRound(room, now);
   if (!g.pile.length) return finishByPile(room);
   const pile = g.pile.slice();
   const current = pile.shift();
@@ -176,6 +185,11 @@ export function startRound(room) {
  */
 export function lateStart(room, pid) {
   const g = room.game;
+  if (g.kind === 'quiz') { // a late player starts at 0 points
+    const per = { ...g.per, [pid]: { score: 0, streak: 0, right: 0 } };
+    const prev = g.prev ? { ...g.prev, [pid]: { score: 0, streak: 0, right: 0 } } : g.prev;
+    return { ...room, game: { ...g, per, prev } };
+  }
   const others = room.players.filter((p) => p.id !== pid && g.per[p.id]);
   const per = { ...g.per };
   const joins = (g.joins || 0) + 1;
@@ -210,7 +224,7 @@ export function lateStart(room, pid) {
   return { ...room, game: { ...g, per, pile, prev, joins } };
 }
 
-const clonePer = (s) => (s.card ? { card: s.card, marks: s.marks.slice() } : { timeline: s.timeline.slice() });
+const clonePer = (s) => (s.card ? { card: s.card, marks: s.marks.slice() } : s.timeline ? { timeline: s.timeline.slice() } : { ...s });
 
 /**
  * Check and normalise an answer. Bingo: {pass: true} or {index, guess?, text?};
@@ -246,7 +260,8 @@ export function normalizeAnswer(room, pid, answer) {
 }
 
 /** Store (or replace) a player's answer for the running round. */
-export function submitAnswer(room, pid, answer) {
+export function submitAnswer(room, pid, answer, { now = Date.now() } = {}) {
+  if (room.game?.kind === 'quiz') return submitQuizAnswer(room, pid, answer, now);
   const a = normalizeAnswer(room, pid, answer);
   return { ...room, game: { ...room.game, answers: { ...room.game.answers, [pid]: a } } };
 }
@@ -254,6 +269,7 @@ export function submitAnswer(room, pid, answer) {
 /** Take an answer back (still allowed until the reveal). */
 export function withdrawAnswer(room, pid) {
   if (room.phase !== 'answering' || !room.game?.answers[pid]) return room;
+  if (room.game.kind === 'quiz') throw new GameError('final', 'In de quiz kun je je antwoord niet meer wijzigen.');
   const answers = { ...room.game.answers };
   delete answers[pid];
   return { ...room, game: { ...room.game, answers } };
@@ -291,9 +307,10 @@ export function judgeAnswer(game, pid, answer) {
 }
 
 /** The host reveals the song: every answer is judged and the cards/timelines updated. */
-export function reveal(room) {
+export function reveal(room, { now = Date.now() } = {}) {
   if (room.phase !== 'answering') throw new GameError('phase', 'Er valt niets te onthullen.');
   const g = room.game;
+  if (g.kind === 'quiz') return revealQuiz(room, now);
   const prev = Object.fromEntries(Object.entries(g.per).map(([id, s]) => [id, clonePer(s)]));
   const withPrev = { ...g, prev };
   const results = {};
@@ -326,6 +343,7 @@ function applyResults(room) {
 /** Host overrules one verdict (typed Artiest/Titel answers, or any other answer in doubt). */
 export function overrideResult(room, pid) {
   if (room.phase !== 'revealed') throw new GameError('phase', 'Je kunt alleen na de onthulling een oordeel omdraaien.');
+  if (room.game.kind === 'quiz') throw new GameError('answer', 'In de quiz beslist de klok: er valt niets om te draaien.');
   const r = room.game.results?.[pid];
   if (!r || r.none || r.pass) throw new GameError('answer', 'Deze speler heeft geen antwoord om te beoordelen.');
   const flipped = { ...r, correct: !r.correct, overridden: !r.overridden };
@@ -333,9 +351,10 @@ export function overrideResult(room, pid) {
 }
 
 /** After a reveal: to the winner screen when somebody won this round, otherwise the next song. */
-export function nextRound(room) {
+export function nextRound(room, { now = Date.now() } = {}) {
   if (room.phase !== 'revealed') throw new GameError('phase', 'Onthul eerst het nummer.');
   const g = room.game;
+  if (g.kind === 'quiz') return startQuizRound(room, now);
   if (g.roundWinners.length) {
     return { ...room, phase: 'won', game: { ...g, winners: g.roundWinners.slice(), endedBy: 'goal' } };
   }
@@ -345,7 +364,8 @@ export function nextRound(room) {
 export function scoreOf(game, pid) {
   const s = game?.per?.[pid];
   if (!s) return 0;
-  return s.card ? markCount(s.marks) : s.timeline.length;
+  if (s.card) return markCount(s.marks);
+  return s.timeline ? s.timeline.length : Number(s.score) || 0;
 }
 
 /** Songs ran out: highest score wins (ties share). */
@@ -354,7 +374,114 @@ export function finishByPile(room) {
   const ids = room.players.map((p) => p.id).filter((id) => g.per[id]);
   const best = Math.max(0, ...ids.map((id) => scoreOf(g, id)));
   const winners = ids.filter((id) => scoreOf(g, id) === best);
-  return { ...room, phase: 'won', game: { ...g, current: null, winners, endedBy: 'pile', answers: {} } };
+  return { ...room, phase: 'won', game: { ...g, current: null, winners, endedBy: g.kind === 'quiz' ? 'quiz' : 'pile', answers: {} } };
+}
+
+/* ---------- Quiz (room server only; the clock is the server's) ---------- */
+
+function startQuiz(room, valid, seed, now) {
+  const { questions, qtype, think } = room.settings;
+  if (valid.length < QUIZ_MIN_SONGS) throw new GameError('deck', `Voor de quiz zijn minstens ${QUIZ_MIN_SONGS} nummers nodig.`);
+  const rand = seededRandom(seed >>> 0);
+  const songs = Object.fromEntries(valid.map((c) => [c.id, c]));
+  const total = Math.min(questions, valid.length);
+  const pile = shuffle(valid.map((c) => c.id), rand).slice(0, total);
+  const available = quizTypesFor(valid);
+  const types = questionTypes(qtype, total, available, rand);
+  const per = Object.fromEntries(room.players.map((p) => [p.id, { score: 0, streak: 0, right: 0 }]));
+  const game = {
+    kind: 'quiz', seed: seed >>> 0, size: null, goal: null, songs, pile, per,
+    round: 0, current: null, answers: {}, results: null, prev: null,
+    roundWinners: [], winners: [], winLines: {}, endedBy: null, joins: 0,
+    quiz: { total, think, qtype, types, available, q: null, openedAt: null, startedAt: null, deadline: null, ranks: null, prevRanks: null, counts: null },
+  };
+  return startQuizRound({ ...room, game, phase: 'answering' }, now);
+}
+
+const quizScores = (g) => Object.fromEntries(Object.entries(g.per).map(([id, s]) => [id, s.score]));
+
+/** The next question (or the podium after the last one). The clock waits for the music (startQuizClock). */
+function startQuizRound(room, now) {
+  const g = room.game;
+  if (!g.pile.length) return finishByPile({ ...room, game: { ...g, quiz: { ...g.quiz, q: g.quiz.q, deadline: null } } });
+  const pile = g.pile.slice();
+  const current = pile.shift();
+  const round = g.round + 1;
+  const type = g.quiz.types[round - 1] || 'year';
+  const q = makeQuestion(Object.values(g.songs), g.songs[current], type, questionRand(g.seed, round));
+  const scores = quizScores(g);
+  // places before this question (to show who climbs); nothing to climb while everybody is level
+  const prevRanks = new Set(Object.values(scores)).size > 1 ? quizRanks(scores) : null;
+  return {
+    ...room,
+    phase: 'answering',
+    game: {
+      ...g, pile, current, round, answers: {}, results: null, prev: null, roundWinners: [], winLines: {},
+      quiz: { ...g.quiz, q, openedAt: now, startedAt: null, deadline: null, prevRanks, counts: null },
+    },
+  };
+}
+
+/** The music plays (or the safety net): the thinking time starts now. */
+export function startQuizClock(room, now = Date.now()) {
+  const g = room.game;
+  if (g?.kind !== 'quiz' || room.phase !== 'answering' || g.quiz.startedAt != null) return room;
+  return { ...room, game: { ...g, quiz: { ...g.quiz, startedAt: now, deadline: now + g.quiz.think * 1000 } } };
+}
+
+function submitQuizAnswer(room, pid, answer, now) {
+  const g = room.game;
+  if (room.phase !== 'answering') throw new GameError('late', 'Je kunt nu niet (meer) antwoorden.');
+  if (!g.per[pid]) throw new GameError('answer', 'Je doet niet mee aan deze quiz.');
+  if (g.quiz.startedAt == null) throw new GameError('wait', 'Even wachten: de klok start zodra de muziek speelt.');
+  if (now > g.quiz.deadline + QUIZ_GRACE_MS) throw new GameError('late', 'De tijd is om.');
+  if (g.answers[pid]) throw new GameError('final', 'Je hebt al geantwoord; in de quiz kun je dat niet wijzigen.');
+  const choice = Number(answer?.choice);
+  if (!Number.isInteger(choice) || choice < 0 || choice >= g.quiz.q.options.length) throw new GameError('answer', 'Kies een van de vier antwoorden.');
+  return { ...room, game: { ...g, answers: { ...g.answers, [pid]: { choice, at: Math.min(now, g.quiz.deadline) } } } };
+}
+
+/** Is the question over: everybody who takes part and is online has answered, or the time is up? */
+export function quizRoundOver(room, now, online = null) {
+  const g = room.game;
+  if (g?.kind !== 'quiz' || room.phase !== 'answering' || g.quiz.startedAt == null) return false;
+  if (now > g.quiz.deadline + QUIZ_GRACE_MS) return true;
+  const active = Object.keys(g.per).filter((id) => !online || online[id]);
+  return active.length > 0 && active.every((id) => g.answers[id]);
+}
+
+/** When the server must look at the question again (clock start safety net, deadline), or null. */
+export function quizNextEvent(room, fallbackMs) {
+  const g = room.game;
+  if (g?.kind !== 'quiz' || room.phase !== 'answering') return null;
+  if (g.quiz.startedAt == null) return (g.quiz.openedAt || 0) + fallbackMs;
+  return g.quiz.deadline + QUIZ_GRACE_MS + 1;
+}
+
+function revealQuiz(room, now) {
+  const g = room.game;
+  const q = g.quiz.q;
+  const started = g.quiz.startedAt ?? now;
+  const prev = Object.fromEntries(Object.entries(g.per).map(([id, s]) => [id, { ...s }]));
+  const per = {};
+  const results = {};
+  const counts = q.options.map(() => 0);
+  for (const [id, s] of Object.entries(g.per)) {
+    const a = g.answers[id];
+    if (!a) { results[id] = { none: true, correct: false, points: 0 }; per[id] = { ...s, streak: 0 }; continue; }
+    counts[a.choice]++;
+    const correct = a.choice === q.answer;
+    const ms = Math.max(0, a.at - started);
+    const points = correct ? quizPoints(ms, g.quiz.think, s.streak) : 0;
+    results[id] = { choice: a.choice, correct, points, ms };
+    per[id] = { score: s.score + points, streak: correct ? s.streak + 1 : 0, right: s.right + (correct ? 1 : 0) };
+  }
+  const ranks = quizRanks(Object.fromEntries(Object.entries(per).map(([id, s]) => [id, s.score])));
+  return {
+    ...room,
+    phase: 'revealed',
+    game: { ...g, per, prev, results, roundWinners: [], quiz: { ...g.quiz, ranks, counts, revealedAt: now } },
+  };
 }
 
 /** Same players, new game (new cards / timelines). */
@@ -381,6 +508,7 @@ export function standings(room) {
 export function describeAnswer(game, pid, answer, { forOwner = true } = {}) {
   if (!answer) return 'geen antwoord';
   if (answer.pass) return 'gepast';
+  if (game.kind === 'quiz') return answer.choice != null ? `${LETTERS[answer.choice]}: ${game.quiz?.q?.options?.[answer.choice] ?? '?'}` : 'geen antwoord';
   if (game.kind === 'bingo') {
     const mine = game.prev?.[pid] || game.per[pid];
     const key = mine?.card[answer.index];
@@ -403,6 +531,12 @@ export function isValidRoom(r) {
   if (!g || !GAMES.includes(g.kind) || !g.songs || !Array.isArray(g.pile) || !g.per) return false;
   if ((r.phase === 'answering' || r.phase === 'revealed') && !g.songs[g.current]) return false;
   if (r.phase === 'revealed' && (!g.results || !g.prev)) return false;
+  if (g.kind === 'quiz') {
+    const q = g.quiz;
+    if (!q || !Number.isInteger(q.total) || !Number.isFinite(q.think) || !Array.isArray(q.types)) return false;
+    if ((r.phase === 'answering' || r.phase === 'revealed') && (!q.q || !Array.isArray(q.q.options) || !Number.isInteger(q.q.answer))) return false;
+    return Object.values(g.per).every((s) => s && Number.isFinite(s.score) && Number.isFinite(s.streak));
+  }
   return Object.values(g.per).every((s) => (g.kind === 'bingo'
     ? Array.isArray(s.card) && Array.isArray(s.marks) && s.card.length === g.size * g.size && s.card.every((k) => SQUARES[k])
     : Array.isArray(s.timeline) && s.timeline.every((id) => g.songs[id])));

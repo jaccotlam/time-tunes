@@ -3,6 +3,8 @@
 // address, like https://time-tunes.jaccotlam.workers.dev. Room, a player, one round, then
 // wrangler is stopped and started again: the room comes back from Durable Object storage
 // (the spelleider's backup is deleted first, so it can not be a restore from the phone).
+// Then a short Quiz: a question closed by the server's timer (the Durable Object alarm) and a
+// restart in the middle of a question (same question, the clock starts again with the music).
 // Not part of `npm run test:e2e` (needs the workerd binary); run: npm run test:e2e:cf
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -10,6 +12,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { launch, assert, ROOT } from './helpers.mjs';
 import { phone, createRoom, joinRoom, waitForPlayers, serverHost } from './multi-helpers.mjs';
+import { installFakeItunes } from './fake-itunes.mjs';
+import { SERVER_PROTOCOL_VERSION } from '../../app/js/multi/server-protocol.js';
 
 const PORT = 8790 + Math.floor(Math.random() * 100);
 const URL_ = `http://127.0.0.1:${PORT}`;
@@ -42,7 +46,7 @@ export default async function run() {
   const local = { kind: 'server', url: URL_ };
   try {
     const h = await (await fetch(`${URL_}/health`)).json();
-    assert(h.ok && h.v === 1, 'Worker: /health answers');
+    assert(h.ok && h.v === SERVER_PROTOCOL_VERSION, `Worker: /health answers (protocol ${h.v})`);
     const page = await (await fetch(`${URL_}/`)).text();
     assert(/<html/i.test(page) && /TimeTunesr/.test(page), 'Worker: the app page loads from the assets');
     assert((await fetch(`${URL_}/js/multi/game.js`)).ok, 'Worker: app files are served');
@@ -88,6 +92,43 @@ export default async function run() {
     await H.getByTestId('room-reveal').click();
     await P.locator('[data-view="revealed"]').first().waitFor({ timeout: 20000 });
     assert(true, 'the game goes on after the restart');
+
+    // ---------- Quiz: the timer (Durable Object alarm) closes a question; restart mid-question ----------
+    const qh = await phone(browser, local, { seed: 7 });
+    await installFakeItunes(qh.context);
+    const QH = qh.page;
+    await QH.goto(`${URL_}/#/spelleider`);
+    const qcode = await createRoom(QH);
+    const qp = await phone(browser, local);
+    await installFakeItunes(qp.context);
+    const QP = qp.page;
+    await joinRoom(QP, `${URL_}/`, qcode, 'Quinn');
+    await waitForPlayers(QH, 1);
+    await QH.getByTestId('room-game-quiz').check();
+    await QH.getByTestId('room-quiz-time-15').check();
+    await QH.locator('[data-testid="room-quiz-time-15"]:checked').waitFor();
+    await QH.getByTestId('room-start').click();
+    const qround = async (r) => QP.waitForFunction((n) => { const v = window.__ttRoom?.session?.view; return v?.phase === 'answering' && v.game.round === n && v.game.quiz.deadline; }, r, { timeout: 30000 });
+    await qround(1);
+    await QP.getByTestId('quiz-option-0').click();
+    await QP.locator('[data-view="revealed"]').first().waitFor({ timeout: 15000 });
+    assert(true, 'quiz on Cloudflare: the only player answered, the question closes at once');
+    await QH.getByTestId('room-next').click();
+    await qround(2);
+    const t0 = Date.now();
+    await QP.locator('[data-view="revealed"]').first().waitFor({ timeout: 40000 });
+    assert(Date.now() - t0 > 10000 && (await QP.evaluate(() => window.__ttRoom.session.view.game.quiz.reveal.mine.none)), `nobody answered: the Durable Object alarm closed the question after ${Math.round((Date.now() - t0) / 1000)} s`);
+    await QH.getByTestId('room-next').click();
+    await qround(3);
+    await QH.evaluate(() => localStorage.removeItem('timetunesr.multiServerBackup.v1'));
+    await stopWrangler(wr);
+    wr = await startWrangler(persist);
+    await QP.waitForFunction(() => { const s = window.__ttRoom.session; return s.status === 'online' && s.meta && s.view?.game?.round === 3 && s.view.phase === 'answering' && s.view.game.quiz.deadline; }, null, { timeout: 60000 });
+    assert(true, 'after the restart: same question 3, the clock runs again (the music phone said so)');
+    await QP.getByTestId('quiz-option-1').click();
+    await QP.locator('[data-view="revealed"]').first().waitFor({ timeout: 15000 });
+    assert((await QP.evaluate(() => window.__ttRoom.session.view.game.round)) === 3, 'question 3 answered and revealed after the restart');
+    assert(QH.errors.length === 0 && QP.errors.length === 0, `no page errors in the quiz (${[...QH.errors, ...QP.errors].join('; ')})`);
     assert(H.errors.length === 0 && P.errors.length === 0, `no page errors (${[...H.errors, ...P.errors].join('; ')})`);
   } finally {
     await browser.close();

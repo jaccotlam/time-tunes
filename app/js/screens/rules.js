@@ -65,6 +65,18 @@ export function render(root) {
         </ol>
       </section>
 
+      <section class="rule rule-multi" data-testid="rules-quiz">
+        <h2><span class="rule-num">4</span>Quiz</h2>
+        <p>Een muziekquiz voor een verjaardag of feestje, met ieder een eigen telefoon. De spelleider kiest de muziek (het ingebouwde deck of een eigen playlist), het aantal vragen, de soort vragen en de bedenktijd.</p>
+        <ol>
+          <li>Het nummer speelt bij de spelleider. Op elke telefoon staat dezelfde vraag met vier antwoorden: <em>uit welk jaar</em>, <em>wie is de artiest</em> of <em>hoe heet dit nummer</em>.</li>
+          <li>De klok start zodra de muziek speelt. Je kiest één antwoord; wijzigen kan niet.</li>
+          <li>Goed is 500 punten plus tot 500 extra voor snelheid: hoe sneller, hoe meer. Meerdere goede antwoorden achter elkaar geven een kleine bonus. Fout of geen antwoord: 0 punten.</li>
+          <li>Heeft iedereen geantwoord of is de tijd om, dan volgt het antwoord met de tussenstand. Na de laatste vraag staan de beste drie op het podium; gelijke punten delen de plek.</li>
+        </ol>
+        <p>De quiz werkt alleen met de kamerserver (die houdt de klok bij). Wie later instapt, begint op 0.</p>
+      </section>
+
       <section class="rule rule-tips">
         <h2><span class="rule-num">★</span>Tips voor een feestje</h2>
         <ul>

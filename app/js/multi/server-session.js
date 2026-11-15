@@ -389,6 +389,7 @@ export function createServerClientSession({ code, name }) {
   let notice = null;
   let pendingAnswer = null;
   let lastSent = null; // { round, answer }: resent when a restarted server lost it
+  let clock = 0; // server time - this phone's time (Quiz countdown)
   const listeners = new Set();
   const received = [];
   const emit = () => { for (const fn of listeners) { try { fn(api); } catch (e) { console.error(e); } } };
@@ -421,11 +422,13 @@ export function createServerClientSession({ code, name }) {
         if (m.t === 'state' && m.view) {
           view = m.view;
           meta = m.meta || null;
+          if (Number.isFinite(meta?.now)) clock = meta.now - Date.now();
           const g = view.game;
-          if (pendingAnswer && (!g || view.phase !== 'answering' || g.round !== pendingAnswer.round || g.answer)) pendingAnswer = null;
-          else if (pendingAnswer) link.send({ t: 'answer', round: pendingAnswer.round, answer: pendingAnswer.answer });
+          const quiz = g?.kind === 'quiz'; // one answer, sent once: never repeated
+          if (pendingAnswer && (!g || view.phase !== 'answering' || g.round !== pendingAnswer.round || g.answer || g.quiz?.choice != null)) pendingAnswer = null;
+          else if (pendingAnswer && !quiz) link.send({ t: 'answer', round: pendingAnswer.round, answer: pendingAnswer.answer });
           // a restarted server may have lost this round's answer: give it again
-          if (!pendingAnswer && lastSent && g && view.phase === 'answering' && g.round === lastSent.round && !g.answer && g.mine) {
+          if (!quiz && !pendingAnswer && lastSent && g && view.phase === 'answering' && g.round === lastSent.round && !g.answer && g.mine) {
             link.send({ t: 'answer', round: lastSent.round, answer: lastSent.answer });
             lastSent = null;
           }
@@ -455,6 +458,8 @@ export function createServerClientSession({ code, name }) {
     get status() { return error ? 'closed' : link.status; },
     get error() { return error; },
     get pending() { return pendingAnswer; },
+    /** The server's clock now (ms), corrected for this phone's clock. */
+    serverNow: () => Date.now() + clock,
     get received() { return received; },
     get diag() { return link.diag; },
     get wasInRoom() { return !!tokenFor(code, id); },
@@ -502,6 +507,7 @@ export function createServerHostSession() {
   let notice = null;
   let error = null;
   let creating = null; // { hostPlays, hostName } while a new room is being made
+  let clock = 0; // server time - this phone's time (Quiz countdown)
   let lostLead = false;
   let closing = false;
   let offLifecycle = null;
@@ -574,6 +580,7 @@ export function createServerHostSession() {
           }
           if (m.t === 'state') {
             st = m;
+            if (Number.isFinite(m.meta?.now)) clock = m.meta.now - Date.now();
             if (!m.lead) lostLead = true; // a player who led and handed it back
             emit();
           }
@@ -645,6 +652,9 @@ export function createServerHostSession() {
       send({ t: 'answer', round: g.round, answer });
     },
     reveal() { send({ t: 'reveal' }); },
+    /** Quiz: the song plays on this phone, the thinking time may start. */
+    quizPlaying(round) { return !!link?.send({ t: 'playing', round }); },
+    serverNow: () => Date.now() + clock,
     override(pid) { send({ t: 'override', pid }); },
     next() { send({ t: 'next' }); },
     toLobby() { send({ t: 'lobby' }); },

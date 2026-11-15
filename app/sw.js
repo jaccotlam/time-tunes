@@ -65,6 +65,7 @@ const SHELL = [
   'vendor/peerjs.min.js',
   'js/multi/server-protocol.js',
   'js/multi/server-session.js',
+  'js/multi/quiz.js',
 ];
 const NETWORK_TIMEOUT_MS = 4000;
 

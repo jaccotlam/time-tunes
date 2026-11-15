@@ -11,6 +11,7 @@ import {
   patch, connBadge, playersHtml, standingsHtml, answerPanelHtml, answerController, myResultHtml, songHtml,
   roundResultsHtml, winnerHtml, confettiHtml, viewBingoCard, viewTimeline, gameName,
   keepAwake, diagHtml, diagKey, diagVisible, leaderAwayHtml,
+  quizQuestionHtml, quizRevealHtml, quizPodiumHtml, quizLeft, tickQuizClocks, quizSettingsText,
 } from './room-ui.js';
 
 export const name = 'room-player';
@@ -118,9 +119,15 @@ export function render(root, { params, navigate }) {
     region('status', JSON.stringify([st, vn, session?.error?.code, extraKey]), () => (session && !session.error ? statusHtml(st, away, showDiag) : ''));
     region('players', JSON.stringify([vn, v?.players, v?.you?.id]), () => (v && !['join', 'error', 'connecting'].includes(vn) ? `<h2 class="room-h">Spelers</h2>${playersHtml(v)}` : ''));
     const build = { join: joinHtml, connecting: connectingHtml, error: errorHtml, lobby: lobbyHtml, answering: answeringHtml, revealed: revealedHtml, won: wonHtml }[vn];
-    const mainKey = vn === 'answering' ? `a|${ctl.key()}|${!!session.pending}` : JSON.stringify([vn, joinError, v?.game, v?.settings, v?.you, session?.error, st === 'notfound', vn === 'connecting' && session?.diag ? [st, diagKey(session.diag)] : '']);
+    const quiz = v?.game?.kind === 'quiz';
+    const now = serverNow();
+    const mainKey = vn === 'answering' && quiz
+      ? JSON.stringify(['q', v.game.round, v.game.quiz.options, v.game.quiz.choice, !!v.game.quiz.deadline, quizLeft(v.game.quiz, now) > 0, !!session.pending, v.game.quiz.answered, !!v.game.mine])
+      : vn === 'answering' ? `a|${ctl.key()}|${!!session.pending}` : JSON.stringify([vn, joinError, v?.game, v?.settings, v?.you, session?.error, st === 'notfound', vn === 'connecting' && session?.diag ? [st, diagKey(session.diag)] : '']);
     region('main', mainKey, build);
   }
+
+  function serverNow() { return session?.serverNow ? session.serverNow() : Date.now(); }
 
   function statusHtml(st, away, showDiag) {
     let out = connBadge(st);
@@ -210,18 +217,24 @@ export function render(root, { params, navigate }) {
     return `<div class="room-wait" data-testid="room-wait">
       <span class="room-check" aria-hidden="true">${icons.check}</span>
       <h2>Je doet mee, ${esc(v.you?.name || '')}!</h2>
-      <p class="muted">Wacht tot de spelleider het spel start. Gekozen spel: <b>${esc(gameName(v.settings.game))}</b>${v.settings.game === 'bingo' ? ` (${v.settings.size}×${v.settings.size})` : ` (doel ${v.settings.goal} kaarten)`}.</p>
+      <p class="muted">Wacht tot de spelleider het spel start. Gekozen spel: <b>${esc(gameName(v.settings.game))}</b>${v.settings.game === 'bingo' ? ` (${v.settings.size}×${v.settings.size})` : v.settings.game === 'quiz' ? ` (${esc(quizSettingsText(v.settings))})` : ` (doel ${v.settings.goal} kaarten)`}.</p>
       <p class="muted small">Je scherm blijft aan zolang je in de kamer bent (als je telefoon dat toestaat). Valt hij toch op slot, dan kom je vanzelf terug in het spel.</p>
     </div>`;
   }
 
   function roundTitle(v) {
     const g = v.game;
+    if (g.kind === 'quiz') return `<p class="room-round" data-testid="room-round"><b>Quiz</b> · vraag ${g.round} van ${g.quiz.total}${g.mine ? ` · <span data-testid="quiz-my-score">${g.mine.score} punten</span>` : ''}</p>`;
     return `<p class="room-round" data-testid="room-round"><b>${esc(gameName(g.kind))}</b> · ronde ${g.round}${g.kind === 'timeline' ? ` · doel ${g.goal}` : ''}</p>`;
   }
 
   function answeringHtml() {
     const v = session.view;
+    if (v.game.kind === 'quiz') {
+      return `${roundTitle(v)}
+      <div class="listen-hint" data-testid="listen-hint">${icons.music}<span>Luister naar de muziek bij de spelleider.</span></div>
+      ${quizQuestionHtml(v, { selectable: true, serverNow: serverNow(), sending: !!session.pending })}`;
+    }
     return `${roundTitle(v)}
       <div class="listen-hint" data-testid="listen-hint">${icons.music}<span>Luister naar de muziek bij de spelleider.</span></div>
       ${answerPanelHtml(v, ctl.choice, { sending: !!session.pending })}`;
@@ -241,6 +254,10 @@ export function render(root, { params, navigate }) {
 
   function revealedHtml() {
     const v = session.view;
+    if (v.game.kind === 'quiz') {
+      return `${roundTitle(v)}${quizRevealHtml(v)}
+      <p class="muted center" data-testid="room-next-wait">${v.game.quiz.reveal?.last ? 'Dat was de laatste vraag. Zo komt het podium…' : 'Wacht op de volgende vraag…'}</p>`;
+    }
     const rw = v.game.reveal?.roundWinners || [];
     return `${roundTitle(v)}
       ${myResultHtml(v)}
@@ -256,6 +273,7 @@ export function render(root, { params, navigate }) {
 
   function wonHtml() {
     const v = session.view;
+    if (v.game.kind === 'quiz') return `${confettiHtml()}${quizPodiumHtml(v)}<p class="muted center">Wacht tot de spelleider een nieuwe quiz start.</p>`;
     const me = v.you && v.game.winnerIds.includes(v.you.id);
     return `${confettiHtml()}
       ${winnerHtml(v)}
@@ -282,7 +300,12 @@ export function render(root, { params, navigate }) {
   }
 
   function onClick(e) {
-    if (session?.view && ctl.onClick(e)) return;
+    const pick = e.target.closest('[data-action="quiz-pick"]');
+    if (pick && root.contains(pick)) {
+      if (!pick.disabled && session?.view?.game?.kind === 'quiz') { session.answer({ choice: Number(pick.dataset.choice) }); vibrate(20); }
+      return;
+    }
+    if (session?.view && session.view.game?.kind !== 'quiz' && ctl.onClick(e)) return;
     const a = e.target.closest('[data-action]');
     if (!a || !root.contains(a)) return;
     switch (a.dataset.action) {
@@ -320,6 +343,11 @@ export function render(root, { params, navigate }) {
   window.__ttRoom = { get session() { return session; } };
   // connection steps and the leader-away countdown count seconds
   const ticker = viaServer ? setInterval(() => { if (session && !session.error && (session.status !== 'online' || leaderAway() != null)) draw(); }, 1000) : 0;
+  // the quiz clock runs on screen between server messages; when it runs out the buttons close
+  const quizTicker = viaServer ? setInterval(() => {
+    if (session?.view?.game?.kind !== 'quiz' || session.view.phase !== 'answering') return;
+    if (tickQuizClocks(root, serverNow())) draw();
+  }, 250) : 0;
 
   return () => {
     root.removeEventListener('submit', onSubmit);
@@ -328,6 +356,7 @@ export function render(root, { params, navigate }) {
     root.removeEventListener('keydown', ctl.onKeyDown);
     releaseAwake();
     clearInterval(ticker);
+    clearInterval(quizTicker);
     unsub?.();
     session?.destroy();
   };

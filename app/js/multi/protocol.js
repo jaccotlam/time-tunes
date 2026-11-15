@@ -9,6 +9,7 @@
 // judged on the host.
 import { SQUARES } from '../bingo.js';
 import { describeAnswer, scoreOf, FREE } from './game.js';
+import { PROMPTS } from './quiz.js';
 
 /** Bump when old and new apps can not understand each other any more. */
 export const PROTOCOL_VERSION = 1;
@@ -89,7 +90,12 @@ export function viewFor(room, pid, presence = {}) {
     winnerIds: room.phase === 'won' ? g.winners.slice() : [],
     endedBy: room.phase === 'won' ? g.endedBy : null,
   };
-  if (mineState) {
+  if (g.kind === 'quiz') {
+    game.quiz = quizView(room, pid, revealed);
+    if (mineState) game.mine = { score: mineState.score, streak: mineState.streak, right: mineState.right, rank: game.quiz.rankOf };
+    delete game.quiz.rankOf;
+  }
+  if (mineState && g.kind !== 'quiz') {
     if (g.kind === 'bingo') {
       game.mine = {
         card: mineState.card.slice(),
@@ -124,6 +130,58 @@ export function viewFor(room, pid, presence = {}) {
   return view;
 }
 
+/**
+ * The quiz part of a view: the question and its four answers (everybody may see those),
+ * the clock (server time), how many answered; which answer is right only after the reveal.
+ */
+function quizView(room, pid, revealed) {
+  const g = room.game;
+  const Q = g.quiz;
+  const q = Q.q;
+  const ids = room.players.map((p) => p.id).filter((id) => g.per[id]);
+  const scores = Object.fromEntries(ids.map((id) => [id, g.per[id].score]));
+  const rankNow = Object.fromEntries(ids.map((id) => [id, 1 + ids.filter((o) => scores[o] > scores[id]).length]));
+  const out = {
+    round: g.round,
+    total: Q.total,
+    think: Q.think,
+    qtype: Q.qtype,
+    onlyYears: !Q.available?.artist && !Q.available?.title,
+    type: q?.type || null,
+    prompt: q ? PROMPTS[q.type] : '',
+    options: q && room.phase !== 'won' ? q.options.slice() : [],
+    startedAt: room.phase === 'answering' ? Q.startedAt : null,
+    deadline: room.phase === 'answering' ? Q.deadline : null,
+    answered: room.phase === 'answering' ? ids.filter((id) => g.answers[id]).length : 0,
+    playing: ids.length,
+    choice: room.phase === 'answering' && g.answers[pid] ? g.answers[pid].choice : null,
+    reveal: null,
+    ranking: null,
+    rankOf: rankNow[pid] || null,
+  };
+  if (revealed || room.phase === 'won') {
+    out.ranking = room.players.filter((p) => g.per[p.id]).map((p) => ({
+      id: p.id,
+      name: p.name,
+      score: scores[p.id],
+      rank: rankNow[p.id],
+      prevRank: Q.prevRanks?.[p.id] ?? null,
+      points: room.phase === 'revealed' ? g.results?.[p.id]?.points || 0 : 0,
+      right: g.per[p.id].right || 0,
+    })).sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name));
+  }
+  if (revealed && room.phase === 'revealed' && q) {
+    const r = g.results?.[pid];
+    out.reveal = {
+      answer: q.answer,
+      counts: (Q.counts || q.options.map(() => 0)).slice(),
+      mine: r ? { choice: r.choice ?? null, correct: !!r.correct, none: !!r.none, points: r.points || 0, rank: rankNow[pid], prevRank: Q.prevRanks?.[pid] ?? null } : null,
+      last: g.round >= Q.total || !g.pile.length,
+    };
+  }
+  return out;
+}
+
 const nameOf = (room, id) => room.players.find((p) => p.id === id)?.name || '?';
 
 /** Reconstruct the given answer from a judged result (for describeAnswer). */
@@ -131,6 +189,7 @@ export function answerFromResult(r) {
   if (!r || r.none) return null;
   if (r.pass) return { pass: true };
   if (r.slot != null) return { slot: r.slot };
+  if (r.choice != null) return { choice: r.choice };
   return { index: r.index, guess: r.guess, text: r.text };
 }
 

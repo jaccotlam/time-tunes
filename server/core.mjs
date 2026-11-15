@@ -21,8 +21,16 @@ export function createRoomServer({ origins = DEFAULT_ORIGINS, now = Date.now, li
   let seq = 0;
 
   function makeHub(code) {
-    return new RoomHub(code, {
+    let timer = 0;
+    const hub = new RoomHub(code, {
         now,
+        // Quiz: look at the question again right when its clock says so
+        wake: (at) => {
+          clearTimeout(timer);
+          if (at == null) return;
+          timer = setTimeout(() => hub.tick(), Math.max(0, at - now()) + 5);
+          timer.unref?.();
+        },
         send: (connId, text) => { try { sockets.get(connId)?.socket.send(text); } catch { /* gone */ } },
         drop: (connId, c, reason) => {
           const s = sockets.get(connId);
@@ -31,6 +39,7 @@ export function createRoomServer({ origins = DEFAULT_ORIGINS, now = Date.now, li
           if (s) setTimeout(() => { try { s.socket.close(c, reason); } catch { /* ignore */ } }, 50);
         },
       });
+    return hub;
   }
 
   function hubFor(code) {

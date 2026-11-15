@@ -9,12 +9,18 @@
 //   save(snapshot | null)         (optional) persist the room (CF: Durable Object storage); null = deleted
 //   now()                         clock (tests use a fake one)
 //   lastSeen(connId)              (optional) extra "last heard" time (CF: auto-answered pings)
+//   wake(at | null)               (optional) call tick() at that time (Node: a timer; CF uses nextTick() for its alarm)
+// The Quiz runs on the server's clock: the thinking time starts at "playing" from the music phone
+// (or QUIZ_START_FALLBACK_MS after the question, as a safety net) and the question closes when
+// everybody online has answered, when the time is up (tick) or when the leader reveals.
 import * as G from '../app/js/multi/game.js';
 import { viewFor } from '../app/js/multi/protocol.js';
 import {
   SERVER_PROTOCOL_VERSION, TAKEOVER_MS, STALE_MS, PING_TEXT, PONG_TEXT, LEADER_TYPES, ID_RE, TOKEN_RE,
   parseClientMessage, cleanCards,
 } from '../app/js/multi/server-protocol.js';
+import { startQuizClock, quizRoundOver, quizNextEvent } from '../app/js/multi/game.js';
+import { QUIZ_START_FALLBACK_MS } from '../app/js/multi/quiz.js';
 import { sha256Hex } from './sha256.mjs';
 
 export const ROOM_IDLE_MS = 6 * 60 * 60 * 1000; // a room with no activity for 6 hours expires
@@ -51,6 +57,17 @@ export function validSnapshot(snap, code) {
   if (ids.length > G.MAX_ROOM_PLAYERS + 1 || !snap.members[snap.ownerId]) return false;
   if (!ids.every((id) => ID_RE.test(id) && /^[0-9a-f]{64}$/.test(snap.members[id]?.th || ''))) return false;
   return snap.room.players.every((p) => snap.members[p.id]);
+}
+
+/**
+ * After a server restart in the middle of a quiz question: the question starts again with
+ * the full thinking time once the music phone reports the music; everybody answers again
+ * (the clock of the old answers is gone, so their speed can not be judged fairly).
+ */
+export function restartQuizQuestion(room, now) {
+  const g = room?.game;
+  if (g?.kind !== 'quiz' || room.phase !== 'answering') return room;
+  return { ...room, game: { ...g, answers: {}, quiz: { ...g.quiz, openedAt: now, startedAt: null, deadline: null } } };
 }
 
 export class RoomHub {
@@ -112,7 +129,7 @@ export class RoomHub {
       leaderId: members[snap.leaderId] ? snap.leaderId : snap.ownerId,
       leaderAwaySince: t,
       members,
-      room: snap.room,
+      room: restartQuizQuestion(snap.room, t),
       restoredAt: t,
     };
     this.persist();
@@ -163,8 +180,18 @@ export class RoomHub {
         this.state.leaderAwaySince = this.now();
         this.persist();
       }
+      this.quizCheck(); // the question does not wait for somebody who dropped out
       this.changed();
     }
+  }
+
+  /** Quiz: close the question when everybody online has answered or the time is up. */
+  quizCheck() {
+    const s = this.state;
+    if (!s || s.room.game?.kind !== 'quiz') return false;
+    if (!quizRoundOver(s.room, this.now(), this.presence())) return false;
+    s.room = G.reveal(s.room, { now: this.now() });
+    return true;
   }
 
   online(mid) {
@@ -271,7 +298,11 @@ export class RoomHub {
     switch (m.t) {
       case 'answer':
         if (r.game && m.round !== r.game.round) return; // an answer for an earlier song
-        s.room = G.submitAnswer(r, mid, m.answer);
+        s.room = G.submitAnswer(r, mid, m.answer, { now: this.now() });
+        this.quizCheck();
+        break;
+      case 'playing':
+        if (r.game?.kind === 'quiz' && m.round === r.game.round) s.room = startQuizClock(r, this.now());
         break;
       case 'withdraw': s.room = G.withdrawAnswer(r, mid); break;
       case 'settings': s.room = G.setSettings(r, m.patch && typeof m.patch === 'object' ? m.patch : {}); break;
@@ -279,12 +310,13 @@ export class RoomHub {
         if (r.phase !== 'lobby' && r.phase !== 'won') throw new G.GameError('busy', 'Het spel is al bezig.');
         const cards = cleanCards(m.cards);
         const seed = Number.isInteger(m.seed) ? m.seed >>> 0 : (Math.random() * 2 ** 32) >>> 0;
-        s.room = r.phase === 'won' ? G.playAgain(r, { cards, seed }) : G.startGame(r, { cards, seed });
+        const now = this.now();
+        s.room = r.phase === 'won' ? G.playAgain(r, { cards, seed, now }) : G.startGame(r, { cards, seed, now });
         break;
       }
-      case 'reveal': s.room = G.reveal(r); break;
+      case 'reveal': s.room = G.reveal(r, { now: this.now() }); break;
       case 'override': s.room = G.overrideResult(r, String(m.pid || '')); break;
-      case 'next': s.room = G.nextRound(r); break;
+      case 'next': s.room = G.nextRound(r, { now: this.now() }); break;
       case 'lobby': s.room = G.backToLobby(r); break;
       case 'remove': {
         const pid = String(m.pid || '');
@@ -347,6 +379,7 @@ export class RoomHub {
   changed() {
     if (!this.state) return;
     this.persist();
+    this.deps.wake?.(quizNextEvent(this.state.room, QUIZ_START_FALLBACK_MS));
     if (this.dirty) return;
     this.dirty = true;
     queueMicrotask(() => { this.dirty = false; this.broadcast(); });
@@ -367,6 +400,7 @@ export class RoomHub {
       leaderAwayMs: leaderOnline ? 0 : Math.max(0, this.now() - (s.leaderAwaySince ?? this.now())),
       takeoverMs: TAKEOVER_MS,
       restored: !!s.restoredAt,
+      now: this.now(), // the server's clock, for the Quiz countdown
     };
   }
 
@@ -454,6 +488,14 @@ export class RoomHub {
     }
     const s = this.state;
     if (!s) return { expired: false, empty: true };
+    // Quiz: the safety net for the clock start, and the end of the thinking time
+    const g = s.room.game;
+    if (g?.kind === 'quiz' && s.room.phase === 'answering') {
+      let moved = false;
+      if (g.quiz.startedAt == null && t >= (g.quiz.openedAt || 0) + QUIZ_START_FALLBACK_MS) { s.room = startQuizClock(s.room, t); moved = true; }
+      if (this.quizCheck()) moved = true;
+      if (moved) this.changed();
+    }
     const limit = s.claimed ? ROOM_IDLE_MS : UNCLAIMED_MS;
     if (t - s.lastActive > limit) {
       this.shutdown('expired', 'Deze kamer is verlopen omdat er lang niet gespeeld is. Maak een nieuwe kamer.');
@@ -467,6 +509,8 @@ export class RoomHub {
   nextTick() {
     const s = this.state;
     if (!s) return null;
+    const quiz = quizNextEvent(s.room, QUIZ_START_FALLBACK_MS);
+    if (quiz != null) return Math.min(quiz, this.conns.size ? this.now() + 15000 : quiz);
     if (this.conns.size) return this.now() + 15000;
     return s.lastActive + (s.claimed ? ROOM_IDLE_MS : UNCLAIMED_MS) + 1000;
   }

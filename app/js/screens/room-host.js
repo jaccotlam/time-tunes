@@ -6,12 +6,14 @@ import { playableCards } from '../multi/game.js';
 import { createHostSession, storedRoom } from '../multi/host-session.js';
 import { usesServer, createServerHostSession, storedServerHost } from '../multi/server-session.js';
 import { DEFAULT_GOAL } from '../logic.js';
+import { QUIZ_COUNTS, QUIZ_TIMES, QUIZ_MIN_SONGS, quizTypesFor } from '../multi/quiz.js';
 import { icons, esc, toast, vibrate, store } from '../ui.js';
 import { playerViewHtml, mountPlayerView } from './playerview.js';
 import {
   patch, connBadge, playersHtml, standingsHtml, answerPanelHtml, answerController, myResultHtml, songHtml,
   roundResultsHtml, winnerHtml, confettiHtml, viewBingoCard, viewTimeline, gameName, qrSvg, roomLink,
   keepAwake, diagHtml, diagKey, diagVisible,
+  quizQuestionHtml, quizRevealHtml, quizPodiumHtml, quizLeft, tickQuizClocks,
 } from './room-ui.js';
 
 export const name = 'room-host';
@@ -29,6 +31,7 @@ export function render(root, { deck, navigate }) {
     draw();
   });
   let viewName = null;
+  let drawnKind = '';
   let unmountPv = null;
   let loadedFor = null; // "round:cardId" loaded in the hidden player
   let startedHere = false; // a round started by a tap on this page may autoplay
@@ -45,6 +48,12 @@ export function render(root, { deck, navigate }) {
   });
 
   const spectator = () => session.spectatorView();
+  /** A quiz is running (not the lobby). */
+  const inQuiz = () => session?.room?.game?.kind === 'quiz' && session.room.phase !== 'lobby';
+  const serverNow = () => (session?.serverNow ? session.serverNow() : Date.now());
+  const quizTypes = quizTypesFor(cards);
+  let reportedFor = { key: '', at: 0 }; // when this phone last told the server that the music plays
+  let quizSending = null; // round of an own quiz answer on its way
   /** Via the server: may this phone run the room (reveal, next ...)? */
   const leads = () => !viaServer || !!session.meta?.leader;
 
@@ -71,7 +80,7 @@ export function render(root, { deck, navigate }) {
       setup: '<div data-region="main"></div>',
       connecting: '<div data-region="main"></div>',
       lobby: `<div data-region="status"></div><div data-region="join"></div><div data-region="players"></div><div data-region="main"></div><div data-region="cta"></div>`,
-      answering: `<div data-region="status"></div>
+      answering: `<div data-region="status"></div><div data-region="quiz"></div>
         <div class="place-player" data-region="pv">${playerViewHtml({ compact: true })}</div>
         <div data-region="players"></div><div data-region="own"></div><div data-region="cta"></div>`,
       revealed: `<div data-region="status"></div><div data-region="main"></div>
@@ -79,7 +88,9 @@ export function render(root, { deck, navigate }) {
         <div data-region="own"></div><div data-region="players"></div><div data-region="cta"></div>`,
       won: '<div data-region="status"></div><div data-region="main"></div><div data-region="players"></div>',
     }[vn];
-    root.innerHTML = `<section class="screen screen-room screen-room-host view-${vn}" data-testid="screen-room-host" data-view="${vn}" data-code="${esc(code)}">
+    const quiz = r?.game?.kind === 'quiz' && vn !== 'lobby';
+    document.body.classList.toggle('tt-quiz', quiz); // wide screens: the quiz big enough to read from the couch
+    root.innerHTML = `<section class="screen screen-room screen-room-host view-${vn}${quiz ? ' is-quiz' : ''}" data-testid="screen-room-host" data-view="${vn}" data-code="${esc(code)}">
       <header class="topbar">
         <a class="icon-btn" href="#/" aria-label="Naar start" data-testid="back-home">${icons.home}</a>
         <h1 class="topbar-title">${r || vn === 'connecting' ? `Kamer <span class="room-code-inline" data-testid="room-code">${esc(code)}</span>` : 'Maak een kamer'}</h1>
@@ -119,7 +130,8 @@ export function render(root, { deck, navigate }) {
 
   function draw() {
     const vn = currentView();
-    if (vn !== viewName) { viewName = vn; skeleton(vn); window.scrollTo(0, 0); }
+    const kind = session.room?.game?.kind || '';
+    if (vn !== viewName || kind !== drawnKind) { viewName = vn; drawnKind = kind; skeleton(vn); window.scrollTo(0, 0); }
     syncAudio();
     ctl.sync();
     const r = session.room;
@@ -140,18 +152,47 @@ export function render(root, { deck, navigate }) {
     if (vn === 'lobby') {
       region('main', JSON.stringify([r.settings, r.players.length]), lobbyHtml);
       region('cta', JSON.stringify([r.players.length, r.settings, leads()]), () => (leads() ? lobbyCta() : ''));
+    } else if (vn === 'answering' && kind === 'quiz') {
+      const now = serverNow();
+      const q = sv.game.quiz;
+      region('quiz', JSON.stringify([sv.game.round, q.options, q.deadline, q.answered, q.playing]), () => quizQuestionHtml(sv, { serverNow: now }));
+      const hv = session.hostView();
+      const hq = hv?.game?.quiz;
+      if (quizSending != null && (hq?.choice != null || hv?.game?.round !== quizSending)) quizSending = null;
+      region('own', JSON.stringify([hv?.game?.round, hq?.choice, !!hq?.deadline, quizLeft(hq, now) > 0, !!hv?.game?.mine, quizSending]), () => (hv ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw antwoord, ${esc(hv.you.name)}</h2>${quizQuestionHtml(hv, { selectable: true, serverNow: now, sending: quizSending != null, testid: 'quiz-own-question', own: true })}</section>` : ''));
+      region('cta', JSON.stringify([sv.players, leads()]), () => (leads() ? revealCta(sv) : ''));
+      reportPlaying();
     } else if (vn === 'answering') {
       const hv = session.hostView();
       region('own', `${ctl.key()}`, () => (hv ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw antwoord, ${esc(hv.you.name)}</h2>${answerPanelHtml(hv, ctl.choice)}</section>` : ''));
       region('cta', JSON.stringify([sv.players, leads()]), () => (leads() ? revealCta(sv) : ''));
+    } else if (vn === 'revealed' && kind === 'quiz') {
+      region('main', JSON.stringify([sv.game.quiz, sv.game.round]), () => `${quizRevealHtml(sv, { host: true })}`);
+      const hv = session.hostView();
+      region('own', JSON.stringify([hv?.game?.quiz?.reveal, hv?.game?.mine]), () => (hv?.game?.quiz?.reveal?.mine ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw antwoord</h2>${quizRevealHtml(hv, { onlyMine: true })}</section>` : ''));
+      region('cta', JSON.stringify([sv.game.quiz.reveal?.last, leads()]), () => (leads() ? nextCta() : ''));
     } else if (vn === 'revealed') {
       region('main', JSON.stringify([r.game.results, r.game.round, sv.players]), () => revealedHtml(sv));
       const hv = session.hostView();
       region('own', JSON.stringify([hv?.game]), () => (hv?.game?.mine ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw ronde</h2>${myResultHtml(hv)}${ownCard(hv)}</section>` : ''));
       region('cta', JSON.stringify([r.game.roundWinners, left(r.game), leads()]), () => (leads() ? nextCta() : ''));
     } else if (vn === 'won') {
-      region('main', JSON.stringify([r.game.winners, sv.players, leads()]), () => wonHtml(sv));
+      region('main', JSON.stringify([r.game.winners, sv.players, leads(), sv.game.quiz?.ranking]), () => wonHtml(sv));
     }
+  }
+
+  /**
+   * Quiz: tell the server the song plays here, so the thinking time starts. Again (at most
+   * every 2 s) as long as the server's clock has not started, e.g. after a server restart.
+   */
+  function reportPlaying() {
+    const r = session.room;
+    const sv = spectator();
+    if (!leads() || r?.phase !== 'answering' || r.game?.kind !== 'quiz' || sv?.game?.quiz?.startedAt) return;
+    if (player.state.status !== 'playing') return;
+    const key = `${r.code}:${r.game.round}`;
+    if (reportedFor.key === key && Date.now() - reportedFor.at < 2000) return;
+    if (session.quizPlaying?.(r.game.round)) reportedFor = { key, at: Date.now() };
   }
 
   // ---------- pieces ----------
@@ -255,8 +296,11 @@ export function render(root, { deck, navigate }) {
         <div class="size-pick">
           ${opt('bingo', 'Bingo', 'eigen bingokaart, eerst een volle rij')}
           ${opt('timeline', 'Tijdlijn', 'eigen tijdlijn, eerst het doel')}
+          <label class="size-opt room-quiz-opt"><input type="radio" name="game" value="quiz" ${s.game === 'quiz' ? 'checked' : ''} ${viaServer ? '' : 'disabled'} data-testid="room-game-quiz">
+            <span class="size-box"><b>Quiz</b><small>vier antwoorden per nummer, snelheid telt</small></span></label>
         </div>
-        ${s.game === 'bingo' ? `<div class="size-pick room-sub">
+        ${!viaServer ? '<p class="muted small" data-testid="room-quiz-server-only">De quiz werkt alleen via de kamerserver (die houdt de klok bij), niet bij rechtstreeks verbinden.</p>' : ''}
+        ${s.game === 'quiz' ? quizSettingsHtml(s) : s.game === 'bingo' ? `<div class="size-pick room-sub">
           ${[[3, '3×3', 'snel potje'], [4, '4×4', 'standaard']].map(([n, t, sub]) => `<label class="size-opt"><input type="radio" name="size" value="${n}" ${s.size === n ? 'checked' : ''} data-testid="room-size-${n}"><span class="size-box"><b>${t}</b><small>${sub}</small></span></label>`).join('')}
         </div>` : `<div class="stepper room-sub">
           <button class="icon-btn" type="button" data-action="goal-minus" aria-label="Minder kaarten" data-testid="room-goal-minus">${icons.minus}</button>
@@ -267,10 +311,24 @@ export function render(root, { deck, navigate }) {
     </form>`;
   }
 
+  function quizSettingsHtml(s) {
+    const pick = (name, list, cur, label, testid) => `<div class="seg room-seg" role="radiogroup">${list.map((v) => `<label class="seg-opt"><input type="radio" name="${name}" value="${v}" ${String(cur) === String(v) ? 'checked' : ''} data-testid="${testid}-${v}"><span>${label(v)}</span></label>`).join('')}</div>`;
+    const types = { mix: 'Mix', year: 'Jaar', artist: 'Artiest', title: 'Titel' };
+    const max = Math.min(s.questions, cards.length);
+    const onlyYears = !quizTypes.artist || !quizTypes.title;
+    return `<div class="room-sub room-quiz-settings" data-testid="room-quiz-settings">
+      <p class="room-label">Aantal vragen</p>${pick('qcount', QUIZ_COUNTS, s.questions, (n) => `${n}`, 'room-quiz-count')}
+      <p class="room-label">Soort vragen</p>${pick('qtype', Object.keys(types), s.qtype, (k) => types[k], 'room-quiz-type')}
+      <p class="room-label">Bedenktijd</p>${pick('qtime', QUIZ_TIMES, s.think, (n) => `${n} s`, 'room-quiz-time')}
+      <p class="muted small" data-testid="room-quiz-summary">Muziek: <b>${esc(deck.name || 'TimeTunesr-deck')}</b>. ${max < s.questions ? `Er staan maar ${cards.length} nummers in, dus ${max} vragen.` : `${max} vragen.`} Goed = 500 punten plus tot 500 voor snelheid, en een kleine bonus voor een reeks goede antwoorden.</p>
+      ${onlyYears && s.qtype !== 'year' ? `<p class="warn small" data-testid="room-quiz-years-only">In deze muziek staan te weinig verschillende ${!quizTypes.artist ? 'artiesten' : 'titels'} voor vier antwoorden: die vragen worden jaarvragen.</p>` : ''}
+    </div>`;
+  }
+
   function lobbyCta() {
     const r = session.room;
     const n = r.players.length;
-    const ok = n >= 1 && cards.length >= n + 2;
+    const ok = n >= 1 && (r.settings.game === 'quiz' ? viaServer && cards.length >= QUIZ_MIN_SONGS : cards.length >= n + 2);
     return `<div class="sticky-cta">
       <button class="btn btn-primary btn-xl" type="button" data-action="start" data-testid="room-start" ${ok ? '' : 'disabled'}>${icons.play}<span>${n ? `Start ${esc(gameName(r.settings.game))} (${n} ${n === 1 ? 'speler' : 'spelers'})` : 'Wacht op spelers'}</span></button>
     </div>`;
@@ -322,6 +380,12 @@ export function render(root, { deck, navigate }) {
 
   function nextCta() {
     const g = session.room.game;
+    if (g.kind === 'quiz') {
+      const last = spectator()?.game?.quiz?.reveal?.last;
+      return `<div class="sticky-cta">
+      <button class="btn btn-primary btn-xl" type="button" data-action="next" data-testid="room-next">${last ? `${icons.trophy}<span>Naar het podium</span>` : `${icons.music}<span>Volgende vraag</span>`}</button>
+    </div>`;
+    }
     const win = g.roundWinners.length > 0;
     return `<div class="sticky-cta">
       <button class="btn btn-primary btn-xl" type="button" data-action="next" data-testid="room-next">${win ? `${icons.trophy}<span>Naar de uitslag</span>` : left(g) ? `${icons.music}<span>Volgend nummer</span>` : `${icons.trophy}<span>Nummers op: uitslag</span>`}</button>
@@ -329,11 +393,12 @@ export function render(root, { deck, navigate }) {
   }
 
   function wonHtml(sv) {
+    const quiz = sv.game.kind === 'quiz';
     return `${confettiHtml()}
-      ${winnerHtml(sv)}
-      ${standingsHtml(sv)}
+      ${quiz ? quizPodiumHtml(sv) : `${winnerHtml(sv)}
+      ${standingsHtml(sv)}`}
       ${leads() ? `<div class="stack">
-        <button class="btn btn-primary btn-xl" type="button" data-action="again" data-testid="room-again">${icons.restart}<span>Nog een potje</span></button>
+        <button class="btn btn-primary btn-xl" type="button" data-action="again" data-testid="room-again">${icons.restart}<span>${quiz ? 'Nog een quiz' : 'Nog een potje'}</span></button>
         <button class="btn btn-ghost" type="button" data-action="lobby" data-testid="room-to-lobby">${icons.users}<span>Ander spel kiezen</span></button>
       </div>` : ''}`;
   }
@@ -344,7 +409,18 @@ export function render(root, { deck, navigate }) {
   }
 
   function onClick(e) {
-    if (session.room?.phase === 'answering' && e.target.closest('[data-testid="host-own"]') && ctl.onClick(e)) return;
+    const pick = e.target.closest('[data-action="quiz-pick"]');
+    if (pick && root.contains(pick)) {
+      const g = session.room?.game;
+      if (!pick.disabled && g?.kind === 'quiz') {
+        quizSending = g.round;
+        guard(() => session.answer({ choice: Number(pick.dataset.choice) }));
+        vibrate(20);
+        draw();
+      }
+      return;
+    }
+    if (session.room?.phase === 'answering' && session.room.game?.kind !== 'quiz' && e.target.closest('[data-testid="host-own"]') && ctl.onClick(e)) return;
     const a = e.target.closest('[data-action]');
     if (!a || !root.contains(a)) return;
     const act = a.dataset.action;
@@ -396,6 +472,9 @@ export function render(root, { deck, navigate }) {
     const t = e.target;
     if (t.name === 'game') guard(() => session.setSettings({ game: t.value }));
     else if (t.name === 'size') guard(() => session.setSettings({ size: Number(t.value) }));
+    else if (t.name === 'qcount') guard(() => session.setSettings({ questions: Number(t.value) }));
+    else if (t.name === 'qtype') guard(() => session.setSettings({ qtype: t.value }));
+    else if (t.name === 'qtime') guard(() => session.setSettings({ think: Number(t.value) }));
   }
 
   function onSubmit(e) {
@@ -426,6 +505,13 @@ export function render(root, { deck, navigate }) {
   draw();
   // the connection steps count seconds while something is busy
   const ticker = viaServer ? setInterval(() => { if (session && (session.connecting || diagVisible(session.diag, session.status))) draw(); }, 1000) : 0;
+  // the quiz clock runs on screen between server messages; when it runs out the buttons close
+  const quizTicker = viaServer ? setInterval(() => {
+    if (!session || !inQuiz() || session.room.phase !== 'answering') return;
+    reportPlaying();
+    if (tickQuizClocks(root, serverNow())) draw();
+  }, 250) : 0;
+  const offPlayer = player.subscribe(() => { if (session && inQuiz()) reportPlaying(); });
 
   window.__ttHost = { get session() { return session; } };
 
@@ -437,6 +523,9 @@ export function render(root, { deck, navigate }) {
     root.removeEventListener('keydown', onKey);
     releaseAwake();
     clearInterval(ticker);
+    clearInterval(quizTicker);
+    offPlayer();
+    document.body.classList.remove('tt-quiz');
     if (unmountPv) unmountPv();
     unsub?.();
     session.destroy();

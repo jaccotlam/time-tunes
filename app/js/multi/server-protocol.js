@@ -5,14 +5,19 @@
 //   phone -> server: hello {v, code, id, token, name}
 //                    answer {round, answer}, withdraw {}, leave {}
 //                    leader only: settings {patch}, start {cards, seed?}, reveal {}, override {pid},
-//                                 next {}, lobby {}, remove {pid}
+//                                 next {}, lobby {}, remove {pid},
+//                                 playing {round} (Quiz: the song plays, the thinking time starts)
 //                    owner or leader: close {}
 //                    lead {} (take the lead: the owner always, a player when the leader is away)
 //   server -> phone: welcome {v, id, token, code}, state {view, meta, lead?}, error {code, message},
 //                    backup {snap} (owner only: copy of the room for a server restart)
 // Plain-text "ping" / "pong" keep the connection (and a sleeping host) awake.
+// meta.now is the server's clock (ms): the phones show the Quiz countdown in server time.
+//
+// Version 2 (November 2026): the Quiz (settings questions/qtype/think, playing, the quiz part of
+// the view). A phone with another version gets a clear message (health / hello / POST /rooms).
 
-export const SERVER_PROTOCOL_VERSION = 1;
+export const SERVER_PROTOCOL_VERSION = 2;
 /** Largest message from a phone (the deck at the start of a game). */
 export const MAX_CLIENT_MESSAGE = 512 * 1024;
 /** Every other message is small. */
@@ -26,9 +31,9 @@ export const CLIENT_PING_MS = 10000;
 /** Nothing heard for this long: the connection is dead. */
 export const STALE_MS = 25000;
 
-const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead'];
+const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing'];
 const SERVER_TYPES = ['welcome', 'state', 'error', 'backup'];
-export const LEADER_TYPES = ['settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove'];
+export const LEADER_TYPES = ['settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'playing'];
 
 export const ID_RE = /^[A-Za-z0-9_-]{4,40}$/;
 export const TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
