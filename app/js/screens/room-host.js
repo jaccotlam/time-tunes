@@ -3,25 +3,31 @@
 // along on the same device; that panel is built from the same player view as a phone.
 import * as player from '../player.js';
 import { playableCards } from '../multi/game.js';
-import { viewFor } from '../multi/protocol.js';
 import { createHostSession, storedRoom } from '../multi/host-session.js';
+import { usesServer, createServerHostSession, storedServerHost } from '../multi/server-session.js';
 import { DEFAULT_GOAL } from '../logic.js';
 import { icons, esc, toast, vibrate, store } from '../ui.js';
 import { playerViewHtml, mountPlayerView } from './playerview.js';
 import {
   patch, connBadge, playersHtml, standingsHtml, answerPanelHtml, answerController, myResultHtml, songHtml,
   roundResultsHtml, winnerHtml, confettiHtml, viewBingoCard, viewTimeline, gameName, qrSvg, roomLink,
-  keepAwake,
+  keepAwake, diagHtml, diagKey, diagVisible,
 } from './room-ui.js';
 
 export const name = 'room-host';
-const SPECTATOR = '__host__';
 const HOST_NAME_KEY = 'timetunesr.multiName.v1';
 
-export function render(root, { deck }) {
+export function render(root, { deck, navigate }) {
   const cards = playableCards(deck.cards.filter((c) => c.previewUrl || c.itunesId || c.spotifyId));
-  let session = createHostSession();
-  let unsub = session.subscribe(() => draw());
+  // with a room server the server holds the room; without one this phone does (PeerJS)
+  const viaServer = usesServer();
+  let session = viaServer ? createServerHostSession() : createHostSession();
+  let unsub = session.subscribe(() => {
+    const n = session.takeNotice?.();
+    if (n) toast(n.message, { kind: 'warn' });
+    if (session.lostLead) { handBack(); return; }
+    draw();
+  });
   let viewName = null;
   let unmountPv = null;
   let loadedFor = null; // "round:cardId" loaded in the hidden player
@@ -38,21 +44,32 @@ export function render(root, { deck }) {
     refresh: () => draw(),
   });
 
-  const spectator = () => viewFor(session.room, SPECTATOR, session.presence());
+  const spectator = () => session.spectatorView();
+  /** Via the server: may this phone run the room (reveal, next ...)? */
+  const leads = () => !viaServer || !!session.meta?.leader;
 
   function currentView() {
     const r = session.room;
+    if (!r && viaServer && session.connecting) return 'connecting';
     return r ? r.phase : 'setup';
+  }
+
+  /** A player who took the lead and lost it again goes back to the player screen. */
+  function handBack() {
+    const code = session.code;
+    session.forget?.();
+    navigate(code ? `#/kamer/${code}` : '#/kamer');
   }
 
   function skeleton(vn) {
     if (unmountPv) { unmountPv(); unmountPv = null; }
     for (const k of Object.keys(regions)) delete regions[k];
     const r = session.room;
-    const code = r?.code || '';
+    const code = r?.code || session.code || '';
     const quit = r ? '<button class="btn btn-small btn-ghost" type="button" data-action="close-room" data-testid="host-close">Sluiten</button>' : '<span class="topbar-spacer"></span>';
     const body = {
       setup: '<div data-region="main"></div>',
+      connecting: '<div data-region="main"></div>',
       lobby: `<div data-region="status"></div><div data-region="join"></div><div data-region="players"></div><div data-region="main"></div><div data-region="cta"></div>`,
       answering: `<div data-region="status"></div>
         <div class="place-player" data-region="pv">${playerViewHtml({ compact: true })}</div>
@@ -65,7 +82,7 @@ export function render(root, { deck }) {
     root.innerHTML = `<section class="screen screen-room screen-room-host view-${vn}" data-testid="screen-room-host" data-view="${vn}" data-code="${esc(code)}">
       <header class="topbar">
         <a class="icon-btn" href="#/" aria-label="Naar start" data-testid="back-home">${icons.home}</a>
-        <h1 class="topbar-title">${r ? `Kamer <span class="room-code-inline" data-testid="room-code">${esc(code)}</span>` : 'Maak een kamer'}</h1>
+        <h1 class="topbar-title">${r || vn === 'connecting' ? `Kamer <span class="room-code-inline" data-testid="room-code">${esc(code)}</span>` : 'Maak een kamer'}</h1>
         ${quit}
       </header>
       ${body}
@@ -87,14 +104,15 @@ export function render(root, { deck }) {
   function syncAudio() {
     const r = session.room;
     const g = r?.game;
-    if (!g || r.phase === 'won' || r.phase === 'lobby' || !g.current) {
+    const song = g && r.phase !== 'won' && r.phase !== 'lobby' ? session.currentSong() : null;
+    if (!song) {
       if (loadedFor) { player.stop(); loadedFor = null; }
       return;
     }
-    const k = `${g.round}:${g.current}`;
+    const k = `${g.round}:${song.id}`;
     if (k === loadedFor) return;
     loadedFor = k;
-    player.load(g.songs[g.current], { autoplay: startedHere });
+    player.load(song, { autoplay: startedHere });
     if (startedHere) player.play(); // inside the tap where possible (iOS)
     startedHere = false;
   }
@@ -105,33 +123,65 @@ export function render(root, { deck }) {
     syncAudio();
     ctl.sync();
     const r = session.room;
-    root.querySelector('[data-testid="screen-room-host"]').dataset.code = r?.code || '';
+    root.querySelector('[data-testid="screen-room-host"]').dataset.code = r?.code || session.code || '';
     const codeEl = root.querySelector('[data-testid="room-code"]');
     if (codeEl && r && codeEl.textContent !== r.code) codeEl.textContent = r.code;
-    if (!r) { region('main', 'setup', setupHtml); return; }
+    if (vn === 'connecting') { region('main', `c|${session.code}|${diagKey(session.diag)}|${session.status}`, connectingHtml); return; }
+    if (!r) { region('main', `setup|${viaServer ? session.error?.message || '' : ''}`, setupHtml); return; }
     const sv = spectator();
-    region('status', JSON.stringify([session.status, r.code, r.phase, r.game?.round, r.game?.kind]), () => statusHtml(sv));
+    const m = session.meta;
+    const serverKey = viaServer ? JSON.stringify([m?.leader, m?.leaderName, m?.owner, diagVisible(session.diag, session.status) ? diagKey(session.diag) : '']) : '';
+    region('status', JSON.stringify([session.status, r.code, r.phase, r.game?.round, r.game?.kind, serverKey]), () => statusHtml(sv));
     region('join', JSON.stringify([r.code]), () => joinBoxHtml(r.code));
     region('players', JSON.stringify([sv.players, r.phase]), () => playersBlock(sv));
     region('sheet', JSON.stringify([sheetOpen, r.code]), () => (sheetOpen ? sheetHtml(r.code) : ''));
+    // a spelleider screen that does not lead (somebody took over) does not play the music
+    if (regions.pv) regions.pv.hidden = !leads();
     if (vn === 'lobby') {
       region('main', JSON.stringify([r.settings, r.players.length]), lobbyHtml);
-      region('cta', JSON.stringify([r.players.length, r.settings]), lobbyCta);
+      region('cta', JSON.stringify([r.players.length, r.settings, leads()]), () => (leads() ? lobbyCta() : ''));
     } else if (vn === 'answering') {
       const hv = session.hostView();
       region('own', `${ctl.key()}`, () => (hv ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw antwoord, ${esc(hv.you.name)}</h2>${answerPanelHtml(hv, ctl.choice)}</section>` : ''));
-      region('cta', JSON.stringify([sv.players]), () => revealCta(sv));
+      region('cta', JSON.stringify([sv.players, leads()]), () => (leads() ? revealCta(sv) : ''));
     } else if (vn === 'revealed') {
       region('main', JSON.stringify([r.game.results, r.game.round, sv.players]), () => revealedHtml(sv));
       const hv = session.hostView();
       region('own', JSON.stringify([hv?.game]), () => (hv?.game?.mine ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw ronde</h2>${myResultHtml(hv)}${ownCard(hv)}</section>` : ''));
-      region('cta', JSON.stringify([r.game.roundWinners, r.game.pile.length]), nextCta);
+      region('cta', JSON.stringify([r.game.roundWinners, left(r.game), leads()]), () => (leads() ? nextCta() : ''));
     } else if (vn === 'won') {
-      region('main', JSON.stringify([r.game.winners, sv.players]), () => wonHtml(sv));
+      region('main', JSON.stringify([r.game.winners, sv.players, leads()]), () => wonHtml(sv));
     }
   }
 
   // ---------- pieces ----------
+  const left = (g) => (g.left ?? g.pile.length);
+
+  /** Via the server: who leads, and the connection steps when the line is gone for a while. */
+  function serverStatusHtml() {
+    if (!viaServer) return '';
+    const m = session.meta;
+    let out = '';
+    if (m && !m.leader) {
+      out += `<div class="lead-banner" data-testid="room-lead-elsewhere">
+        <p><b>${esc(m.leaderName)} heeft de leiding overgenomen.</b> De muziek speelt nu op die telefoon; daar tikt men ook op Onthul en Volgend nummer.</p>
+        ${m.owner ? `<button class="btn btn-primary" type="button" data-action="reclaim" data-testid="room-reclaim">${icons.music}<span>Neem de leiding terug</span></button>` : ''}
+      </div>`;
+    }
+    if (diagVisible(session.diag, session.status)) out += diagHtml(session.diag, { role: 'host', code: session.code });
+    return out;
+  }
+
+  function connectingHtml() {
+    const d = session.diag;
+    const show = d && diagVisible(d, session.status);
+    return `<div class="room-wait" data-testid="host-connecting">
+      ${show ? '' : '<div class="room-spinner" aria-hidden="true"></div>'}
+      <h2>${session.status === 'unreachable' ? 'Server niet bereikbaar' : session.code ? `Verbinden met kamer ${esc(session.code)}…` : 'Kamer maken…'}</h2>
+      ${show ? diagHtml(d, { role: 'host', code: session.code }) : '<p class="muted">Even geduld, de server maakt de kamer klaar.</p>'}
+    </div>`;
+  }
+
   function statusHtml(sv) {
     const r = session.room;
     const offline = sv.players.filter((p) => !p.online).length;
@@ -140,7 +190,7 @@ export function render(root, { deck }) {
       ${connBadge(session.status, session.status === 'online' ? `Kamer open${offline ? ` · ${offline} offline` : ''}` : undefined)}
       ${roundInfo}
       ${r.phase !== 'lobby' ? `<button class="btn btn-small btn-ghost room-share" type="button" data-action="share" data-testid="room-share">${icons.users}<span>QR</span></button>` : ''}
-    </div>`;
+    </div>${serverStatusHtml()}`;
   }
 
   function joinBoxHtml(code) {
@@ -179,7 +229,8 @@ export function render(root, { deck }) {
 
   function setupHtml() {
     const last = store.get(HOST_NAME_KEY, '') || '';
-    return `<form class="setup host-setup" data-testid="host-setup-form" autocomplete="off">
+    const err = viaServer && session.error ? `<p class="warn" data-testid="host-error" data-code="${esc(session.error.code)}">${esc(session.error.message || 'Dat lukte niet.')}</p>` : '';
+    return `<form class="setup host-setup" data-testid="host-setup-form" autocomplete="off">${err}
       <p class="lead">Iedereen speelt op zijn eigen telefoon. Dit toestel is de spelleider: het speelt de muziek (zet het op een speaker) en houdt de stand bij.</p>
       <fieldset>
         <legend>Speel je zelf mee?</legend>
@@ -189,6 +240,7 @@ export function render(root, { deck }) {
       </fieldset>
       <button class="btn btn-primary btn-xl" type="submit" data-testid="host-create">${icons.plus}<span>Maak de kamer</span></button>
       <p class="muted small center">De telefoons verbinden via internet. Iedereen heeft dus verbinding nodig, maar niet hetzelfde wifi.</p>
+      ${viaServer ? '' : '<p class="muted small center p2p-note" data-testid="multi-p2p-note">Er is geen server ingesteld: de telefoons verbinden dan rechtstreeks met elkaar. Op sommige netwerken lukt dat niet.</p>'}
     </form>`;
   }
 
@@ -272,7 +324,7 @@ export function render(root, { deck }) {
     const g = session.room.game;
     const win = g.roundWinners.length > 0;
     return `<div class="sticky-cta">
-      <button class="btn btn-primary btn-xl" type="button" data-action="next" data-testid="room-next">${win ? `${icons.trophy}<span>Naar de uitslag</span>` : g.pile.length ? `${icons.music}<span>Volgend nummer</span>` : `${icons.trophy}<span>Nummers op: uitslag</span>`}</button>
+      <button class="btn btn-primary btn-xl" type="button" data-action="next" data-testid="room-next">${win ? `${icons.trophy}<span>Naar de uitslag</span>` : left(g) ? `${icons.music}<span>Volgend nummer</span>` : `${icons.trophy}<span>Nummers op: uitslag</span>`}</button>
     </div>`;
   }
 
@@ -280,10 +332,10 @@ export function render(root, { deck }) {
     return `${confettiHtml()}
       ${winnerHtml(sv)}
       ${standingsHtml(sv)}
-      <div class="stack">
+      ${leads() ? `<div class="stack">
         <button class="btn btn-primary btn-xl" type="button" data-action="again" data-testid="room-again">${icons.restart}<span>Nog een potje</span></button>
         <button class="btn btn-ghost" type="button" data-action="lobby" data-testid="room-to-lobby">${icons.users}<span>Ander spel kiezen</span></button>
-      </div>`;
+      </div>` : ''}`;
   }
 
   // ---------- events ----------
@@ -328,6 +380,11 @@ export function render(root, { deck }) {
       case 'remove':
         if (window.confirm(`${a.dataset.name} uit de kamer verwijderen?`)) guard(() => session.remove(a.dataset.id));
         break;
+      case 'retry': session.retry(); break;
+      case 'copy-diag':
+        session.copyDiag?.().then((ok) => toast(ok ? 'Diagnose gekopieerd. Plak hem in een bericht.' : 'Kopiëren lukte niet.', { kind: ok ? 'info' : 'warn' }));
+        break;
+      case 'reclaim': guard(() => session.reclaim()); break;
       case 'close-room':
         if (window.confirm('Kamer sluiten? Het spel stopt voor iedereen.')) { player.stop(); loadedFor = null; session.close(); }
         break;
@@ -365,8 +422,10 @@ export function render(root, { deck }) {
   root.addEventListener('keydown', onKey);
 
   const releaseAwake = keepAwake(); // the host plays the music: keep the screen (and the connection) alive
-  if (storedRoom()) session.resume();
+  if (viaServer ? storedServerHost() : storedRoom()) session.resume();
   draw();
+  // the connection steps count seconds while something is busy
+  const ticker = viaServer ? setInterval(() => { if (session && (session.connecting || diagVisible(session.diag, session.status))) draw(); }, 1000) : 0;
 
   window.__ttHost = { get session() { return session; } };
 
@@ -377,6 +436,7 @@ export function render(root, { deck }) {
     root.removeEventListener('input', ctl.onInput);
     root.removeEventListener('keydown', onKey);
     releaseAwake();
+    clearInterval(ticker);
     if (unmountPv) unmountPv();
     unsub?.();
     session.destroy();

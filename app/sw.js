@@ -5,7 +5,7 @@
 // cross-origin and are never cached here; the same goes for Spotify
 // (api.spotify.com, accounts.spotify.com).
 // Bump VERSION when the list below changes; old caches are removed on activate.
-const VERSION = 'v3';
+const VERSION = 'v3-1';
 const CACHE = `timetunesr-shell-${VERSION}`;
 const SHELL = [
   './',
@@ -63,6 +63,8 @@ const SHELL = [
   'js/screens/room-host.js',
   'js/screens/room-player.js',
   'vendor/peerjs.min.js',
+  'js/multi/server-protocol.js',
+  'js/multi/server-session.js',
 ];
 const NETWORK_TIMEOUT_MS = 4000;
 
@@ -90,6 +92,8 @@ self.addEventListener('fetch', (event) => {
   // Back from the Spotify login (?code=&state=): let the browser load it untouched.
   if (req.mode === 'navigate' && url.searchParams.has('state') && (url.searchParams.has('code') || url.searchParams.has('error'))) return;
   if (req.headers.has('range')) return;
+  // the room server ("Samen spelen") on the same Worker: always live, never cached
+  if (/^\/(health|rooms)(\/|$)/.test(url.pathname)) return;
   event.respondWith(networkFirst(req));
 });
 

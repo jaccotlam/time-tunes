@@ -202,6 +202,10 @@ export function createHostSession() {
       const id = api.hostPlayerId;
       return id ? viewFor(room, id, presence()) : null;
     },
+    /** What every player sees about the room (no own card): the host screen's lists. */
+    spectatorView() { return room ? viewFor(room, '__host__', presence()) : null; },
+    /** The running song, for the hidden player on this device. */
+    currentSong() { return room?.game?.current ? room.game.songs[room.game.current] || null : null; },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
 
     /** Resume the stored room (after a reload). */

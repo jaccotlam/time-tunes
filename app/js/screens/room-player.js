@@ -4,11 +4,13 @@
 import { normalizeCode } from '../multi/code.js';
 import { createClientSession, storedJoin, forgetJoin } from '../multi/client-session.js';
 import { cleanName } from '../multi/game.js';
+import { usesServer, createServerClientSession, wakeServer, SERVER_HOST_KEY } from '../multi/server-session.js';
+import { ERROR_TITLES } from '../multi/server-protocol.js';
 import { icons, esc, toast, vibrate, store } from '../ui.js';
 import {
   patch, connBadge, playersHtml, standingsHtml, answerPanelHtml, answerController, myResultHtml, songHtml,
   roundResultsHtml, winnerHtml, confettiHtml, viewBingoCard, viewTimeline, gameName,
-  keepAwake,
+  keepAwake, diagHtml, diagKey, diagVisible, leaderAwayHtml,
 } from './room-ui.js';
 
 export const name = 'room-player';
@@ -16,6 +18,9 @@ const NAME_KEY = 'timetunesr.multiName.v1';
 
 export function render(root, { params, navigate }) {
   const urlCode = normalizeCode(params?.[0] || '');
+  // with a room server every phone talks to the server; without one, straight to the host (PeerJS)
+  const viaServer = usesServer();
+  if (viaServer) wakeServer(); // a sleeping free server starts waking up while the name is typed
   const join = storedJoin();
   let session = null;
   let unsub = null;
@@ -32,14 +37,36 @@ export function render(root, { params, navigate }) {
   });
 
   function start(code, nm) {
-    session = createClientSession({ code, name: nm });
+    session = viaServer ? createServerClientSession({ code, name: nm }) : createClientSession({ code, name: nm });
     unsub = session.subscribe(() => {
       const n = session.takeNotice();
       if (n) toast(n.message, { kind: 'warn' });
+      if (session.meta?.leader && !session.meta.owner) { becomeLeader(); return; }
       draw();
     });
     session.start();
     draw();
+  }
+
+  /** This phone took the lead: run the room from the spelleider screen (same place, same card). */
+  function becomeLeader() {
+    const ident = session.leadIdentity();
+    if (!ident.token) return;
+    store.set(SERVER_HOST_KEY, ident);
+    unsub?.();
+    session.destroy();
+    session = null;
+    navigate('#/spelleider');
+  }
+
+  /** Seconds the leader has been away, counted on this phone from the server's figure. */
+  let awayBase = null;
+  function leaderAway() {
+    const m = session?.meta;
+    if (!viaServer || !m || m.leader || m.leaderOnline || session.status !== 'online') { awayBase = null; return null; }
+    const key = `${m.leaderId}|${m.leaderAwayMs}`;
+    if (!awayBase || awayBase.key !== key) awayBase = { key, at: Date.now() - m.leaderAwayMs };
+    return Date.now() - awayBase.at;
   }
 
   function currentView() {
@@ -85,15 +112,21 @@ export function render(root, { params, navigate }) {
       lastPhaseKey = phaseKey;
     }
     const st = session ? session.status : null;
-    region('status', JSON.stringify([st, vn, session?.error?.code]), () => (session && !session.error ? statusHtml(st) : ''));
+    const away = leaderAway();
+    const showDiag = viaServer && session && !session.error && vn !== 'connecting' && diagVisible(session.diag, st);
+    const extraKey = viaServer ? JSON.stringify([away == null ? null : Math.min(Math.floor(away / 1000), 999), showDiag ? diagKey(session.diag) : '']) : '';
+    region('status', JSON.stringify([st, vn, session?.error?.code, extraKey]), () => (session && !session.error ? statusHtml(st, away, showDiag) : ''));
     region('players', JSON.stringify([vn, v?.players, v?.you?.id]), () => (v && !['join', 'error', 'connecting'].includes(vn) ? `<h2 class="room-h">Spelers</h2>${playersHtml(v)}` : ''));
     const build = { join: joinHtml, connecting: connectingHtml, error: errorHtml, lobby: lobbyHtml, answering: answeringHtml, revealed: revealedHtml, won: wonHtml }[vn];
-    const mainKey = vn === 'answering' ? `a|${ctl.key()}|${!!session.pending}` : JSON.stringify([vn, joinError, v?.game, v?.settings, v?.you, session?.error, st === 'notfound']);
+    const mainKey = vn === 'answering' ? `a|${ctl.key()}|${!!session.pending}` : JSON.stringify([vn, joinError, v?.game, v?.settings, v?.you, session?.error, st === 'notfound', vn === 'connecting' && session?.diag ? [st, diagKey(session.diag)] : '']);
     region('main', mainKey, build);
   }
 
-  function statusHtml(st) {
-    return `${connBadge(st)}`;
+  function statusHtml(st, away, showDiag) {
+    let out = connBadge(st);
+    if (away != null) out += leaderAwayHtml(session.meta, { awayMs: away });
+    if (showDiag) out += diagHtml(session.diag, { role: 'player', code: session.code });
+    return out;
   }
 
   // ---------- views ----------
@@ -113,10 +146,12 @@ export function render(root, { params, navigate }) {
       </fieldset>
       <p class="warn" data-testid="join-error" ${joinError ? '' : 'hidden'}>${esc(joinError)}</p>
       <button class="btn btn-primary btn-xl" type="submit" data-testid="join-submit">${icons.users}<span>Doe mee</span></button>
+      ${viaServer ? '' : '<p class="muted small center p2p-note" data-testid="multi-p2p-note">Er is geen server ingesteld: je telefoon verbindt rechtstreeks met die van de spelleider. Op sommige netwerken lukt dat niet.</p>'}
     </form>`;
   }
 
   function connectingHtml() {
+    if (session.isServer) return serverConnectingHtml();
     const nf = session.status === 'notfound';
     return `<div class="room-wait" data-testid="room-connecting">
       <div class="room-spinner" aria-hidden="true"></div>
@@ -129,9 +164,35 @@ export function render(root, { params, navigate }) {
     </div>`;
   }
 
+  /** Via the server: what works and what does not, step by step. */
+  function serverConnectingHtml() {
+    const st = session.status;
+    const nf = st === 'notfound';
+    const lost = nf && session.wasInRoom;
+    const show = diagVisible(session.diag, st);
+    const down = st === 'unreachable';
+    const title = lost ? `Kamer ${esc(session.code)} is even weg`
+      : nf ? `Kamer ${esc(session.code)} niet gevonden`
+        : st === 'waking' ? `Kamer ${esc(session.code)} openen…`
+          : down ? 'Server niet bereikbaar'
+            : `Verbinden met kamer ${esc(session.code)}…`;
+    const sub = lost ? 'Waarschijnlijk is de server opnieuw gestart. Zodra de spelleider de app weer open heeft, zet die de kamer terug en ga je vanzelf verder.'
+      : nf ? 'Klopt de code? We blijven zoeken.'
+        : st === 'waking' ? 'Even geduld: de server start op.'
+          : down ? 'We blijven het proberen. Hieronder staat wat er misgaat en wat je kunt doen.'
+            : 'Even geduld, je telefoon zoekt de kamer.';
+    return `<div class="room-wait" data-testid="room-connecting" data-state="${esc(st)}">
+      ${show ? '' : '<div class="room-spinner" aria-hidden="true"></div>'}
+      <h2>${title}</h2>
+      <p class="muted">${sub}</p>
+      ${show ? diagHtml(session.diag, { role: 'player', code: session.code }) : `<div class="stack"><button class="btn btn-ghost" type="button" data-action="retry" data-testid="room-retry">${icons.restart}<span>Nu opnieuw proberen</span></button></div>`}
+      ${nf ? `<div class="stack"><button class="btn btn-ghost" type="button" data-action="other-code" data-testid="room-other-code">${icons.back}<span>Andere code</span></button></div>` : ''}
+    </div>`;
+  }
+
   function errorHtml() {
     const e = session.error;
-    const title = { version: 'Andere versie van de app', removed: 'Je bent verwijderd', closed: 'De kamer is gesloten', full: 'De kamer is vol', room: 'Kamer bestaat niet meer', replaced: 'Je speelt elders verder' }[e.code] || 'Dat lukte niet';
+    const title = { ...ERROR_TITLES, version: 'Andere versie van de app', removed: 'Je bent verwijderd', closed: 'De kamer is gesloten', full: 'De kamer is vol', room: 'Kamer bestaat niet meer', replaced: 'Je speelt elders verder' }[e.code] || 'Dat lukte niet';
     return `<div class="room-wait room-error" data-testid="room-error" data-code="${esc(e.code)}">
       <h2>${esc(title)}</h2>
       <p>${esc(e.message || '')}</p>
@@ -231,6 +292,10 @@ export function render(root, { params, navigate }) {
         setTimeout(() => navigate('#/'), 250); // let the goodbye reach the host first
         break;
       case 'retry': session?.retry(); break;
+      case 'takeover': session?.takeOver?.(); break;
+      case 'copy-diag':
+        session?.copyDiag?.().then((ok) => toast(ok ? 'Diagnose gekopieerd. Plak hem in een bericht.' : 'Kopiëren lukte niet.', { kind: ok ? 'info' : 'warn' }));
+        break;
       case 'reload': location.reload(); break;
       case 'other-code':
         if (session) { session.destroy(); unsub?.(); session = null; }
@@ -253,6 +318,8 @@ export function render(root, { params, navigate }) {
 
   // for tests / debugging: what this phone received from the host
   window.__ttRoom = { get session() { return session; } };
+  // connection steps and the leader-away countdown count seconds
+  const ticker = viaServer ? setInterval(() => { if (session && !session.error && (session.status !== 'online' || leaderAway() != null)) draw(); }, 1000) : 0;
 
   return () => {
     root.removeEventListener('submit', onSubmit);
@@ -260,6 +327,7 @@ export function render(root, { params, navigate }) {
     root.removeEventListener('input', ctl.onInput);
     root.removeEventListener('keydown', ctl.onKeyDown);
     releaseAwake();
+    clearInterval(ticker);
     unsub?.();
     session?.destroy();
   };

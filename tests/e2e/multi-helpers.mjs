@@ -9,11 +9,21 @@
 //   const code = await createRoom(host.page);           // returns the room code
 //   const anouk = await phone(browser, signal);
 //   await joinRoom(anouk.page, server.url, code, 'Anouk');
+//
+// The same through the room server (server/node.mjs) instead of PeerJS:
+//   const rooms = await startRoomServer();              // Node room server on 127.0.0.1
+//   const host = await phone(browser, rooms, { seed: 7 });
+//   ... createRoom / joinRoom / waitForPlayers work the same way.
+// phone(browser, signal | null) always uses the PeerJS route (also now that app/config.js has
+// a server address); phone(browser, 'app') leaves the app's own configuration alone.
 import { createServer } from 'node:net';
-import { phoneContext, useFixtureDeck } from './helpers.mjs';
+import { spawn } from 'node:child_process';
+import { join } from 'node:path';
+import { phoneContext, useFixtureDeck, ROOT } from './helpers.mjs';
 
 export const SIGNAL_KEY = 'timetunesr.multiSignal.v1';
 export const SEED_KEY = 'timetunesr.multiSeed.v1';
+export const SERVER_KEY = 'timetunesr.multiServer.v1';
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -41,18 +51,57 @@ export async function startSignal() {
 }
 
 /**
- * A phone (own browser context = own localStorage = own player id) that uses `signal`.
+ * The Node room server (server/node.mjs) as a child process on a free port, so a test can
+ * stop and restart it. Resolves with { kind: 'server', url, port, stop(), restart(), start() }.
+ */
+export async function startRoomServer({ port = null, origins = null } = {}) {
+  const p = port || await freePort();
+  let proc = null;
+  const rs = {
+    kind: 'server',
+    port: p,
+    url: `http://127.0.0.1:${p}`,
+    start() {
+      return new Promise((resolve, reject) => {
+        proc = spawn(process.execPath, [join(ROOT, 'server/node.mjs')], {
+          env: { ...process.env, PORT: String(p), HOST: '127.0.0.1', ...(origins ? { ALLOWED_ORIGINS: origins } : {}) },
+          stdio: ['ignore', 'pipe', 'inherit'],
+        });
+        const onData = (d) => { if (String(d).includes('luistert op poort')) { proc.stdout.off('data', onData); resolve(rs); } };
+        proc.stdout.on('data', onData);
+        proc.on('error', reject);
+      });
+    },
+    stop() {
+      return new Promise((resolve) => {
+        if (!proc || proc.exitCode != null) { resolve(); return; }
+        proc.once('exit', () => resolve());
+        proc.kill('SIGKILL'); // like a crash or a host restart: everything in memory is gone
+      });
+    },
+    async restart() { await rs.stop(); return rs.start(); },
+  };
+  return rs.start();
+}
+
+/**
+ * A phone (own browser context = own localStorage = own player id).
+ * `transport`: a PeerJS signal from startSignal() (or null: PeerJS with the app's broker),
+ * a room server from startRoomServer(), or 'app' (the app's own configuration).
  * Options: seed (fixed game seed for the host), fixtureDeck (default true), extra context options.
  */
 export async function phone(browser, signal, { seed = null, fixtureDeck = true, ...extra } = {}) {
   const context = await phoneContext(browser, extra);
   if (fixtureDeck) await useFixtureDeck(context);
-  await context.addInitScript(([key, cfg, seedKey, s]) => {
+  const viaServer = signal && signal.kind === 'server';
+  const serverValue = signal === 'app' ? null : viaServer ? signal.url : 'off';
+  await context.addInitScript(([key, cfg, seedKey, s, serverKey, server]) => {
     try {
       if (cfg) localStorage.setItem(key, JSON.stringify(cfg));
       if (s != null) localStorage.setItem(seedKey, String(s));
+      if (server) localStorage.setItem(serverKey, JSON.stringify(server));
     } catch { /* ignore */ }
-  }, [SIGNAL_KEY, signal ? signal.config : null, SEED_KEY, seed]);
+  }, [SIGNAL_KEY, signal && !viaServer && signal !== 'app' ? signal.config : null, SEED_KEY, seed, SERVER_KEY, serverValue]);
   const page = await context.newPage();
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(e.message));
@@ -93,3 +142,9 @@ export async function waitForPlayers(hostPage, n) {
 
 /** The host's room state (from its localStorage). */
 export const hostRoom = (hostPage) => hostPage.evaluate(() => JSON.parse(localStorage.getItem('timetunesr.multiHost.v1')));
+
+/** Via the room server: what the spelleider's screen knows (room summary, running song, meta). */
+export const serverHost = (hostPage) => hostPage.evaluate(() => {
+  const s = window.__ttHost?.session;
+  return s ? { room: s.room, song: s.currentSong(), meta: s.meta, status: s.status, code: s.code } : null;
+});

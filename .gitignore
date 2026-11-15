@@ -7,3 +7,5 @@ Thumbs.db
 test-results/
 tools/.cache.json
 .claude/worktrees/
+.wrangler/
+.dev.vars

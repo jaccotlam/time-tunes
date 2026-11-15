@@ -1,0 +1,26 @@
+// Cloudflare Worker "time-tunes": serves the app (folder app/) AND the room server for
+// "Samen spelen" (server/worker.mjs, one Durable Object per room). Deployed by Workers
+// Builds (the Git connection in the Cloudflare dashboard) on every push: `npx wrangler deploy`.
+// The name must stay "time-tunes": it is the Worker's name in the dashboard.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "time-tunes",
+  "main": "server/worker.mjs",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+  "assets": {
+    "directory": "app",
+    "binding": "ASSETS",
+    // the server's own paths always go to the Worker, never to a static file
+    "run_worker_first": ["/health", "/rooms", "/rooms/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+  },
+  // SQLite-backed Durable Objects: the only kind on the Workers Free plan
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
+  "vars": {
+    "ALLOWED_ORIGINS": "https://jaccotlam.github.io,https://time-tunes.jaccotlam.workers.dev,http://localhost:*,http://127.0.0.1:*"
+  },
+  "observability": { "enabled": true }
+}
