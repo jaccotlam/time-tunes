@@ -15,10 +15,12 @@ export function check(extraTimes = []) {
   const dir = join(TMP, 'check');
   rmSync(dir, { recursive: true, force: true });
   ensureDir(dir);
-  // per scène één beeld op twee derde (dan staat alle tekst er en is de actie bezig), plus eigen tijdstippen
-  const times = events.scenes.map((s, i) => {
+  // per scène één beeld op twee derde (dan staat alle tekst er en is de actie bezig), bij een lange
+  // scène (meer dan 6 s) ook een op een kwart en vlak voor het einde, plus eigen tijdstippen
+  const times = events.scenes.flatMap((s, i) => {
     const end = events.scenes[i + 1]?.t ?? events.duration;
-    return { t: s.t + (end - s.t) * 0.66, id: s.id };
+    const at = (f) => ({ t: s.t + (end - s.t) * f, id: s.id });
+    return end - s.t > 6 ? [at(0.25), at(0.66), at(0.93)] : [at(0.66)];
   }).concat(extraTimes.filter((t) => t >= 0 && t < events.duration - 0.04)
     .map((t) => ({ t, id: [...events.scenes].reverse().find((s) => s.t <= t)?.id || events.scenes[0].id })));
   times.sort((a, b) => a.t - b.t);

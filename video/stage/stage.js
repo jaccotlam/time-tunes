@@ -244,6 +244,7 @@ function drawTable(t) {
   if (!HAS('s2')) { // het verhaal met kaartjes is niet opgenomen: alleen de stapel en de drie open kaarten
     for (const id of [G, B, ...winNew]) place(cards[id], { x: 0, y: 0, op: 0 });
     counter.innerHTML = '<span>Jouw tijdlijn: <b>3</b> van 10 kaarten</span>';
+    for (const c of confetti) c.n.style.opacity = '0';
     return;
   }
 
@@ -454,12 +455,13 @@ const bPanels = BG.cards.map((card, i) => {
   bingoEl.append(n);
   return { n, cardEl: n.querySelector('.v-bcard'), chip: n.querySelector('.v-bchip'), html: '', chipHtml: '' };
 });
-bingoEl.append(el('p', 'v-bnote', 'Iedereen heeft een andere kaart · één telefoon gaat rond'), el('div', '', ''));
-bingoEl.lastChild.id = 'bingo-confetti';
+bingoEl.append(el('p', 'v-bnote', 'Iedereen heeft een andere kaart · één telefoon gaat rond'));
+bingoEl.prepend(el('div', '', '')); // de confetti valt achter de kaarten langs, zodat namen en vakjes leesbaar blijven
+bingoEl.firstChild.id = 'bingo-confetti';
 const bingoConfetti = Array.from({ length: 48 }, (_, i) => {
   const n = el('i');
   n.style.background = ['var(--mustard)', 'var(--coral)', 'var(--teal)'][i % 3];
-  bingoEl.lastChild.append(n);
+  bingoEl.firstChild.append(n);
   return { n, x: 60 + rnd() * 1050, dx: (rnd() - 0.5) * 160, delay: rnd() * 0.8, dur: 1.5 + rnd() * 0.9, rot: 300 + rnd() * 700, h: 440 + rnd() * 120 };
 });
 function drawBingo(t) {
@@ -577,10 +579,11 @@ function drawMusic(t) {
 // ---------- eigen playlist: de lijst groot, gelijk met de telefoon ----------
 const playlistEl = $('playlist');
 {
+  // net als in de app staat het nieuwste nummer bovenaan
   const row = (tr, i, cls = '') => `<div class="v-pl-row${cls}"><i>${String(i + 1).padStart(3, '0')}</i><span>${tr.title}<small>${tr.artist}</small></span><b>${tr.year}</b></div>`;
   playlistEl.innerHTML = `<div class="v-pl">
       <div class="v-pl-head"><span class="v-tile-ico">${icons.music}</span><span class="v-pl-name">${PLAYLIST.name}</span><span class="v-pl-count"></span><span class="v-pl-active">Actief</span></div>
-      ${PLAYLIST.tracks.map((tr, i) => row(tr, i)).join('')}${row(PLAYLIST.expect, PLAYLIST.tracks.length, ' is-new')}
+      ${row(PLAYLIST.expect, PLAYLIST.tracks.length, ' is-new')}${PLAYLIST.tracks.map((tr, i) => row(tr, i)).reverse().join('')}
     </div>
     <div class="v-pl-side"><h3>Nummers toevoegen</h3>
       <span class="v-chip">zoeken</span><span class="v-chip">een lijst plakken</span><span class="v-chip">Spotify-playlist overnemen</span>
@@ -667,13 +670,14 @@ function drawEnd(t) {
 }
 function drawCopy(t) {
   for (const h of heads) {
-    const p = ramp(t, h.t0 + 0.05, h.t0 + 0.45, ease.out);
+    const d = Math.abs(h.t0 - M('trioIn')) < 0.1 ? 0.35 : 0.05; // eerst zakt de hoofdtelefoon weg
+    const p = ramp(t, h.t0 + d, h.t0 + d + 0.4, ease.out);
     const o = p * (1 - ramp(t, h.t1 - 0.2, h.t1));
     h.el.style.opacity = o.toFixed(3);
     h.el.style.transform = `translateY(${px((1 - p) * 18)})`;
   }
   for (const c of caps) {
-    const d = c.first ? 0.25 : 0.1;
+    const d = Math.abs(c.t0 - M('trioIn')) < 0.1 ? 0.5 : c.first ? 0.25 : 0.1;
     const p = ramp(t, c.t0 + d, c.t0 + d + 0.4, ease.out);
     const o = p * (1 - ramp(t, c.t1 - 0.2, c.t1));
     c.el.style.opacity = o.toFixed(3);
@@ -684,10 +688,10 @@ function drawCopy(t) {
 function drawPhone(t) {
   const inP = ramp(t, S('intro') + 0.1, S('intro') + 0.9, ease.out);
   const outP = ramp(t, S('end'), S('end') + 0.55, ease.in);
-  // tijdens "Ieder een eigen telefoon" maakt de hoofdtelefoon plaats voor de drie kleinere
-  const away = Math.max(outP, ramp(t, M('trioIn'), M('trioIn') + 0.6, ease.in) * (1 - ramp(t, M('trioOut') + 0.25, M('trioOut') + 0.85, ease.out)));
-  phone.style.transform = `translate(${px(-away * 700)}, ${px((1 - inP) * 1100)})`;
-  phone.style.visibility = inP <= 0 || away >= 1 ? 'hidden' : 'visible';
+  // tijdens "Ieder een eigen telefoon" zakt de hoofdtelefoon weg en komen de drie kleinere omhoog
+  const away = ramp(t, M('trioIn'), M('trioIn') + 0.5, ease.in) * (1 - ramp(t, M('trioOut') + 0.75, M('trioOut') + 1.35, ease.out));
+  phone.style.transform = `translate(${px(-outP * 700)}, ${px((1 - inP) * 1100 + away * 1100)})`;
+  phone.style.visibility = inP <= 0 || outP >= 1 || away >= 1 ? 'hidden' : 'visible';
 
   drawTap(tapEl, tapState(t, 'main'), PHONE.scale, 30); // tik-indicator
 

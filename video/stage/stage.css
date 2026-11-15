@@ -208,7 +208,7 @@ body {
 .v-pass { position: absolute; left: 0; width: 1170px; top: 470px; text-align: center; font-size: 28px; font-weight: 700; color: var(--muted); }
 
 /* ---------- alleen de app: bingo ---------- */
-.v-bpanel { position: absolute; top: 0; border-radius: 30px; background: rgba(23, 11, 36, .5); border: 3px solid var(--line); opacity: 0; }
+.v-bpanel { position: absolute; top: 0; border-radius: 30px; background: #1d0f2c; border: 3px solid var(--line); opacity: 0; }
 .v-bpanel.is-turn { border-color: var(--mustard); }
 .v-bhead { position: absolute; left: 22px; top: 16px; right: 22px; display: flex; align-items: center; gap: 14px; height: 60px; }
 .v-bavatar { flex: none; width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); color: var(--mustard); font-family: "Inter Display", Inter, sans-serif; font-weight: 900; font-size: 30px; }
