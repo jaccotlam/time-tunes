@@ -16,8 +16,8 @@ export class TopError extends Error {
 export const MESSAGES = {
   scope: 'Om je meest geluisterde nummers te lezen moet je Spotify één keer (opnieuw) toestemming geven.',
   empty: 'Spotify heeft nog geen meest geluisterde nummers voor deze periode. Kies een langere periode, of luister eerst wat meer.',
-  'no-client': 'Op deze TimeTunesr-site is nog geen Spotify Client ID ingesteld. De eigenaar van de site zet die in app/config.js (SPOTIFY_CLIENT_ID); zie de uitleg in README.md bij “Spotify koppelen”.',
-  'not-allowed': 'Dit Spotify-account is (nog) niet toegelaten in de Spotify-app van de eigenaar. Vraag de eigenaar je toe te voegen onder User Management in het Spotify-dashboard (maximaal 5 gebruikers in Development Mode).',
+  'no-client': 'Hiervoor is Spotify nodig, en dat is op dit toestel nog niet gekoppeld. Koppel je eigen Spotify in ±5 minuten bij Instellingen: de koppelhulp legt elke stap uit.',
+  'not-allowed': 'Dit Spotify-account is (nog) niet toegelaten in de Spotify-app waarmee je inlogt. Vraag wie die app maakte (bij een kamer: de spelleider) je Spotify-account toe te voegen onder User Management in het Spotify-dashboard (maximaal 5 accounts).',
 };
 
 export function errorMessage(e) {

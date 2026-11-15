@@ -16,7 +16,7 @@
 import * as G from '../app/js/multi/game.js';
 import { viewFor } from '../app/js/multi/protocol.js';
 import {
-  SERVER_PROTOCOL_VERSION, TAKEOVER_MS, STALE_MS, PING_TEXT, PONG_TEXT, LEADER_TYPES, ID_RE, TOKEN_RE,
+  SERVER_PROTOCOL_VERSION, TAKEOVER_MS, STALE_MS, PING_TEXT, PONG_TEXT, LEADER_TYPES, ID_RE, TOKEN_RE, SPOTIFY_CLIENT_ID_RE,
   parseClientMessage, cleanCards,
 } from '../app/js/multi/server-protocol.js';
 import { startQuizClock, quizRoundOver, quizNextEvent } from '../app/js/multi/game.js';
@@ -295,6 +295,12 @@ export class RoomHub {
     }
     c.mid = id;
     this.attach(connId);
+    // the owner's Spotify Client ID goes to the players (a public value; only the form is checked).
+    // No cid field (an older app): keep what there is; '' = the owner has none (any more).
+    if (id === s.ownerId && typeof m.cid === 'string') {
+      if (SPOTIFY_CLIENT_ID_RE.test(m.cid)) s.spotifyClientId = m.cid.toLowerCase();
+      else if (m.cid === '') delete s.spotifyClientId;
+    }
     s.claimed = true;
     s.lastActive = this.now();
     if (id === s.leaderId) s.leaderAwaySince = null;
@@ -487,6 +493,8 @@ export class RoomHub {
       now: this.now(), // the server's clock, for the Quiz countdown
       // "Mix van de groep": counts only, never a title
       mix: { ...this.mixCounts(), mine: s.mix[mid]?.tracks?.length || 0 },
+      // the spelleider's Spotify Client ID, so players can log in for "Doe mijn favorieten erbij"
+      spotifyClientId: typeof s.spotifyClientId === 'string' && SPOTIFY_CLIENT_ID_RE.test(s.spotifyClientId) ? s.spotifyClientId : null,
     };
   }
 

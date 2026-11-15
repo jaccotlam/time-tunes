@@ -71,6 +71,8 @@ const SHELL = [
   'js/spotify-top.js',
   'js/apple-match.js',
   'js/screens/room-mix.js',
+  'js/spotify-setup.js',
+  'js/screens/spotify-share.js',
 ];
 const NETWORK_TIMEOUT_MS = 4000;
 

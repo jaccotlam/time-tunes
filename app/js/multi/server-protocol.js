@@ -16,6 +16,10 @@
 // Plain-text "ping" / "pong" keep the connection (and a sleeping host) awake.
 // meta.now is the server's clock (ms): the phones show the Quiz countdown in server time.
 // The state's meta has `mix` {total, preview, sure, contributors, mine}: counts only, never titles.
+// hello may carry `cid`: the phone's Spotify Client ID ('' = none). The owner's goes to everybody
+// as meta.spotifyClientId (a public value, checked: 32 hex characters), so in a room only the
+// spelleider has to set Spotify up. Both are optional extra fields, so the version stays 3: an
+// older app simply sends no cid and ignores the extra meta field, an older server ignores cid.
 //
 // Version 2 (November 2026): the Quiz (settings questions/qtype/think, playing, the quiz part of
 // the view). Version 3 (November 2026): "Mix van de groep" (mix-add, mix-clear, settings.music,
@@ -41,6 +45,8 @@ export const LEADER_TYPES = ['settings', 'start', 'reveal', 'override', 'next', 
 
 export const ID_RE = /^[A-Za-z0-9_-]{4,40}$/;
 export const TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
+/** A Spotify Client ID: 32 hexadecimal characters. */
+export const SPOTIFY_CLIENT_ID_RE = /^[0-9a-f]{32}$/i;
 
 /** Parse a message from a phone (string). Null when it is not a valid message. */
 export function parseClientMessage(raw) {

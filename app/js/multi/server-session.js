@@ -15,6 +15,9 @@ import {
 } from './server-protocol.js';
 import { playerId, JOIN_KEY } from './client-session.js';
 import { HOST_ID_KEY, MULTI_SEED_KEY } from './host-session.js';
+import { getClientId } from '../spotify.js';
+
+const spotifyClientId = () => { try { return getClientId() || ''; } catch { return ''; } };
 
 /** Per-browser override of MULTI_SERVER_URL: an address, or "off" for the PeerJS route. */
 export const SERVER_OVERRIDE_KEY = 'timetunesr.multiServer.v1';
@@ -540,7 +543,9 @@ export function createServerHostSession() {
       role: 'host',
       code: ident?.code || null,
       hooks: {
-        hello: (code) => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, id: ident.id, token: ident.token }),
+        // cid: this phone's Spotify Client ID (a public value, '' = none); the server passes the
+        // owner's on to the players, so only the spelleider has to set Spotify up
+        hello: (code) => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, id: ident.id, token: ident.token, cid: spotifyClientId() }),
         roomCheck: async () => {
           const base = serverBase().http;
           if (!ident) {

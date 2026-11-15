@@ -1,5 +1,5 @@
 // Runs every end-to-end script in sequence. Screenshots/PDF go to tests/e2e/out/ (or $E2E_OUT).
-const suites = ['screens', 'card-flow', 'scanner', 'digital', 'bingo', 'print', 'pwa', 'spotify', 'playlists', 'playlists-spotify', 'playlists-top', 'multi', 'multi-playlist', 'multi-server', 'multi-server-playlist', 'multi-quiz', 'multi-mix'];
+const suites = ['screens', 'card-flow', 'scanner', 'digital', 'bingo', 'print', 'pwa', 'spotify', 'spotify-setup', 'playlists', 'playlists-spotify', 'playlists-top', 'multi', 'multi-playlist', 'multi-server', 'multi-server-playlist', 'multi-quiz', 'multi-mix', 'multi-mix-leader'];
 let failed = 0;
 for (const name of suites) {
   console.log(`\n# ${name}`);

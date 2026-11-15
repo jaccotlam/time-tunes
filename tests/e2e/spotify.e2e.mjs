@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { launch, phoneContext, startServer, assert, shot, OUT, FIXTURE_DECK } from './helpers.mjs';
 
-const CLIENT_ID = '0123456789abcdef0123456789abcdef';
+export const CLIENT_ID = '0123456789abcdef0123456789abcdef';
 const ID_DQ = '0DancingQueenStudio000';
 const ID_DQ_KARAOKE = '0DancingQueenKaraoke00';
 const ID_DECK = '4uLU6hMCjMI75M1A2tKUQC';
@@ -14,7 +14,7 @@ const SECRET = ['Dancing Queen', 'ABBA', 'Arrival', 'SECRET TRACK NAME', 'SECRET
 // The fixture deck, with a fixed spotifyId on card 004.
 const deck = JSON.parse(FIXTURE_DECK);
 deck.cards.find((c) => c.id === '004').spotifyId = ID_DECK;
-const DECK_JSON = JSON.stringify(deck);
+export const DECK_JSON = JSON.stringify(deck);
 
 function silentWav(seconds = 30) {
   const samples = 8000 * seconds;
@@ -24,13 +24,22 @@ function silentWav(seconds = 30) {
   b.writeUInt32LE(8000, 28); b.writeUInt16LE(1, 32); b.writeUInt16LE(8, 34); b.write('data', 36); b.writeUInt32LE(samples, 40);
   return b;
 }
-const WAV = silentWav();
+export const WAV = silentWav();
 
-/** Fake Spotify with a running playback position. */
-function fakeSpotify(base) {
+/**
+ * Fake Spotify with a running playback position. Like the real one: an unknown Client ID or a
+ * Redirect URI that is not registered gives Spotify's own error page ("INVALID_CLIENT: …")
+ * and does NOT go back to the app.
+ */
+export function fakeSpotify(base, { clientId = CLIENT_ID } = {}) {
   const m = {
     devices: [{ id: 'dev-phone', name: 'Pixel van Anna', type: 'Smartphone', is_active: true, is_restricted: false, volume_percent: 80 }],
     premium: true, notAllowed: false, tamperState: false,
+    clientIds: [clientId], redirects: [base], // what is registered in the dashboard
+    deny: false, // the user taps "Cancel"
+    ownerNoPremium: false, // the owner of the Spotify app has no Premium (403 on every call)
+    product: 'premium', tokenStatus: null, // e.g. 503: the token endpoint is down
+    name: 'Anna Test',
     access: null, refresh: null, tokenN: 0, challenge: null,
     playing: null, // { uri, device, pos (ms), since, isPlaying }
     calls: [], searches: [],
@@ -48,26 +57,31 @@ function fakeSpotify(base) {
       const u = new URL(route.request().url());
       m.calls.push({ what: 'authorize', params: Object.fromEntries(u.searchParams) });
       m.challenge = u.searchParams.get('code_challenge');
-      const ok = u.searchParams.get('client_id') === CLIENT_ID && u.searchParams.get('redirect_uri') === base
-        && u.searchParams.get('code_challenge_method') === 'S256' && u.searchParams.get('response_type') === 'code'
+      const errorPage = (what) => route.fulfill({ status: 400, contentType: 'text/html', body: `<!doctype html><title>Error</title><body style="font:16px sans-serif;padding:24px"><h1>Oops! Something went wrong</h1><p data-testid="fake-spotify-error">INVALID_CLIENT: ${what}</p></body>` });
+      if (!m.clientIds.includes(u.searchParams.get('client_id'))) return errorPage('Invalid client');
+      if (!m.redirects.includes(u.searchParams.get('redirect_uri'))) return errorPage('Invalid redirect URI');
+      const ok = u.searchParams.get('code_challenge_method') === 'S256' && u.searchParams.get('response_type') === 'code'
         && u.searchParams.get('scope') === 'user-read-playback-state user-modify-playback-state';
       const state = m.tamperState ? 'someone-else' : u.searchParams.get('state');
-      const target = ok ? `${base}?code=CODE-${m.calls.length}&state=${encodeURIComponent(state)}` : `${base}?error=invalid_client&state=${state}`;
+      const redirect = u.searchParams.get('redirect_uri');
+      const target = m.deny ? `${redirect}?error=access_denied&state=${encodeURIComponent(state)}`
+        : ok ? `${redirect}?code=CODE-${m.calls.length}&state=${encodeURIComponent(state)}` : `${redirect}?error=invalid_scope&state=${state}`;
       route.fulfill({ status: 200, contentType: 'text/html', body: `<!doctype html><title>Spotify</title><p>Spotify (nep)</p><script>location.replace(${JSON.stringify(target)})</script>` });
     });
     await ctx.route('https://accounts.spotify.com/api/token', async (route) => {
       const req = route.request();
       const p = Object.fromEntries(new URLSearchParams(req.postData() || ''));
       m.calls.push({ what: 'token', params: p });
+      if (m.tokenStatus) return json(route, m.tokenStatus, { error: 'server_error', error_description: 'Service unavailable' });
       if (p.grant_type === 'authorization_code') {
         const expect = createHash('sha256').update(p.code_verifier || '').digest('base64url');
-        if (expect !== m.challenge || p.client_id !== CLIENT_ID || p.redirect_uri !== base || !/^CODE-/.test(p.code)) {
+        if (expect !== m.challenge || !m.clientIds.includes(p.client_id) || !m.redirects.includes(p.redirect_uri) || !/^CODE-/.test(p.code)) {
           return json(route, 400, { error: 'invalid_grant', error_description: 'Invalid authorization code' });
         }
         return json(route, 200, newTokens());
       }
       if (p.grant_type === 'refresh_token') {
-        if (p.refresh_token !== m.refresh || p.client_id !== CLIENT_ID) return json(route, 400, { error: 'invalid_grant', error_description: 'Refresh token revoked' });
+        if (p.refresh_token !== m.refresh || !m.clientIds.includes(p.client_id)) return json(route, 400, { error: 'invalid_grant', error_description: 'Refresh token revoked' });
         const t = newTokens();
         delete t.refresh_token; // Spotify may omit it: the old one must stay usable
         m.refresh = `rt-${m.tokenN - 1}`;
@@ -85,8 +99,9 @@ function fakeSpotify(base) {
       const call = { what: `${method} ${path}`, query: Object.fromEntries(u.searchParams), body, auth: req.headers().authorization };
       m.calls.push(call);
       if (req.headers().authorization !== `Bearer ${m.access}`) return err(route, 401, 'The access token expired');
+      if (m.ownerNoPremium) return err(route, 403, 'Active premium subscription required for the owner of the app.');
       if (m.notAllowed) return err(route, 403, 'Check settings on developer.spotify.com/dashboard, the user may not be registered.');
-      if (path === '/me') return json(route, 200, { id: 'anna', display_name: 'Anna Test', product: 'premium' });
+      if (path === '/me') return json(route, 200, { id: 'anna', display_name: m.name, product: m.product });
       if (path === '/search') {
         const q = u.searchParams.get('q');
         m.searches.push({ q, limit: u.searchParams.get('limit'), market: u.searchParams.get('market'), type: u.searchParams.get('type') });
@@ -146,6 +161,15 @@ async function fullShot(page, name) {
   await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true });
 }
 
+/** The short way through the setup help with a Client ID you already have, up to "Verbind en test". */
+export async function enterClientId(page, id = CLIENT_ID) {
+  await page.getByTestId('wiz-have-id').click();
+  await page.getByTestId('spotify-client-id').fill(id);
+  await page.getByTestId('spotify-client-save').click();
+  await page.getByTestId('wiz-skip').click();
+  await page.locator('[data-testid="spotify-block"][data-view="wizard-connect"]').waitFor();
+}
+
 async function until(fn, ms = 5000) {
   const end = Date.now() + ms;
   while (!fn()) {
@@ -182,20 +206,20 @@ export default async function run() {
     await page.goto(`${base}#/instellingen`);
     await page.getByTestId('screen-settings').waitFor();
     assert(await page.getByTestId('source-preview').isChecked(), 'preview is the default source');
-    assert(await page.getByTestId('limit-60').isChecked(), 'default playing time is 60 s');
-    assert(await page.getByTestId('spotify-needs-client').isVisible(), 'without Client ID: explanation instead of a connect button');
+    assert(await page.locator('[data-testid="spotify-block"][data-view="wizard-intro"]').count() === 1, 'without Client ID: the setup help starts with its intro');
     assert(await page.getByTestId('spotify-connect').count() === 0, 'no connect button without Client ID');
-    assert(await page.getByTestId('spotify-redirect-uri').textContent() === base, `redirect URI shown: ${base}`);
     await fullShot(page, '60-settings-no-client');
-    await page.getByTestId('spotify-help').locator('summary').click();
-    await fullShot(page, '61-settings-help');
-    await page.getByTestId('spotify-help').locator('summary').click();
 
+    // the full setup help has its own suite (spotify-setup); here the short way with a known Client ID
+    await page.getByTestId('wiz-have-id').click();
     await page.getByTestId('spotify-client-id').fill('abc');
-    await page.getByTestId('spotify-client-save').click();
-    assert(/32 cijfers/.test(await page.getByTestId('client-msg').textContent()), 'invalid Client ID is refused');
+    assert(await page.getByTestId('spotify-client-save').isDisabled(), 'save disabled while the Client ID is not complete');
+    await page.getByTestId('spotify-client-id').press('Enter');
+    await page.waitForFunction(() => /precies 32/.test(document.querySelector('[data-testid="client-msg"]')?.textContent || ''));
+    assert(true, 'invalid Client ID is refused with a clear message');
     await page.getByTestId('spotify-client-id').fill(CLIENT_ID);
     await page.getByTestId('spotify-client-save').click();
+    await page.getByTestId('wiz-skip').click();
     await page.getByTestId('spotify-connect').waitFor();
     assert(await page.evaluate(() => JSON.parse(localStorage.getItem('timetunesr.spotify.clientId.v1'))) === CLIENT_ID, 'Client ID saved in localStorage');
     await fullShot(page, '62-settings-ready');
@@ -204,7 +228,7 @@ export default async function run() {
     fake.m.tamperState = true;
     await page.getByTestId('spotify-connect').click();
     await page.getByTestId('spotify-error').waitFor();
-    assert(/beveiligingscode/.test(await page.getByTestId('spotify-error').textContent()), 'wrong state -> refused with a message');
+    assert(await page.getByTestId('spotify-error').getAttribute('data-code') === 'state' && /klopte niet/.test(await page.getByTestId('spotify-error').textContent()), 'wrong state -> refused with a message');
     assert(page.url() === `${base}#/instellingen`, `URL cleaned after refused redirect (${page.url()})`);
     assert(fake.count('token') === 0, 'no token request with a wrong state');
     fake.m.tamperState = false;
@@ -216,10 +240,9 @@ export default async function run() {
     const auth = fake.last('authorize').params;
     assert(auth.code_challenge.length === 43 && auth.state.length >= 16, 'authorize got S256 challenge and state');
     assert(fake.last('token').params.grant_type === 'authorization_code', 'code exchanged with verifier (checked by the fake)');
-    await page.getByTestId('device-list').waitFor();
-    assert(/Anna Test/.test(await page.getByTestId('spotify-status').textContent()), 'account name shown');
-    assert(/Pixel van Anna/.test(await page.getByTestId('spotify-status').textContent()), 'active device chosen automatically');
-    await page.getByTestId('source-spotify').check();
+    await page.locator('[data-testid="wiz-check-device"][data-ok="true"]').waitFor();
+    assert(/Anna Test/.test(await page.getByTestId('wiz-check-account').textContent()), 'account name shown');
+    assert(/Pixel van Anna/.test(await page.getByTestId('wiz-check-device').textContent()), 'active device chosen automatically');
     await fullShot(page, '63-settings-connected');
 
     // test sound
@@ -229,6 +252,14 @@ export default async function run() {
     await page.clock.fastForward(9000);
     await page.waitForFunction(() => /Test klaar/.test(document.querySelector('[data-testid="spotify-test-msg"]')?.textContent || ''));
     assert(!fake.m.playing.isPlaying, 'test sound paused after a few seconds');
+    await page.getByTestId('wiz-finish').click();
+    await page.getByTestId('wiz-done').waitFor();
+    assert(await page.getByTestId('source-spotify').isChecked(), '"Klaar": Spotify is the music source');
+    await page.getByTestId('wiz-close').click();
+    await page.getByTestId('spotify-status').waitFor();
+    assert(await page.getByTestId('limit-60').isChecked(), 'overview: default playing time is 60 s');
+    assert(/Anna Test/.test(await page.getByTestId('spotify-status').textContent()) && /Pixel van Anna/.test(await page.getByTestId('spotify-status').textContent()), 'overview: account and device');
+    await page.getByTestId('device-list').waitFor();
 
     // --- play a card via Spotify ---
     await page.goto(`${base}#/c/001`);
@@ -367,7 +398,7 @@ export default async function run() {
     fake.m.notAllowed = true;
     await page.getByTestId('spotify-connect').click();
     await page.getByTestId('spotify-error').waitFor();
-    assert(/niet toegelaten/.test(await page.getByTestId('spotify-error').textContent()), 'not allowed in dashboard -> clear message');
+    assert(await page.getByTestId('spotify-error').getAttribute('data-code') === 'not-allowed' && /User Management/.test(await page.getByTestId('spotify-error').textContent()), 'not allowed in dashboard -> clear message');
     assert(await page.getByTestId('spotify-pill').textContent() === 'Niet verbonden', 'not connected after 403');
     await fullShot(page, '70-settings-not-allowed');
     fake.m.notAllowed = false;
@@ -379,9 +410,8 @@ export default async function run() {
     const p2 = await ctx2.newPage();
     await p2.goto(`http://localhost:${port}/#/instellingen`);
     await p2.getByTestId('screen-settings').waitFor();
-    await p2.getByTestId('spotify-client-id').fill(CLIENT_ID);
-    await p2.getByTestId('spotify-client-save').click();
-    await p2.waitForTimeout(200);
+    assert(await p2.getByTestId('spotify-env-warning').isVisible(), 'localhost: warned already before the setup starts');
+    await enterClientId(p2);
     assert(await p2.getByTestId('spotify-env-warning').isVisible() && await p2.getByTestId('spotify-connect').count() === 0, 'localhost: explanation instead of a connect button');
     assert(/127\.0\.0\.1/.test(await p2.getByTestId('spotify-env-warning').textContent()), 'localhost: points to 127.0.0.1');
     await fullShot(p2, '71-settings-localhost');
@@ -396,8 +426,7 @@ export default async function run() {
     await p3.evaluate(() => navigator.serviceWorker.ready);
     await p3.reload();
     await p3.waitForFunction(() => !!navigator.serviceWorker.controller);
-    await p3.getByTestId('spotify-client-id').fill(CLIENT_ID);
-    await p3.getByTestId('spotify-client-save').click();
+    await enterClientId(p3);
     await p3.getByTestId('spotify-connect').click();
     await p3.waitForFunction(() => document.querySelector('[data-testid="spotify-pill"]')?.textContent === 'Verbonden', null, { timeout: 15000 });
     assert(p3.url() === `${base}#/instellingen`, 'login return works with an active service worker');

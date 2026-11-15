@@ -242,3 +242,51 @@ test('quiz uit de groepsmix: vragen over bijgedragen nummers, foute antwoorden u
     await flush();
   }
 });
+
+test('Spotify Client ID van de spelleider gaat naar de spelers; vorm gecontroleerd; oude apps blijven werken', async () => {
+  const CID = '0123456789abcdef0123456789abcdef';
+  const { core } = setup();
+  const res = http(core, 'POST', '/rooms', { v: V, id: 'owner01', name: 'Ilse', settings: { game: 'bingo', size: 3 } });
+  const { code, token } = res.body;
+  // an older app: no cid in hello; nothing breaks, no Client ID in the room
+  const host = connect(core, code);
+  host.send({ t: 'hello', v: V, code, id: 'owner01', token });
+  await flush();
+  const old = await join(core, code, 'oldapp01', 'Oud');
+  assert.equal(old.last('welcome').v, V, 'oude app zonder cid komt gewoon binnen');
+  assert.equal(old.last('state').meta.spotifyClientId, null);
+  // the owner's (new) app sends its Client ID: everybody gets it
+  host.send({ t: 'hello', v: V, code, id: 'owner01', token, cid: CID.toUpperCase() });
+  await flush();
+  assert.equal(old.last('state').meta.spotifyClientId, CID, 'spelers krijgen de Client ID van de spelleider (kleine letters)');
+  assert.equal(host.last('state').meta.spotifyClientId, CID);
+  // a player's cid never replaces the owner's
+  const p = connect(core, code);
+  p.send({ t: 'hello', v: V, code, id: 'playerX1', name: 'X', cid: 'ffffffffffffffffffffffffffffffff' });
+  await flush();
+  assert.equal(p.last('state').meta.spotifyClientId, CID, 'alleen de spelleider bepaalt de Client ID van de kamer');
+  // nonsense is ignored, an older hello (no cid) keeps it, '' clears it
+  host.send({ t: 'hello', v: V, code, id: 'owner01', token, cid: '"><img src=x onerror=alert(1)>' });
+  await flush();
+  assert.equal(old.last('state').meta.spotifyClientId, CID, 'ongeldige vorm genegeerd');
+  assert.ok(!old.raw.some((r) => r.includes('onerror')), 'een ongeldige waarde komt bij niemand terecht');
+  host.send({ t: 'hello', v: V, code, id: 'owner01', token });
+  await flush();
+  assert.equal(old.last('state').meta.spotifyClientId, CID, 'hello zonder cid (oudere app) laat hem staan');
+  host.send({ t: 'hello', v: V, code, id: 'owner01', token, cid: '' });
+  await flush();
+  assert.equal(old.last('state').meta.spotifyClientId, null, 'lege cid: de spelleider heeft er geen (meer)');
+  // stored with the room (Cloudflare: Durable Object storage), and a room stored before this feature still loads
+  host.send({ t: 'hello', v: V, code, id: 'owner01', token, cid: CID });
+  await flush();
+  const snap = JSON.parse(JSON.stringify(core.rooms.get(code).snapshot()));
+  assert.equal(snap.spotifyClientId, CID, 'opgeslagen bij de kamer');
+  const again = new RoomHub(code, {});
+  again.load(snap);
+  assert.equal(again.meta('oldapp01').spotifyClientId, CID, 'na laden uit de opslag nog steeds doorgegeven');
+  delete snap.spotifyClientId;
+  delete snap.mix;
+  const legacy = new RoomHub(code, {});
+  legacy.load(migrateState(snap));
+  assert.equal(legacy.meta('oldapp01').spotifyClientId, null, 'oude opgeslagen kamer: geen Client ID, verder werkt alles');
+});

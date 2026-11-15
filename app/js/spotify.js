@@ -5,6 +5,7 @@ import { SPOTIFY_CLIENT_ID } from '../config.js';
 import { store, toast } from './ui.js';
 import * as pkce from './pkce.js';
 import { bestMatch, searchQueries, isSpotifyId } from './spotify-match.js';
+import { codeForApi, codeForToken, codeForCallback, looksLikeClientId as isClientId } from './spotify-setup.js';
 
 const API = 'https://api.spotify.com/v1';
 export const SCOPES = 'user-read-playback-state user-modify-playback-state';
@@ -26,6 +27,7 @@ const K = {
   matches: 'timetunesr.spotify.matches.v1',
   extraScopes: 'timetunesr.spotify.playlistScopes.v1',
   topScopes: 'timetunesr.spotify.topScopes.v1',
+  setup: 'timetunesr.spotify.setup.v1',
 };
 
 /**
@@ -74,11 +76,47 @@ export function setClientId(value) {
   const prev = getClientId();
   if (!v || v === SPOTIFY_CLIENT_ID) store.remove(K.clientId);
   else store.set(K.clientId, v);
-  if (getClientId() !== prev && isConnected()) disconnect({ quiet: true }); // tokens belong to one app
+  const tokenApp = readToken()?.clientId || prev;
+  if (isConnected() && tokenApp !== getClientId()) disconnect({ quiet: true }); // tokens belong to one app
   emit('settings');
 }
 
-export const looksLikeClientId = (v) => /^[0-9a-f]{32}$/i.test(String(v || '').trim());
+export const looksLikeClientId = (v) => isClientId(String(v || '').trim());
+
+/** The Client ID the current login belongs to (own, config.js or a room's), or null. */
+export const connectedClientId = () => readToken()?.clientId || null;
+
+/* ---------- the setup help (wizard) ---------- */
+
+/**
+ * Where the step-by-step help is: { step, mode: 'own' | 'shared', from?, testOk?, at } or null
+ * (not started / finished). Kept in localStorage so it can be interrupted and resumed, also
+ * across the Spotify login.
+ */
+export function getSetup() {
+  const s = store.get(K.setup, null);
+  return s && typeof s.step === 'string' ? s : null;
+}
+export function setSetup(patch) {
+  if (patch === null) store.remove(K.setup);
+  else store.set(K.setup, { mode: 'own', ...(getSetup() || {}), ...patch, at: Date.now() });
+  emit('setup');
+}
+
+/**
+ * A login that was started but never came back: Spotify's own error page for a wrong Client ID
+ * or Redirect URI does not return to the app (or the user went back). { clientId, redirectUri, at } or null.
+ */
+export function unfinishedLogin() {
+  if (status.busy) return null;
+  const p = store.get(K.pending, null);
+  if (!p || typeof p.at !== 'number' || Date.now() - p.at > PENDING_MAX_AGE_MS) return null;
+  return { clientId: p.clientId || '', redirectUri: p.redirectUri || '', at: p.at };
+}
+export function clearUnfinishedLogin() {
+  store.remove(K.pending);
+  emit('status');
+}
 
 export function redirectUri() {
   return pkce.redirectUriFor(location.href);
@@ -94,7 +132,8 @@ export function environmentProblem() {
 
 /* ---------- status + events ---------- */
 
-const status = { busy: null, error: null }; // busy: 'connecting' | null; error: code of the last failure
+// busy: 'connecting' | null; error: code of the last failure; detail: what Spotify said (for "Kopieer foutdetails")
+const status = { busy: null, error: null, detail: null };
 const listeners = new Set();
 
 function emit(reason) {
@@ -112,11 +151,20 @@ export function getStatus() {
     connected: isConnected(),
     busy: status.busy,
     error: status.error,
+    detail: status.detail,
     profile: store.get(K.profile, null),
     device: getDevice(),
   };
 }
-export function clearError() { status.error = null; emit('status'); }
+export function clearError() { status.error = null; status.detail = null; emit('status'); }
+
+// Back from Spotify's own error page with the browser's back button: the page can come back
+// from the back/forward cache with "connecting…" still on. That login is not running any more.
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted && status.busy === 'connecting') { status.busy = null; emit('status'); }
+  });
+}
 
 /* ---------- errors ---------- */
 
@@ -138,9 +186,11 @@ export const MESSAGES = {
   client: 'Spotify kent deze Client ID of Redirect-URI niet. Controleer beide in het Spotify-dashboard.',
   session: 'Je Spotify-sessie is verlopen of ingetrokken. Verbind opnieuw via Instellingen.',
   premium: 'Voor hele nummers via Spotify is Spotify Premium nodig.',
-  'not-allowed': 'Dit Spotify-account is niet toegelaten in de Spotify-app van de eigenaar. Die moet het toevoegen onder User Management in het Spotify-dashboard (maximaal 5 gebruikers).',
+  'not-allowed': 'Dit Spotify-account is niet toegelaten in deze Spotify-app. Wie de app maakte, moet het toevoegen onder User Management in het Spotify-dashboard (maximaal 5 accounts).',
   forbidden: 'Spotify weigert deze opdracht. Kies eventueel een ander apparaat.',
   'no-device': 'Geen Spotify-apparaat gevonden. Open de Spotify-app op dit toestel, start even een nummer en kom terug.',
+  redirect: 'Spotify kent het adres van deze app niet: zet het precies zo bij “Redirect URIs” in je Spotify-app.',
+  'owner-premium': 'De Spotify-app werkt alleen als het account waarmee hij gemaakt is Spotify Premium heeft.',
   rate: 'Spotify krijgt even te veel verzoeken. Wacht een momentje en probeer het opnieuw.',
   offline: 'Geen internetverbinding met Spotify.',
   'no-match': 'Dit nummer is niet gevonden op Spotify.',
@@ -169,7 +219,7 @@ function saveToken(json, prev) {
   });
 }
 
-async function tokenRequest(body) {
+async function tokenRequest(body, phase = 'code') {
   let res;
   try {
     res = await fetch(pkce.TOKEN_URL, {
@@ -182,11 +232,10 @@ async function tokenRequest(body) {
   let json = {};
   try { json = await res.json(); } catch { /* not json */ }
   if (res.ok && json.access_token) return json;
-  if (res.status === 429) throw new SpotifyError('rate', { retryAfter: Number(res.headers.get('Retry-After')) || null });
-  if (res.status === 403) throw new SpotifyError('not-allowed');
-  if (json.error === 'invalid_grant') throw new SpotifyError('session');
-  if (res.status >= 500) throw new SpotifyError('unavailable');
-  throw new SpotifyError('client'); // invalid_client, redirect mismatch, ...
+  throw new SpotifyError(codeForToken(res.status, json, phase), { // invalid_client, redirect mismatch, ...
+    retryAfter: Number(res.headers.get('Retry-After')) || null,
+    detail: { where: 'token', status: res.status, message: [json.error, json.error_description].filter(Boolean).join(': ') },
+  });
 }
 
 let refreshing = null;
@@ -194,11 +243,12 @@ async function refresh() {
   const t = readToken();
   if (!t?.refresh_token) { dropSession('session'); throw new SpotifyError('session'); }
   if (!refreshing) {
-    refreshing = tokenRequest(pkce.refreshRequestBody({ clientId: t.clientId || getClientId(), refreshToken: t.refresh_token }))
+    refreshing = tokenRequest(pkce.refreshRequestBody({ clientId: t.clientId || getClientId(), refreshToken: t.refresh_token }), 'refresh')
       .then((json) => { saveToken(json, t); })
       .catch((e) => {
-        if (['session', 'client', 'not-allowed'].includes(e.code)) dropSession(e.code === 'client' ? 'session' : e.code);
-        throw e.code === 'client' ? new SpotifyError('session') : e;
+        const code = ['client', 'redirect'].includes(e.code) ? 'session' : e.code;
+        if (['session', 'not-allowed', 'owner-premium'].includes(code)) dropSession(code, e.detail);
+        throw code === e.code ? e : new SpotifyError('session', { detail: e.detail });
       })
       .finally(() => { refreshing = null; });
   }
@@ -215,10 +265,11 @@ async function accessToken() {
   return t.access_token;
 }
 
-function dropSession(code) {
+function dropSession(code, detail = null) {
   store.remove(K.token);
   store.remove(K.profile);
   status.error = code || null;
+  status.detail = detail;
   emit('disconnected');
 }
 
@@ -250,24 +301,21 @@ export async function api(path, { method = 'GET', query, body, keepalive = false
   try { json = text ? JSON.parse(text) : null; } catch { /* not json */ }
   if (res.ok) return json;
 
-  const reason = String(json?.error?.reason || '');
-  const msg = String(json?.error?.message || json?.error_description || text || '');
-  if (res.status === 401) { dropSession('session'); throw new SpotifyError('session'); }
-  if (res.status === 403) {
-    if (reason === 'PREMIUM_REQUIRED' || /premium/i.test(msg)) throw new SpotifyError('premium');
-    if (/regist|developer dashboard|not.{0,20}allow/i.test(msg)) throw new SpotifyError('not-allowed');
-    throw new SpotifyError('forbidden');
-  }
-  if (res.status === 404 && (reason === 'NO_ACTIVE_DEVICE' || /device/i.test(msg))) throw new SpotifyError('no-device');
-  if (res.status === 429) throw new SpotifyError('rate', { retryAfter: Number(res.headers.get('Retry-After')) || null });
-  throw new SpotifyError('unavailable', { status: res.status });
+  const detail = {
+    where: `${method} ${path}`, status: res.status, reason: String(json?.error?.reason || ''),
+    message: String(json?.error?.message || json?.error_description || text || '').slice(0, 300),
+  };
+  const code = codeForApi(res.status, json, text, path);
+  if (code === 'session') { dropSession('session', detail); throw new SpotifyError('session', { detail }); }
+  throw new SpotifyError(code, { status: res.status, detail, retryAfter: code === 'rate' ? Number(res.headers.get('Retry-After')) || null : null });
 }
 
 /* ---------- login ---------- */
 
 /** Start the PKCE login; the browser leaves for accounts.spotify.com. */
-export async function connect(returnHash = location.hash || '#/', { playlists = false, top = false } = {}) {
-  const clientId = getClientId();
+export async function connect(returnHash = location.hash || '#/', { playlists = false, top = false, clientId: borrowed = '' } = {}) {
+  // borrowed: a room's Client ID (the spelleider's), used when this phone has none of its own
+  const clientId = getClientId() || (isClientId(borrowed) ? borrowed : '');
   if (!clientId) throw new SpotifyError('no-client');
   const problem = environmentProblem();
   if (problem) throw new SpotifyError(problem);
@@ -279,6 +327,8 @@ export async function connect(returnHash = location.hash || '#/', { playlists = 
   const uri = redirectUri();
   store.set(K.pending, { state, verifier, clientId, redirectUri: uri, returnHash, at: Date.now() });
   status.busy = 'connecting';
+  status.error = null;
+  status.detail = null;
   emit('status');
   location.assign(pkce.authorizeUrl({ clientId, redirectUri: uri, state, challenge, scope: wantedScopes() }));
 }
@@ -301,15 +351,19 @@ export function handleRedirect() {
     ? pending.returnHash : '#/instellingen';
   history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${back}`);
 
-  const fail = (code) => {
+  const fail = (code, detail = null) => {
     status.busy = null;
     status.error = code;
+    status.detail = detail;
     emit('status'); // the settings screen shows the message
     if (!back.startsWith('#/instellingen')) toast(errorMessage(code), { kind: 'warn', ms: 6000 });
     return Promise.resolve(false);
   };
   if (!pending || pending.state !== cb.state || Date.now() - (pending.at || 0) > PENDING_MAX_AGE_MS) return fail('state');
-  if (cb.error) return fail(cb.error === 'access_denied' ? 'denied' : 'client');
+  if (cb.error) {
+    const desc = new URLSearchParams(location.search).get('error_description') || '';
+    return fail(codeForCallback(cb.error, desc), { where: 'authorize', message: [cb.error, desc].filter(Boolean).join(': ') });
+  }
 
   status.busy = 'connecting';
   status.error = null;
@@ -326,8 +380,8 @@ export function handleRedirect() {
       return true;
     })
     .catch((e) => {
-      if (isConnected()) dropSession(e.code); // e.g. token fine, but the account is not allowed
-      return fail(e.code || 'unavailable');
+      if (isConnected()) dropSession(e.code, e.detail); // e.g. token fine, but the account is not allowed
+      return fail(e.code || 'unavailable', e.detail || null);
     });
 }
 
@@ -336,8 +390,9 @@ async function loadProfile() {
     const me = await api('/me');
     store.set(K.profile, { name: me?.display_name || me?.id || null, product: me?.product || null });
   } catch (e) {
-    // A Development-Mode app answers 403 for accounts that are not on its User Management list.
-    if (e.code === 'not-allowed') throw e;
+    // A Development-Mode app answers 403 for accounts that are not on its User Management list
+    // (and for everybody when the owner of the Spotify app has no Premium).
+    if (['not-allowed', 'owner-premium'].includes(e.code)) throw e;
   }
 }
 
@@ -347,6 +402,7 @@ export function disconnect({ quiet = false } = {}) {
   store.remove(K.profile);
   store.remove(K.device);
   status.error = null;
+  status.detail = null;
   status.busy = null;
   emit('disconnected');
   if (!quiet) toast('Verbinding met Spotify verbroken', { ms: 2400 });

@@ -178,7 +178,7 @@ export function render(root, { deck, navigate }) {
     const mixMeta = viaServer ? JSON.stringify([m?.mix, playSource()]) : '';
     region('mix', `${vn}|${r.settings.music}|${viaServer ? mixKey(ms, m) : 'p2p'}`, () => {
       if (!viaServer) return vn === 'lobby' ? mixServerOnlyHtml() : '';
-      return ms ? mixBlockHtml(ms, m, { inGame: vn !== 'lobby', music: r.settings.music }) : '';
+      return ms ? mixBlockHtml(ms, m, { inGame: vn !== 'lobby', music: r.settings.music, leader: true }) : '';
     });
     if (vn === 'lobby') {
       region('main', JSON.stringify([r.settings, r.players.length, mixMeta, leads()]), lobbyHtml);

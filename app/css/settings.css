@@ -68,25 +68,6 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .seg-opt input:checked + span { background: linear-gradient(135deg, var(--mustard), var(--coral)); color: var(--ink); }
 .seg-opt input:focus-visible + span { outline: 3px solid var(--mustard); outline-offset: 2px; }
 
-/* collapsible parts */
-.set-sub, .set-help { border-top: 1px solid var(--line); padding-top: 12px; }
-.set-sub > .set-field { margin-top: 14px; }
-.set-sub > .set-field + .set-field { margin-top: 20px; }
-.set-sub summary, .set-help summary { cursor: pointer; font-weight: 800; color: var(--mustard); min-height: 32px; display: flex; align-items: center; gap: 8px; list-style: none; }
-.set-sub summary::-webkit-details-marker, .set-help summary::-webkit-details-marker { display: none; }
-.set-sub summary::before, .set-help summary::before {
-  content: ""; flex: none; width: 8px; height: 8px; margin: 0 4px 0 2px;
-  border-right: 2.5px solid currentColor; border-bottom: 2.5px solid currentColor; transform: rotate(-45deg); transition: transform .15s;
-}
-.set-sub[open] > summary::before, .set-help[open] > summary::before { transform: rotate(45deg); }
-.set-sub[open] summary { margin-bottom: 0; }
-.set-help { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 14px 16px; }
-.set-help[open] summary { margin-bottom: 8px; }
-.set-help ol, .set-help ul { padding-left: 1.3em; margin: 0 0 12px; display: flex; flex-direction: column; gap: 8px; }
-.set-help li { font-size: .95rem; }
-.set-help h3 { font-size: 1.05rem; margin: 6px 0 8px; }
-.set-help p { font-size: .95rem; color: var(--muted); }
-
 /* device list (settings + sheet) */
 .dev-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .dev-option {
@@ -109,3 +90,91 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .pv-source { margin: 0; text-align: center; font-size: .85rem; color: var(--muted); display: flex; align-items: center; justify-content: center; gap: 6px; }
 .pv-spotify-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--spotify); flex: none; }
 .pv-compact .pv-source { justify-content: flex-start; }
+
+/* ---------- Spotify: step-by-step setup help (wizard) ---------- */
+.wiz { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.wiz p { margin: 0; }
+.wiz-head { display: flex; flex-direction: column; gap: 6px; }
+.wiz-bar { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+.wiz-bar i { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .12); }
+.wiz-bar i.on { background: var(--spotify); }
+.wiz-count { font-size: .85rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--spotify); }
+.wiz-title { font-size: 1.3rem; margin: 0; line-height: 1.25; }
+.wiz-title small { font-size: .85rem; font-weight: 600; color: var(--muted); }
+.wiz-body { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.wiz-intro { display: flex; flex-direction: column; gap: 12px; }
+.wiz-lead { font-size: 1.05rem; }
+.wiz-needs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.wiz-needs li { display: flex; gap: 10px; align-items: flex-start; }
+.wiz-needs .ico { flex: none; color: var(--spotify); margin-top: 2px; }
+.wiz-link { align-self: center; }
+.wiz-resumed { background: rgba(30, 215, 96, .12); border: 1px solid rgba(30, 215, 96, .4); border-radius: 12px; padding: 8px 12px; font-size: .92rem; }
+.wiz-nav { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.wiz-nav-row { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.wiz-ol { margin: 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 8px; }
+.wiz-know { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; font-size: .9rem; color: var(--muted); }
+.wiz-know b { color: var(--text); }
+
+/* a simple drawing of Spotify's "Create app" form (no screenshot) */
+.wiz-form { background: #f6f3fa; color: #1b1324; border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 12px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08); }
+.wiz-f { display: flex; flex-direction: column; gap: 6px; padding-bottom: 12px; border-bottom: 1px solid rgba(0, 0, 0, .08); min-width: 0; }
+.wiz-f:last-child { border-bottom: 0; padding-bottom: 0; }
+.wiz-f-label { font-size: .82rem; font-weight: 800; color: #4b3a5c; }
+.wiz-f-body { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.wiz-val { flex: 1 1 auto; min-width: 0; padding: 8px 10px; border-radius: 8px; background: #fff; border: 1px solid #cfc6da; font-weight: 600; overflow-wrap: anywhere; }
+.wiz-hint { font-size: .9rem; color: #4b3a5c; flex-basis: 100%; }
+.wiz-check { font-size: 1.2rem; line-height: 1; color: #1db954; }
+.wiz-form .btn-ghost { background: #fff; border-color: #cfc6da; color: #1b1324; }
+.wiz-f-save { flex-direction: row; align-items: center; gap: 10px; }
+.wiz-save { background: #1db954; color: #fff; font-weight: 800; border-radius: 999px; padding: 6px 16px; }
+.wiz-uri {
+  width: 100%; display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 12px; cursor: pointer; text-align: left;
+  border-radius: 12px; border: 2px dashed #1db954; background: #e9fbef; color: #10301c;
+}
+.wiz-uri code { font-size: 1.05rem; font-weight: 700; overflow-wrap: anywhere; word-break: break-all; }
+.wiz-uri-tap { display: flex; align-items: center; gap: 6px; font-size: .88rem; font-weight: 700; color: #137a39; }
+.wiz-uri[data-copied="true"] { border-style: solid; background: #d3f7df; }
+.wiz-uri:focus-visible { outline: 3px solid var(--mustard); outline-offset: 2px; }
+.wiz-uri-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; flex-basis: 100%; }
+.wiz-uri-small { padding: 8px 10px; border-width: 1.5px; }
+.wiz-uri-small code { font-size: .88rem; }
+.wiz-users { display: flex; flex-direction: column; gap: 12px; }
+.wiz-copy[data-copied="true"] { border-color: #1db954 !important; }
+.wiz-cid-msg { font-size: .92rem; min-height: 1.3em; }
+.wiz-cid-msg.is-ok { color: #9ff5bf; font-weight: 700; }
+
+/* "Verbind en test": the checks */
+.wiz-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.wiz-checks > li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; align-items: start; padding: 12px; border-radius: 14px; background: rgba(0, 0, 0, .18); border: 1px solid var(--line); }
+.wiz-checks > li > div { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.wiz-checks > li > .ico { color: var(--muted); margin-top: 2px; }
+.wiz-checks > li.is-ok { border-color: rgba(30, 215, 96, .45); }
+.wiz-checks > li.is-ok > .ico { color: var(--spotify); }
+.wiz-checks > li.is-bad > .ico { color: var(--bad); }
+.wiz-dot { width: 18px; height: 18px; margin: 3px; border-radius: 50%; border: 2px solid var(--muted); }
+.wiz-spin { width: 18px; height: 18px; margin: 3px; border-radius: 50%; border: 3px solid rgba(255, 255, 255, .2); border-top-color: var(--spotify); animation: wiz-spin 1s linear infinite; }
+@keyframes wiz-spin { to { transform: rotate(360deg); } }
+.wiz-done { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.wiz-done h3 { margin: 0; font-size: 1.35rem; }
+.wiz-done-mark { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: var(--spotify); color: var(--ink); }
+.wiz-done-mark .ico { width: 36px; height: 36px; }
+
+/* errors that explain themselves */
+.set-alert { border-radius: 14px; padding: 12px 14px; background: rgba(255, 93, 93, .12); border: 1px solid rgba(255, 140, 120, .5); display: flex; flex-direction: column; gap: 8px; }
+.set-alert p { font-size: .95rem; }
+.set-alert-title { font-weight: 800; color: #ffd1c6; }
+.set-alert-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.wiz-choice { justify-content: flex-start; text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .85rem; }
+.wiz-choice:last-child { font-family: inherit; }
+.set-line { display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap; }
+
+/* one quiet line to the setup help */
+.sp-hint { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; text-decoration: none; color: var(--text); background: rgba(30, 215, 96, .08); border: 1px solid rgba(30, 215, 96, .3); font-size: .95rem; font-weight: 600; }
+.sp-hint-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--spotify); }
+.sp-hint span:nth-child(2) { flex: 1; }
+.sp-hint-go { color: var(--spotify); font-size: 1.3rem; line-height: 1; }
+
+/* share sheet + receiving screen */
+.sp-share .pl-qr { margin: 0 auto; width: min(100%, 240px); }
+.sp-receive h1 { font-size: 1.5rem; margin: 0 0 10px; }
+.sp-receive p { margin: 0 0 10px; }

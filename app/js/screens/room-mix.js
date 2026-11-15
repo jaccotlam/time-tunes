@@ -5,6 +5,7 @@ import { icons, esc } from '../ui.js';
 import { RANGES, SHARE_COUNTS, mixMinimum, rangeLabel } from '../multi/mix.js';
 import * as top from '../spotify-top.js';
 import * as spotify from '../spotify.js';
+import { setupHintHtml } from './devices.js';
 
 const spotifyIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7.2 9.6c3.4-1 6.9-.7 9.8.9M7.8 12.6c2.8-.8 5.6-.5 7.9.8M8.5 15.4c2.1-.5 4.1-.3 5.9.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 const plural = (n, one, more) => `${n} ${n === 1 ? one : more}`;
@@ -34,13 +35,18 @@ export function mixKey(ms, meta) {
  * The panel of this phone. ms: createMixShare(); meta: the server's meta (mix counts);
  * inGame: a game is running (new songs count from the next game).
  */
-export function mixPanelHtml(ms, meta, { inGame = false } = {}) {
+export function mixPanelHtml(ms, meta, { inGame = false, leader = false } = {}) {
   const s = ms.state;
   const mineOnServer = meta?.mix?.mine ?? 0;
   const problem = ms.problem();
+  const source = ms.clientSource?.() || null;
   let body;
   if (problem === 'no-client') {
-    body = `<p class="mix-note" data-testid="mix-no-client">${esc(top.MESSAGES['no-client'])}</p>`;
+    body = leader
+      ? `<p class="mix-note" data-testid="mix-no-client">Om favorieten uit Spotify te delen, stel jij als spelleider één keer Spotify in (±5 minuten). Daarna kan iedereen in de kamer meedoen zonder zelf iets in te stellen.</p>
+        ${setupHintHtml('mix-setup-hint', 'Open de Spotify-koppelhulp')}`
+      : `<p class="mix-note" data-testid="mix-no-client">De spelleider heeft Spotify nog niet ingesteld. Zodra dat gebeurd is (bij Instellingen, ±5 minuten), kun je hier je favorieten delen; zelf hoef je niets in te stellen.</p>
+        ${setupHintHtml('mix-setup-hint', 'Of koppel je eigen Spotify')}`;
   } else if (problem && s.phase === 'idle') {
     body = `<p class="mix-note" data-testid="mix-env">${esc(spotify.errorMessage(problem))}</p>`;
   } else if (s.phase === 'connecting') {
@@ -72,7 +78,9 @@ export function mixPanelHtml(ms, meta, { inGame = false } = {}) {
       </div>
       ${s.error ? `<p class="set-error" data-testid="mix-error" role="alert">${esc(s.error)}</p>` : ''}
       <button class="btn btn-secondary" type="button" data-action="mix-share" data-testid="mix-share">${spotifyIcon}<span>${s.phase === 'error' ? 'Probeer opnieuw' : 'Doe mijn favorieten erbij'}</span></button>
-      <p class="small muted">De app kiest willekeurig ${s.count} nummers uit je top 50 bij Spotify, zoekt bij Apple Music het fragment en het jaartal op en stuurt ze naar de kamer zodra ze klaar zijn. Je logt zelf in bij Spotify; zolang de Spotify-app van de eigenaar in Development Mode staat, moet die jouw account eerst toevoegen (maximaal 5).</p>`;
+      <p class="small muted" data-testid="mix-login-note" data-client="${esc(source || '')}">De app kiest willekeurig ${s.count} nummers uit je top 50 bij Spotify, zoekt bij Apple Music het fragment en het jaartal op en stuurt ze naar de kamer zodra ze klaar zijn. ${source === 'room' && !leader
+    ? 'Je logt zelf in bij Spotify, via de Spotify-instelling van de spelleider. Die moet jouw Spotify-account eerst toevoegen onder “User Management” in het Spotify-dashboard (maximaal 5 accounts).'
+    : 'Je logt zelf in bij Spotify, via je eigen Spotify-instelling. Logt iemand anders hier in, dan moet dat account in jouw Spotify-app staan onder “User Management” (maximaal 5 accounts).'}</p>`;
   }
   if (s.error && s.phase !== 'error' && s.phase !== 'idle') body += `<p class="set-error" data-testid="mix-error" role="alert">${esc(s.error)}</p>`;
   return `<section class="mix-panel" data-testid="mix-panel" data-phase="${esc(s.phase)}">
@@ -83,13 +91,13 @@ export function mixPanelHtml(ms, meta, { inGame = false } = {}) {
 }
 
 /** Lobby (and during a game, folded away): counts + this phone's panel. */
-export function mixBlockHtml(ms, meta, { inGame = false, music = 'deck' } = {}) {
+export function mixBlockHtml(ms, meta, { inGame = false, music = 'deck', leader = false } = {}) {
   const head = `${mixCountsHtml(meta?.mix)}${music === 'mix' ? `<span class="pill pill-on" data-testid="mix-chosen">${inGame ? 'speelt nu' : 'gekozen'}</span>` : ''}`;
-  if (!inGame) return `<div class="mix-block" data-testid="mix-block"><div class="mix-head">${head}</div>${mixPanelHtml(ms, meta, { inGame })}</div>`;
+  if (!inGame) return `<div class="mix-block" data-testid="mix-block"><div class="mix-head">${head}</div>${mixPanelHtml(ms, meta, { inGame, leader })}</div>`;
   const open = ['connecting', 'fetching', 'matching', 'error'].includes(ms.state.phase);
   return `<details class="mix-block" data-testid="mix-block" ${open ? 'open' : ''}>
     <summary><span class="mix-head">${head}</span><small class="mix-tap muted">Tik hier om (ook) je eigen favorieten te delen of in te trekken.</small></summary>
-    ${mixPanelHtml(ms, meta, { inGame })}
+    ${mixPanelHtml(ms, meta, { inGame, leader })}
   </details>`;
 }
 

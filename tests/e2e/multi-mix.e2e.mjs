@@ -5,7 +5,8 @@
 // only counts, the spelleider picks "Mix van de groep", a full game of Bingo (30-second
 // fragments) and then Tijdlijn (whole songs via Spotify, so songs without a fragment play too);
 // only contributed songs come up and nothing leaks to anybody before it is played. Then:
-// withdrawing, too few songs, a Spotify account that is not admitted (403), no Client ID, and
+// withdrawing, too few songs, a Spotify account that is not admitted (403), a phone without an
+// own Client ID using the spelleider's (more in multi-mix-leader), and
 // the PeerJS route (only works with the server).
 import { launch, startServer, assert, OUT } from './helpers.mjs';
 import { join } from 'node:path';
@@ -55,7 +56,7 @@ async function fakeSpotify(ctx, base, account) {
   const json = (route, status, body) => route.fulfill({ status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: body == null ? '' : JSON.stringify(body) });
   await ctx.route('https://accounts.spotify.com/authorize?**', (route) => {
     const u = new URL(route.request().url());
-    m.calls.push({ what: 'authorize', scope: u.searchParams.get('scope'), redirect: u.searchParams.get('redirect_uri') });
+    m.calls.push({ what: 'authorize', scope: u.searchParams.get('scope'), redirect: u.searchParams.get('redirect_uri'), clientId: u.searchParams.get('client_id') });
     const target = `${base}?code=CODE-1&state=${encodeURIComponent(u.searchParams.get('state'))}`;
     route.fulfill({ status: 200, contentType: 'text/html', body: `<!doctype html><p>Spotify (nep)</p><script>location.replace(${JSON.stringify(target)})</script>` });
   });
@@ -104,7 +105,7 @@ export async function mixPhone(browser, rooms, base, account, { seed = null, tok
       if (cid) localStorage.setItem('timetunesr.spotify.clientId.v1', JSON.stringify(cid));
       if (tok) localStorage.setItem('timetunesr.spotify.token.v1', JSON.stringify({ access_token: 'at-1', refresh_token: 'rt-1', expires_at: Date.now() + 3600e3, scope: tok, clientId: cid }));
     } catch { /* ignore */ }
-  }, [clientId ? CLIENT_ID : null, token, gap]);
+  }, [typeof clientId === 'string' ? clientId : clientId ? CLIENT_ID : null, token, gap]);
   return p;
 }
 
@@ -403,14 +404,15 @@ export default async function run() {
     assert(await C.locator('[data-testid="screen-room-player"][data-view="lobby"]').count() === 1, 'Cas is still in the room');
     await shot(C, 'mix-10-player-not-allowed');
 
-    // ---------- no Client ID on this site: an explanation instead of a button ----------
+    // ---------- no Client ID on this phone: the spelleider's comes with the room ----------
+    // (a room whose spelleider has none, and old apps: suite multi-mix-leader)
     const dirk = await mixPhone(browser, rooms, base, ACCOUNTS.ilse, { clientId: false });
     const D = dirk.page;
     all.push(D);
     await joinRoom(D, base, code, 'Dirk', { via: 'link' });
-    await D.getByTestId('mix-no-client').waitFor();
-    assert(await D.getByTestId('mix-share').count() === 0 && /config\.js/.test(await D.getByTestId('mix-no-client').textContent()), 'no Client ID: explained, no broken button');
-    await shot(D, 'mix-11-player-no-client');
+    await D.getByTestId('mix-share').waitFor();
+    assert(await D.getByTestId('mix-no-client').count() === 0 && await D.getByTestId('mix-login-note').getAttribute('data-client') === 'room', 'no own Client ID: "Doe mijn favorieten erbij" works with the spelleider\'s');
+    await shot(D, 'mix-11-player-room-client');
 
     assert(all.every((p) => !p.errors.length), `no page errors (${all.flatMap((p) => p.errors).join('; ')})`);
   } finally {

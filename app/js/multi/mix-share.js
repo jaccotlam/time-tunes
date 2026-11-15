@@ -63,6 +63,13 @@ export function createMixShare({ code, memberId, session, returnHash, onChange }
     skipped: 0,
   };
   const emit = () => { if (alive) { try { onChange?.(); } catch (e) { console.error(e); } } };
+  // The Spotify app to log in with: this phone's own Client ID when it has one, else the
+  // spelleider's that the room passes on (meta.spotifyClientId), so only the spelleider sets it up.
+  const roomClientId = () => {
+    const c = session.meta?.spotifyClientId;
+    return spotify.looksLikeClientId(c) ? c : '';
+  };
+  const clientId = () => spotify.getClientId() || roomClientId();
   const mine = () => {
     const s = store.get(SHARE_KEY, null);
     return s && s.code === code && s.member === memberId() ? s : null;
@@ -143,10 +150,12 @@ export function createMixShare({ code, memberId, session, returnHash, onChange }
 
   const api = {
     get state() { return st; },
+    /** 'own' | 'room' | null: whose Spotify app this phone logs in with. */
+    clientSource() { return spotify.getClientId() ? 'own' : roomClientId() ? 'room' : null; },
     /** Can this phone log in at Spotify at all? null, or the reason why not. */
     problem() {
-      if (!spotify.getClientId()) return 'no-client';
       if (top.canRead()) return null;
+      if (!clientId()) return 'no-client';
       return spotify.environmentProblem();
     },
     setChoice({ range, count }) {
@@ -159,7 +168,7 @@ export function createMixShare({ code, memberId, session, returnHash, onChange }
     share() {
       if (['connecting', 'fetching', 'matching'].includes(st.phase)) return;
       store.set(PREF_KEY, { range: st.range, count: st.count });
-      if (!spotify.getClientId()) { st.phase = 'error'; st.error = top.MESSAGES['no-client']; emit(); return; }
+      if (!top.canRead() && !clientId()) { st.phase = 'error'; st.error = top.MESSAGES['no-client']; emit(); return; }
       if (st.tracks.length) { // sharing again: the old part goes first
         session.mixClear();
         st.tracks = [];
@@ -169,7 +178,7 @@ export function createMixShare({ code, memberId, session, returnHash, onChange }
       st.phase = 'connecting';
       st.error = '';
       emit();
-      spotify.connect(returnHash, { top: true }).catch((err) => {
+      spotify.connect(returnHash, { top: true, clientId: roomClientId() }).catch((err) => {
         writeIntent(null);
         st.phase = 'error';
         st.error = top.errorMessage(err);

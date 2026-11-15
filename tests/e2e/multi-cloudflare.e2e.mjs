@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { launch, assert, ROOT } from './helpers.mjs';
 import { phone, createRoom, joinRoom, waitForPlayers, serverHost } from './multi-helpers.mjs';
 import { installFakeItunes } from './fake-itunes.mjs';
-import { mixPhone, ACCOUNTS, PLAYBACK, TOP, shareFavourites, waitShared, myShared } from './multi-mix.e2e.mjs';
+import { mixPhone, ACCOUNTS, PLAYBACK, TOP, CLIENT_ID, shareFavourites, waitShared, myShared } from './multi-mix.e2e.mjs';
 import { SERVER_PROTOCOL_VERSION } from '../../app/js/multi/server-protocol.js';
 
 const PORT = 8790 + Math.floor(Math.random() * 100);
@@ -156,8 +156,11 @@ export default async function run() {
     for (const pg of [MH, MP]) { await pg.evaluate(() => localStorage.removeItem('timetunesr.mixShare.v1')); await pg.goto('about:blank'); }
     await stopWrangler(wr);
     wr = await startWrangler(persist);
-    await MH.goto(`${URL_}/#/spelleider`);
+    // the player comes back first: the spelleider's Spotify Client ID comes from Durable Object storage
     await MP.goto(`${URL_}/#/kamer/${mcode}`);
+    await MP.waitForFunction((cid) => window.__ttRoom?.session?.meta?.spotifyClientId === cid, CLIENT_ID, { timeout: 40000 });
+    assert(true, 'the spelleider\'s Spotify Client ID is kept with the room (Durable Object) and passed to the players');
+    await MH.goto(`${URL_}/#/spelleider`);
     await MH.locator('[data-testid="screen-room-host"][data-view="lobby"] [data-testid="conn-status"][data-state="online"]').waitFor({ timeout: 40000 });
     await MH.waitForFunction((n) => Number(document.querySelector('[data-testid="mix-counts"]')?.dataset.total) === n, total, { timeout: 20000 });
     assert(true, `after the restart the room still has the ${total} contributed songs`);

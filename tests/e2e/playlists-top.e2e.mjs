@@ -173,14 +173,18 @@ export default async function run() {
     await page.evaluate(() => { localStorage.removeItem('timetunesr.spotify.clientId.v1'); localStorage.removeItem('timetunesr.spotify.token.v1'); });
     await page.goto(`${base}#/playlists`);
     await page.getByTestId('playlist-top-create').click();
-    await page.waitForFunction(() => /Client ID/.test(document.getElementById('toast')?.textContent || ''));
+    await page.waitForFunction(() => /Koppel je eigen Spotify/.test(document.getElementById('toast')?.textContent || ''));
     assert(await page.getByTestId('screen-playlists').count() === 1, 'no Client ID: stays on the list, with a message');
     await page.goto(`${base}#/playlists/${plId}`);
     await page.getByTestId('pl-tab-spotify').click();
     await page.getByTestId('pl-sp-mode-top').click();
     await page.getByTestId('pl-top-no-client').waitFor();
-    assert(/app\/config\.js/.test(await page.getByTestId('pl-top-no-client').textContent()), 'no Client ID: explained in the tab');
+    assert(/koppelhulp/.test(await page.getByTestId('pl-top-no-client').textContent()), 'no Client ID: explained in the tab');
+    assert(await page.getByTestId('pl-setup-hint').getAttribute('href') === '#/instellingen/spotify', 'one line to the setup help: "Hele nummers? Koppel je eigen Spotify in ±5 minuten"');
     await shot(page, 'pl-top-05-no-client');
+    await page.getByTestId('pl-setup-hint').click();
+    await page.locator('[data-testid="spotify-block"][data-view="wizard-intro"]').waitFor();
+    assert(true, 'the line leads to the setup help');
     assert(errors.length === 0, `no page errors (${errors.join('; ')})`);
   } finally {
     await browser.close();

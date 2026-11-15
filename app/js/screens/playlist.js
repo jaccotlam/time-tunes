@@ -13,6 +13,7 @@ import {
 } from '../playlist-logic.js';
 import { icons, esc, toast } from '../ui.js';
 import { qrSvg, defaultBaseUrl } from './print.js';
+import { setupHintHtml } from './devices.js';
 
 export const name = 'playlist';
 
@@ -405,7 +406,7 @@ export function render(root, { params, navigate }) {
   function topHtml() {
     const note = `<p class="small muted pl-sp-note" data-testid="pl-top-note">Spotify kent je meest geluisterde nummers per periode. Het jaartal van Spotify is soms dat van een heruitgave of verzamelalbum; daarom zoekt de app elk nummer ook op bij Apple Music, voor het fragment én het vroegste jaar. Twijfel? Dan staat er <b>controleer het jaar</b>. Wat Apple Music niet heeft, speelt alleen via Spotify. Zolang de Spotify-app van de eigenaar in Development Mode staat, moet jouw account daar zijn toegevoegd (maximaal 5).</p>`;
     if (!top.canRead()) {
-      if (!spotify.getClientId()) return `<p class="set-empty" data-testid="pl-top-no-client">${esc(top.MESSAGES['no-client'])} Je kunt ook zelf een Client ID invullen bij <a href="#/instellingen">Instellingen</a>.</p>${note}`;
+      if (!spotify.getClientId()) return `<p class="set-empty" data-testid="pl-top-no-client">${esc(top.MESSAGES['no-client'])}</p>${setupHintHtml('pl-setup-hint')}${note}`;
       const connected = spotify.isConnected();
       return `<p class="set-empty" data-testid="pl-top-scope">${connected
         ? 'Je bent verbonden met Spotify, maar de app mag je meest geluisterde nummers nog niet lezen. Geef daarvoor één keer opnieuw toestemming; je komt daarna hier terug.'
@@ -479,7 +480,7 @@ export function render(root, { params, navigate }) {
   function playlistPaneHtml() {
     const limits = `<p class="small muted pl-sp-note" data-testid="pl-spotify-limits">Spotify geeft alleen de nummers van playlists die je <b>zelf hebt gemaakt of waaraan je meewerkt</b>; playlists van anderen (ook die van Spotify zelf) kan de app niet lezen. Voor de fragmenten van 30 seconden zoekt de app elk nummer daarna op bij Apple Music; wat daar niet te vinden is, speelt alleen via Spotify.</p>`;
     if (!spotify.isConnected()) {
-      return `<p class="set-empty" data-testid="pl-spotify-off">Om een Spotify-playlist over te nemen, koppel je eerst Spotify bij <a href="#/instellingen" data-testid="pl-spotify-settings">Instellingen</a>.</p>${limits}`;
+      return `<p class="set-empty" data-testid="pl-spotify-off">Om een Spotify-playlist over te nemen, koppel je eerst Spotify bij <a href="#/instellingen" data-testid="pl-spotify-settings">Instellingen</a>.</p>${spotify.getClientId() ? '' : setupHintHtml('pl-setup-hint')}${limits}`;
     }
     if (!spl.canRead()) {
       return `<p class="set-empty" data-testid="pl-spotify-scope">Je bent verbonden met Spotify, maar de app mag je playlists nog niet lezen. Geef daarvoor één keer opnieuw toestemming; je komt daarna hier terug.</p>

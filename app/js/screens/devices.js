@@ -22,6 +22,14 @@ export function deviceListHtml(devices, selectedId) {
 
 export const NO_DEVICE_HELP = 'Open de Spotify-app op dit toestel, start even een nummer en kom terug.';
 
+/** Where the step-by-step Spotify setup help lives. */
+export const SETUP_HASH = '#/instellingen/spotify';
+
+/** One quiet line to the setup help, where whole songs add something (never a pop-up). */
+export function setupHintHtml(testid = 'spotify-setup-hint', text = 'Hele nummers? Koppel je eigen Spotify in ±5 minuten') {
+  return `<a class="sp-hint" href="${SETUP_HASH}" data-testid="${esc(testid)}"><span class="sp-hint-dot" aria-hidden="true"></span><span>${esc(text)}</span><span class="sp-hint-go" aria-hidden="true">›</span></a>`;
+}
+
 /**
  * Modal sheet "Kies een Spotify-apparaat" inside `host`.
  * onPicked(device) after a choice; onPreview() for the 30-second fragment instead.
