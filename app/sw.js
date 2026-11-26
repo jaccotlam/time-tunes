@@ -75,6 +75,7 @@ const SHELL = [
   'js/screens/spotify-share.js',
   'js/multi/disco.js',
   'js/multi/party.js',
+  'js/account.js',
   'js/discoball.js',
   'js/screens/room-disco.js',
   'css/disco.css',

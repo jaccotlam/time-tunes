@@ -55,57 +55,62 @@ after(async () => { await srv?.close(); });
 test('sessies: plaatje kiezen, reageren, reacties bij spelleider en groot scherm, joker-vlag op het lijntje', async () => {
   storage.set(S.SERVER_OVERRIDE_KEY, JSON.stringify(base));
   storage.set(S.AVATAR_KEY, JSON.stringify('🐼')); // the spelleider's own pick on this device
+  storage.set('timetunesr.multiSettings.v1', JSON.stringify({ game: 'disco' }));
   const host = S.createServerHostSession();
-  host.create({ hostPlays: true, hostName: 'Ilse' });
-  await until(() => host.room && host.code && host.online, 'kamer');
-  const code = host.code;
-  const screen = S.createServerScreenSession({ code });
-  screen.start();
-  await until(() => screen.online && screen.view, 'scherm');
-  const got = { host: [], screen: [] };
-  host.onReaction((r) => got.host.push(r));
-  const off = screen.onReaction((r) => got.screen.push(r));
-  // a player picks the unicorn when joining
-  storage.delete(S.AVATAR_KEY);
-  const p = S.createServerClientSession({ code, name: 'Anouk', avatar: '🦄' });
-  p.start();
-  await until(() => p.online && p.view, 'speler');
-  assert.equal(S.storedAvatar(), '🦄', 'onthouden voor de volgende keer');
-  assert.equal(p.avatar, '🦄');
-  assert.equal(p.supports('party'), true);
-  await until(() => screen.view.players.find((x) => x.id === p.playerId)?.avatar === '🦄', 'plaatje op het scherm');
-  assert.equal(screen.view.players.find((x) => x.host).avatar, '🐼', 'de hallo van de spelleider neemt het bewaarde plaatje mee');
-  assert.equal(p.setAvatar('kat'), false);
-  assert.equal(p.setAvatar('🐸'), true);
-  await until(() => screen.view.players.find((x) => x.id === p.playerId)?.avatar === '🐸', 'nieuw plaatje');
-  assert.equal(host.setAvatar('🐙'), true);
-  await until(() => screen.view.players.find((x) => x.host)?.avatar === '🐙', 'plaatje spelleider');
-  // reactions: to the host session and the display, not to the player
-  assert.equal(p.react('💩'), false);
-  assert.equal(p.react('👏'), true);
-  assert.equal(p.react('🔥'), false, 'eigen afkoeltijd');
-  await until(() => got.screen.length === 1 && got.host.length === 1, 'reactie aangekomen');
-  assert.deepEqual({ ...got.screen[0], at: 0, receivedAt: 0 }, { id: p.playerId, name: 'Anouk', avatar: '🐸', emoji: '👏', at: 0, receivedAt: 0 });
-  assert.equal(screen.reactions.length, 1);
-  assert.equal(host.reactions.at(-1).emoji, '👏');
-  assert.ok(!p.received.some((m) => m.t === 'react'), 'de speler krijgt geen reacties');
-  await sleep(REACT_GAP_MS + 50);
-  assert.equal(host.react('🎉'), true, 'de meespelende spelleider mag ook');
-  await until(() => got.screen.length === 2, 'reactie spelleider');
-  assert.equal(got.host.length, 2, 'ook terug bij de spelleider zelf (die is het grote scherm-in-het-klein)');
-  off();
-  // the joker flag goes over the wire: without a joker the server says so
-  host.start(cards);
-  await until(() => p.view?.phase === 'answering' && host.room?.phase === 'answering', 'spel');
-  host.reveal();
-  await until(() => p.view.phase === 'revealed', 'onthuld');
-  p.stamp(0, { joker: true });
-  const n = await until(() => p.takeNotice(), 'melding');
-  assert.match(n.message, /joker|vakje/);
-  assert.equal(p.status, 'online', 'een gewone weigering');
-  p.destroy();
-  screen.destroy();
-  host.destroy();
+  const done = [host];
+  try {
+    host.create({ hostPlays: true, hostName: 'Ilse' });
+    await until(() => host.room && host.code && host.online, 'kamer');
+    const code = host.code;
+    const screen = S.createServerScreenSession({ code });
+    done.push(screen);
+    screen.start();
+    await until(() => screen.online && screen.view, 'scherm');
+    const got = { host: [], screen: [] };
+    host.onReaction((r) => got.host.push(r));
+    const off = screen.onReaction((r) => got.screen.push(r));
+    // a player picks the unicorn when joining
+    storage.delete(S.AVATAR_KEY);
+    const p = S.createServerClientSession({ code, name: 'Anouk', avatar: '🦄' });
+    done.push(p);
+    p.start();
+    await until(() => p.online && p.view, 'speler');
+    assert.equal(S.storedAvatar(), '🦄', 'onthouden voor de volgende keer');
+    assert.equal(p.avatar, '🦄');
+    assert.equal(p.supports('party'), true);
+    await until(() => screen.view.players.find((x) => x.id === p.playerId)?.avatar === '🦄', 'plaatje op het scherm');
+    assert.equal(screen.view.players.find((x) => x.host).avatar, '🐼', 'de hallo van de spelleider neemt het bewaarde plaatje mee');
+    assert.equal(p.setAvatar('kat'), false);
+    assert.equal(p.setAvatar('🐸'), true);
+    await until(() => screen.view.players.find((x) => x.id === p.playerId)?.avatar === '🐸', 'nieuw plaatje');
+    assert.equal(host.setAvatar('🐙'), true);
+    await until(() => screen.view.players.find((x) => x.host)?.avatar === '🐙', 'plaatje spelleider');
+    // reactions: to the host session and the display, not to the player
+    assert.equal(p.react('💩'), false);
+    assert.equal(p.react('👏'), true);
+    assert.equal(p.react('🔥'), false, 'eigen afkoeltijd');
+    await until(() => got.screen.length === 1 && got.host.length === 1, 'reactie aangekomen');
+    assert.deepEqual({ ...got.screen[0], at: 0, receivedAt: 0 }, { id: p.playerId, name: 'Anouk', avatar: '🐸', emoji: '👏', at: 0, receivedAt: 0 });
+    assert.equal(screen.reactions.length, 1);
+    assert.equal(host.reactions.at(-1).emoji, '👏');
+    assert.ok(!p.received.some((m) => m.t === 'react'), 'de speler krijgt geen reacties');
+    await sleep(REACT_GAP_MS + 50);
+    assert.equal(host.react('🎉'), true, 'de meespelende spelleider mag ook');
+    await until(() => got.screen.length === 2, 'reactie spelleider');
+    assert.equal(got.host.length, 2, 'ook terug bij de spelleider zelf (die is het grote scherm-in-het-klein)');
+    off();
+    // the joker flag goes over the wire: without a joker the server says so
+    host.start(cards);
+    await until(() => p.view?.phase === 'answering' && host.room?.phase === 'answering', 'spel');
+    host.reveal();
+    await until(() => p.view.phase === 'revealed', 'onthuld');
+    p.stamp(0, { joker: true });
+    const n = await until(() => p.takeNotice(), 'melding');
+    assert.match(n.message, /joker|vakje/);
+    assert.equal(p.status, 'online', 'een gewone weigering');
+  } finally {
+    for (const x of done) x.destroy();
+  }
 });
 
 test('sessies: een server zonder de party-feature krijgt geen avatar- of reactiebericht', async () => {
