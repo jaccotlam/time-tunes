@@ -253,9 +253,10 @@
 @keyframes ph-glow { 50% { transform: scale(1.05); } }
 .ph-bingo-sub { font-weight: 800; font-size: 1.25rem; }
 .ph-m-bingo .disco-card { width: min(78vw, 36dvh); }
-/* the confetti falls behind everything of the moment (text, card and buttons stay clean) */
-.ph-m-bingo, .ph-m-winner { isolation: isolate; }
-.ph-moment > .confetti { z-index: -1; }
+/* the confetti falls on its own layer, under the moment (text, card and buttons stay clean) */
+.ph-fx { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.ph-fx .confetti { position: absolute; }
+.ph-moment-host { z-index: 1; }
 
 /* winner */
 .ph-m-winner { text-align: center; }

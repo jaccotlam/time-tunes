@@ -157,6 +157,7 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
       <div class="ph-banner" data-region="status"></div>
       <div class="ph-stage">
         <div class="ph-ball" aria-hidden="false"></div>
+        <div class="ph-fx" aria-hidden="true"></div>
         <div class="ph-moment-host"></div>
       </div>
       <div class="ph-toast" data-testid="disco-toast" role="status" aria-live="polite" hidden></div>
@@ -175,6 +176,7 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
     parts.menuBtn = el.querySelector('.ph-menu-btn');
     parts.ball = el.querySelector('.ph-ball');
     parts.host = el.querySelector('.ph-moment-host');
+    parts.fx = el.querySelector('.ph-fx');
     parts.toast = el.querySelector('.ph-toast');
     parts.wrap = el.querySelector('.ph-sheet-wrap');
     parts.sheet = el.querySelector('.ph-sheet');
@@ -224,6 +226,8 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
       if (m === 'bingo' && !lastBingo) vibrate([60, 40, 60, 40, 220]);
       lastBingo = m === 'bingo';
       parts.host.innerHTML = skeletonHtml(m, v, vv, first);
+      // confetti on its own layer under the moment: it never falls over text or buttons
+      parts.fx.innerHTML = m === 'bingo' || m === 'winner' ? confettiHtml() : '';
       for (const k of Object.keys(partKeys)) delete partKeys[k];
       for (const p of ['head', 'main', 'foot']) parts[p] = parts.host.querySelector(`[data-part="${p}"]`);
     }
@@ -262,8 +266,7 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
   function skeletonHtml(m, v, vv, first) {
     // first paint after a reload: no entrance animation, the moment is simply there
     const enter = first ? '' : ' is-enter';
-    const fx = m === 'bingo' || m === 'winner' ? confettiHtml()
-      : m === 'verdict' && vv === 'right' ? '<div class="ph-burst" aria-hidden="true"></div>' : '';
+    const fx = m === 'verdict' && vv === 'right' ? '<div class="ph-burst" aria-hidden="true"></div>' : '';
     const cls = m === 'verdict' ? ` is-${vv}` : '';
     const tap = m === 'verdict' && vv !== 'doubt' ? ' data-action="ph-next"' : m === 'bingo' ? ' data-action="ph-bingo-done"' : '';
     return `<div class="ph-moment ph-m-${m}${cls}${enter}" data-testid="disco-moment" data-moment="${m}"${tap}>
