@@ -194,6 +194,8 @@ export default async function run() {
     await joinRoom(B, base, code, 'Bram', { via: 'link' });
     await waitForPlayers(H, 2);
     await H.getByTestId('room-game-bingo').check(); // the lobby now starts on Discobingo
+    // the choice goes to the server and back: wait for the lobby to show Bingo's numbers, not Discobingo's
+    await H.waitForFunction(() => document.querySelector('[data-testid="room-mix-need"]')?.getAttribute('data-missing') === '16', null, { timeout: 10000 }).catch(() => {});
     assert(/nog geen nummers/.test((await counts(H)).text), 'lobby: "Mix van de groep: nog geen nummers"');
     assert(await H.getByTestId('room-music-mix').isDisabled(), 'Mix van de groep can not be chosen yet');
     assert(Number(await H.getByTestId('room-mix-need').getAttribute('data-missing')) === 16, 'Bingo 4×4 needs 16 songs: the lobby says how many are missing');
