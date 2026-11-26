@@ -8,7 +8,7 @@
 // also shown at 1280×720 (laptop / tv). Last: the PeerJS route says the quiz needs the server.
 import { join } from 'node:path';
 import { launch, startServer, assert, OUT } from './helpers.mjs';
-import { startRoomServer, startSignal, phone, createRoom, joinRoom, waitForPlayers, serverHost } from './multi-helpers.mjs';
+import { startRoomServer, startSignal, phone, createRoom, joinRoom, waitForPlayers, serverHost, view, received } from './multi-helpers.mjs';
 import { installFakeItunes } from './fake-itunes.mjs';
 import { QUIZ_BASE, QUIZ_SPEED } from '../../app/js/multi/quiz.js';
 
@@ -28,8 +28,6 @@ async function segCheck(page, testid) {
   await el.evaluate((e) => e.scrollIntoView({ block: 'center' }));
   await el.check();
 }
-const view = (page) => page.evaluate(() => window.__ttRoom?.session?.view || null);
-const received = (page) => page.evaluate(() => window.__ttRoom?.session?.received || []);
 
 async function quizPhone(browser, rooms, opts) {
   const p = await phone(browser, rooms, opts);

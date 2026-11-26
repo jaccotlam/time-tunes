@@ -148,3 +148,15 @@ export const serverHost = (hostPage) => hostPage.evaluate(() => {
   const s = window.__ttHost?.session;
   return s ? { room: s.room, song: s.currentSong(), meta: s.meta, status: s.status, code: s.code } : null;
 });
+
+// ---- identical in several suites: what a player's phone knows and waits for ----
+/** The player's room view (window.__ttRoom). */
+export const view = (page) => page.evaluate(() => window.__ttRoom?.session?.view || null);
+/** Every message the player's session received. */
+export const received = (page) => page.evaluate(() => window.__ttRoom?.session?.received || []);
+/** Does `text` contain `needle` (not followed by a digit, so 1998 does not match 19981)? */
+export const has = (text, needle) => new RegExp(`${String(needle).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![0-9])`).test(text);
+/** Wait until some element has data-view=`v`. */
+export async function waitView(page, v, timeout = 20000) {
+  await page.locator(`[data-view="${v}"]`).first().waitFor({ timeout });
+}

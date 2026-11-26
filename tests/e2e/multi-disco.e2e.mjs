@@ -336,7 +336,6 @@ async function wholeGame(browser, rooms, server) {
       const r = sv.game.reveal.results.find((x) => x.name === 'Anouk');
       assert(r.verdict === 'right' && !r.decided && !r.overridden, `a small typo ("${aText}") is judged right automatically, without the spelleider`);
     }
-    if (aHow === 'near') assert(true, `a year two off (${aText} for ${song.year}) is right`);
     if (round === 1) { await shot(A, 'disco-09-player-revealed'); await shot(H, 'disco-10-host-revealed'); }
 
     // ----- Bram: wrong, pass, or a doubt -----

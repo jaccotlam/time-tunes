@@ -7,14 +7,11 @@
 // "Kopieer diagnose", a sleeping server, and checks that no player ever receives the song
 // before the reveal.
 import { launch, startServer, assert, shot } from './helpers.mjs';
-import { startRoomServer, phone, createRoom, joinRoom, waitForPlayers, serverHost } from './multi-helpers.mjs';
+import { startRoomServer, phone, createRoom, joinRoom, waitForPlayers, serverHost, view, received, has, waitView } from './multi-helpers.mjs';
 import { checkSquare } from '../../app/js/bingo.js';
 import { createServer } from 'node:net';
 
 const SEED = 7;
-const view = (page) => page.evaluate(() => window.__ttRoom?.session?.view || null);
-const received = (page) => page.evaluate(() => window.__ttRoom?.session?.received || []);
-const has = (text, needle) => new RegExp(`${String(needle).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![0-9])`).test(text);
 const song = async (host) => (await serverHost(host)).song;
 /** The running song, read only once the host's own session is on that round (a phone can be a message ahead of the host tab). */
 const songOfRound = async (host, r) => {
@@ -33,9 +30,6 @@ async function copyDiag(page) {
   return '';
 }
 
-async function waitView(page, v, timeout = 20000) {
-  await page.locator(`[data-view="${v}"]`).first().waitFor({ timeout });
-}
 async function waitRound(page, round, timeout = 20000) {
   await page.waitForFunction((r) => window.__ttRoom?.session?.view?.game?.round === r && window.__ttRoom.session.view.phase === 'answering', round, { timeout });
   await page.locator('[data-testid="play-panel"]').waitFor({ timeout });
@@ -348,7 +342,7 @@ export default async function run() {
     slowUntil = Date.now() + 7000;
     await Z.getByTestId('join-submit').click();
     await Z.getByTestId('server-waking').waitFor({ timeout: 8000 });
-    await Z.waitForTimeout(1500);
+    await Z.locator('[data-testid="server-waking"] [role="progressbar"]').waitFor();
     await shot(Z, '95-server-waking');
     assert(true, 'slow server: "Server wordt wakker…" with progress');
     await waitView(Z, 'revealed', 30000);

@@ -4,6 +4,7 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { launch, phoneContext, startServer, assert, shot, OUT, FIXTURE_DECK } from './helpers.mjs';
+import { silentWav } from './fake-itunes.mjs';
 
 export const CLIENT_ID = '0123456789abcdef0123456789abcdef';
 const ID_DQ = '0DancingQueenStudio000';
@@ -16,14 +17,6 @@ const deck = JSON.parse(FIXTURE_DECK);
 deck.cards.find((c) => c.id === '004').spotifyId = ID_DECK;
 export const DECK_JSON = JSON.stringify(deck);
 
-function silentWav(seconds = 30) {
-  const samples = 8000 * seconds;
-  const b = Buffer.alloc(44 + samples, 128);
-  b.write('RIFF', 0); b.writeUInt32LE(36 + samples, 4); b.write('WAVE', 8); b.write('fmt ', 12);
-  b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(8000, 24);
-  b.writeUInt32LE(8000, 28); b.writeUInt16LE(1, 32); b.writeUInt16LE(8, 34); b.write('data', 36); b.writeUInt32LE(samples, 40);
-  return b;
-}
 export const WAV = silentWav();
 
 /**
@@ -303,7 +296,7 @@ export default async function run() {
     const before = fake.count('PUT /me/player/pause');
     await page.getByTestId('back-home').click();
     await page.getByTestId('screen-start').waitFor();
-    await page.waitForTimeout(300);
+    for (let i = 0; i < 50 && fake.count('PUT /me/player/pause') <= before; i++) await page.waitForTimeout(100); // poll the fake's counter
     assert(fake.count('PUT /me/player/pause') > before && !fake.m.playing.isPlaying, 'leaving the card screen pauses Spotify');
 
     // fixed spotifyId in the deck: no search

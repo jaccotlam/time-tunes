@@ -3,18 +3,12 @@
 // of the host, a player who drops out, late join, removal), then Tijdlijn to a shared win,
 // and checks that nothing about the running song reaches a player before the reveal.
 import { launch, startServer, assert, shot } from './helpers.mjs';
-import { startSignal, phone, createRoom, joinRoom, waitForPlayers, hostRoom } from './multi-helpers.mjs';
+import { startSignal, phone, createRoom, joinRoom, waitForPlayers, hostRoom, view, received, has, waitView } from './multi-helpers.mjs';
 import { checkSquare, findBingo } from '../../app/js/bingo.js';
 
 const SEED = 7;
-const view = (page) => page.evaluate(() => window.__ttRoom?.session?.view || null);
-const received = (page) => page.evaluate(() => window.__ttRoom?.session?.received || []);
 const song = async (host) => { const r = await hostRoom(host); return r.game.songs[r.game.current]; };
-const has = (text, needle) => new RegExp(`${String(needle).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![0-9])`).test(text);
 
-async function waitView(page, v, timeout = 20000) {
-  await page.locator(`[data-view="${v}"]`).first().waitFor({ timeout });
-}
 async function waitRound(page, round) {
   await page.waitForFunction((r) => window.__ttRoom?.session?.view?.game?.round === r && window.__ttRoom.session.view.phase === 'answering', round, { timeout: 20000 });
   await page.locator('[data-testid="play-panel"]').waitFor();

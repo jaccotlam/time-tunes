@@ -129,7 +129,7 @@ export default async function run() {
     // It can not join any more, but it must not break: it gets the neat "ververs de pagina" message
     // (as player and as spelleider) instead of a half-working room.
     old = await startOldApp();
-    if (!old) assert(true, `old app (${OLD_REF}) not in this git checkout: check skipped`);
+    if (!old) console.log(`  SKIPPED - old app (${OLD_REF}) not in this git checkout: version check not run`);
     else {
       const ev = await mixPhone(browser, rooms, old.url, { top: ACCOUNTS.anouk.top.slice(0, 6) }, { clientId: OWN_CID });
       const E = ev.page;
