@@ -562,7 +562,13 @@ async function mainGame(browser, rooms, server) {
   assert(true, 'four displays: the room server counts 4 screens (meta.screens)');
   const fifth = await plain.context.newPage();
   await fifth.goto(`${server.url}#/scherm/${code}`);
-  await fifth.locator('[data-testid="screen-error"][data-code="screens"]').waitFor({ timeout: 15000 });
+  try {
+    await fifth.locator('[data-testid="screen-error"][data-code="screens"]').waitFor({ timeout: 15000 });
+  } catch (e) {
+    const st = await fifth.evaluate(() => ({ status: document.querySelector('[data-testid="screen-display"]')?.dataset.status, err: window.__ttScreen?.session?.error, text: document.body.innerText.slice(0, 200) }));
+    const n = await H.evaluate(() => window.__ttHost.session.meta?.screens);
+    throw new Error(`ASSERT: the 5th display did not get the screens error: ${JSON.stringify(st)}, room has ${n} screens`);
+  }
   assert(/grote schermen/.test(await fifth.getByTestId('screen-error').textContent()), 'the 5th display gets the "screens" error screen (4 per room)');
   assert(await attr(D, 'screen-display', 'data-status') === 'online', 'the other displays are not disturbed');
   await plain.context.close();
