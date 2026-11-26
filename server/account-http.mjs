@@ -28,10 +28,20 @@ import { isValidCode } from '../app/js/multi/code.js';
 
 export const ACCOUNT_LIMITS = {
   signupPerIp: { limit: 5, windowMs: 60 * 60 * 1000 },
+  // failures per IP: wrong password / recovery code, an unknown name, a session the account
+  // does not know (also a forged token); over the limit the address gets no account answer at all
   failsPerIp: { limit: 30, windowMs: 15 * 60 * 1000 },
+  // every /account request per IP (each one may wake an account object), and the ones that
+  // run PBKDF2 (sign-up, log-in, recovery, password change, delete), successful ones too
+  requestsPerIp: { limit: 120, windowMs: 60 * 1000 },
+  hashPerIp: { limit: 30, windowMs: 10 * 60 * 1000 },
+  authBody: 2 * 1024, // sign-up / log-in / recovery: a name, a password, a code
   smallBody: 8 * 1024,
   dataBody: Math.ceil(MAX_DATA_BYTES * 1.5), // the data plus JSON overhead; the account checks the real size
+  maxDepth: 16, // nesting of a body (the data is about 5 deep)
 };
+
+const HASH_OPS = ['signup', 'login', 'recover', 'password', 'delete'];
 
 const NO_TOKEN = ['signup', 'login', 'recover'];
 
@@ -61,6 +71,14 @@ export function accountRoute(method, pathname) {
   return { op: null };
 }
 
+/** Largest body of this account route (null: not an account route), for the adapter to check Content-Length before reading. */
+export function accountBodyMax(method, pathname, limits = ACCOUNT_LIMITS) {
+  const r = accountRoute(method, pathname);
+  if (!r) return null;
+  if (NO_TOKEN.includes(r.op)) return limits.authBody;
+  return r.op === 'save' ? limits.dataBody : limits.smallBody;
+}
+
 /** The per-IP limits of one adapter (per process on Node, per Worker instance on Cloudflare). */
 export function accountLimiters({ now = Date.now, limits = {} } = {}) {
   const L = { ...ACCOUNT_LIMITS, ...limits };
@@ -68,11 +86,29 @@ export function accountLimiters({ now = Date.now, limits = {} } = {}) {
     L,
     signup: rateLimiter({ ...L.signupPerIp, now }),
     fails: failCounter({ ...L.failsPerIp, now }),
+    requests: rateLimiter({ ...L.requestsPerIp, now }),
+    hashes: rateLimiter({ ...L.hashPerIp, now }),
   };
 }
 
-function parseBody(text) {
+/** Is this JSON text nested deeper than `max` (brackets outside strings)? Checked before JSON.parse. */
+export function tooDeep(text, max) {
+  let depth = 0;
+  let inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (inStr) {
+      if (c === 92) i++; // backslash: skip the next character
+      else if (c === 34) inStr = false;
+    } else if (c === 34) inStr = true;
+    else if (c === 123 || c === 91) { if (++depth > max) return true; } else if (c === 125 || c === 93) depth--;
+  }
+  return false;
+}
+
+function parseBody(text, maxDepth) {
   if (text == null || text === '') return {};
+  if (tooDeep(text, maxDepth)) return null;
   try {
     const v = JSON.parse(text);
     return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
@@ -88,17 +124,20 @@ export async function handleAccount(req, { boxFor, limiters, log = () => {} }) {
   const r = accountRoute(req.method, req.path);
   if (!r?.op) return fail(404, 'notfound', 'Onbekend verzoek.');
   const { L } = limiters;
-  const max = r.op === 'save' ? L.dataBody : L.smallBody;
-  if (String(req.body ?? '').length > max) return fail(413, 'size', 'Dit verzoek is te groot.');
-  const body = parseBody(req.body);
-  if (!body) return fail(400, 'bad', 'Ongeldig verzoek.');
   const ip = req.ip || '?';
+  // everything that is cheap to refuse is refused here, before any account object is addressed
+  if (limiters.fails.blocked(ip)) return fail(429, 'ratelimit', 'Te veel mislukte pogingen vanaf dit netwerk. Probeer het over een kwartier opnieuw.');
+  if (!limiters.requests.allow(ip)) return fail(429, 'ratelimit', 'Te veel verzoeken. Wacht even.');
+  const max = accountBodyMax(req.method, req.path, L);
+  if (String(req.body ?? '').length > max) return fail(413, 'size', 'Dit verzoek is te groot.');
+  const body = parseBody(req.body, L.maxDepth);
+  if (!body) return fail(400, 'bad', 'Ongeldig verzoek.');
   const str = (v) => (typeof v === 'string' ? v : '');
+  const tooMany = () => fail(429, 'ratelimit', 'Te veel pogingen vanaf dit netwerk. Wacht een paar minuten.');
 
   let key;
   let args;
   if (NO_TOKEN.includes(r.op)) {
-    if (limiters.fails.blocked(ip)) return fail(429, 'ratelimit', 'Te veel mislukte pogingen vanaf dit netwerk. Probeer het over een kwartier opnieuw.');
     const username = str(body.username);
     if (r.op === 'signup') {
       const problem = usernameProblem(username);
@@ -113,7 +152,8 @@ export async function handleAccount(req, { boxFor, limiters, log = () => {} }) {
     args = { username, password: str(body.password), recoveryCode: str(body.recoveryCode) };
   } else {
     const t = parseToken(req.auth);
-    if (!t) return fail(401, 'session', MESSAGES.session);
+    // a malformed token, or one for a name nobody can have (reserved): no object is asked
+    if (!t || usernameProblem(t.key)) { limiters.fails.fail(ip); return fail(401, 'session', MESSAGES.session); }
     key = t.key;
     args = { secret: t.secret };
     if (r.op === 'password') Object.assign(args, { password: str(body.password), newPassword: str(body.newPassword) });
@@ -123,8 +163,9 @@ export async function handleAccount(req, { boxFor, limiters, log = () => {} }) {
     if (r.code) args.code = r.code;
     if (r.op === 'roomEdit') args.patch = body;
   }
+  if (HASH_OPS.includes(r.op) && !limiters.hashes.allow(ip)) return tooMany();
   const out = await boxFor(key).call(r.op, args);
-  if (out.status === 401 && ['login', 'recover', 'password'].includes(out.body?.code)) limiters.fails.fail(ip);
+  if (out.status === 401 && ['login', 'recover', 'password', 'session'].includes(out.body?.code)) limiters.fails.fail(ip);
   log('account', r.op, out.status); // never the name, a password or a token
   return out;
 }

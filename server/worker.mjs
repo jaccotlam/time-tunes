@@ -14,7 +14,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { RoomHub, randomToken } from './room.mjs';
 import { AccountBox } from './accounts.mjs';
-import { accountRoute, handleAccount, accountLimiters, ACCOUNT_LIMITS } from './account-http.mjs';
+import { accountRoute, handleAccount, accountLimiters, accountBodyMax } from './account-http.mjs';
 import { prepareRoom, preparedOp } from './prepared.mjs';
 import {
   DEFAULT_ORIGINS, parseOrigins, originAllowed, corsHeaders, rateLimiter, route, health, createOptions,
@@ -37,6 +37,26 @@ async function readBody(request, max) {
   return text.length > max ? null : text;
 }
 
+/** The body as text, but never more than `max` bytes read: null when it is (or says it is) larger. */
+async function readCapped(request, max) {
+  if (Number(request.headers.get('content-length')) > max) return null;
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const parts = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) { try { await reader.cancel(); } catch { /* gone */ } return null; }
+    parts.push(value);
+  }
+  const all = new Uint8Array(size);
+  let at = 0;
+  for (const p of parts) { all.set(p, at); at += p.byteLength; }
+  return new TextDecoder().decode(all);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -56,7 +76,9 @@ export default {
 
     if (acct) {
       if (!env.ACCOUNTS) return json(404, { code: 'noaccounts', message: 'Deze server kent geen accounts.' }, origin);
-      const text = await readBody(request, ACCOUNT_LIMITS.dataBody);
+      // per Worker instance (best effort), like the other limits here; the real protection is a
+      // Cloudflare rate-limiting rule for /account/* in the dashboard
+      const text = await readCapped(request, accountBodyMax(request.method, url.pathname));
       if (text == null) return json(413, { code: 'size', message: 'Dit verzoek is te groot.' }, origin);
       const out = await handleAccount(
         { method: request.method, path: url.pathname, auth: request.headers.get('authorization') || '', ip, body: text },

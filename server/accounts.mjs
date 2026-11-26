@@ -44,6 +44,12 @@ export const RESERVED_NAMES = [
   'rooms', 'kamer', 'me', 'null', 'undefined', 'anonymous', 'gast', 'guest',
 ];
 export const LOGIN_FAILS = { limit: 10, windowMs: 15 * 60 * 1000, lockMs: 15 * 60 * 1000 };
+/** Wrong recovery codes: a counter of its own (a login lock does not stop a recovery with the right code). */
+export const RECOVER_FAILS = { limit: 10, windowMs: 60 * 60 * 1000, lockMs: 60 * 60 * 1000 };
+/** Wrong current password with a valid session (password change, delete): its own counter too. */
+export const REAUTH_FAILS = { limit: 10, windowMs: 15 * 60 * 1000, lockMs: 15 * 60 * 1000 };
+const FAIL_RULES = { login: LOGIN_FAILS, recover: RECOVER_FAILS, reauth: REAUTH_FAILS };
+const FAIL_FIELDS = { login: 'fails', recover: 'rcFails', reauth: 'reFails' }; // in the record
 export const ROOM_NAME_MAX = 40;
 const TOKEN_RE = /^tta1\.([a-z0-9_-]{3,24})\.([A-Za-z0-9_-]{43})$/;
 const PLAYLIST_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
@@ -268,7 +274,9 @@ export function validateData(d) {
 export const emptyData = () => ({ spotifyClientId: '', playlists: [], deleted: {}, prefs: {} });
 
 // ---------- prepared rooms (the options; the room server keeps the room itself) ----------
-export const cleanRoomName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, ROOM_NAME_MAX);
+// zero-width and bidi control characters: a name shown to guests and on the tv must look like what it is
+const INVISIBLE = /[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
+export const cleanRoomName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(INVISIBLE, '').replace(/\s+/g, ' ').trim().slice(0, ROOM_NAME_MAX);
 
 /**
  * Options of a prepared room from the app: { name, settings, music, play, hostPlays, hostName }.
@@ -346,9 +354,11 @@ export class AccountBox {
     this.log = log;
     this.rec = undefined; // undefined = not loaded yet, null = no account
     this.chain = Promise.resolve();
-    // failures for a name without an account (not stored: nothing to keep), so an unknown name
-    // gets locked exactly like a real one and a lock tells nothing
-    this.ghostFails = { n: 0, since: 0, until: 0 };
+    // Failures for a name without an account: kept in memory only (nothing to store). Within
+    // one process (Node) or as long as the object stays in memory (Cloudflare: lost when the
+    // object is evicted) an unknown name locks like a real one. That is no promise against
+    // finding names: sign-up already tells whether a name is taken.
+    this.ghostFails = { login: { n: 0, since: 0, until: 0 }, recover: { n: 0, since: 0, until: 0 } };
   }
 
   /** Run one operation (op name -> method) after the ones before it. Always resolves { status, body }. */
@@ -372,25 +382,40 @@ export class AccountBox {
 
   exists() { return !!this.rec; }
 
-  // ----- failures (lockout) -----
-  failsOf() { return this.rec ? (this.rec.fails ||= { n: 0, since: 0, until: 0 }) : this.ghostFails; }
-  locked() {
-    const f = this.failsOf();
+  // ----- failures (lockout): kind 'login' | 'recover' | 'reauth', each its own counter -----
+  failsOf(kind = 'login') {
+    if (!this.rec) return (this.ghostFails[kind] ||= { n: 0, since: 0, until: 0 });
+    return (this.rec[FAIL_FIELDS[kind]] ||= { n: 0, since: 0, until: 0 });
+  }
+  locked(kind = 'login') {
+    const f = this.failsOf(kind);
     return !!f.until && this.now() < f.until;
   }
-  async addFail() {
-    const f = this.failsOf();
+  async addFail(kind = 'login') {
+    const f = this.failsOf(kind);
+    const rule = FAIL_RULES[kind];
     const t = this.now();
-    if ((f.until && t >= f.until) || t - f.since > LOGIN_FAILS.windowMs) { f.n = 0; f.since = t; f.until = 0; }
+    if ((f.until && t >= f.until) || t - f.since > rule.windowMs) { f.n = 0; f.since = t; f.until = 0; }
     f.n++;
-    if (f.n >= LOGIN_FAILS.limit) f.until = t + LOGIN_FAILS.lockMs;
+    if (f.n >= rule.limit) f.until = t + rule.lockMs;
     if (this.rec) await this.persist();
   }
-  async clearFails() {
-    const f = this.failsOf();
+  async clearFails(kind = 'login') {
+    const f = this.failsOf(kind);
     if (!f.n && !f.until) return;
     f.n = 0; f.since = 0; f.until = 0;
     if (this.rec) await this.persist();
+  }
+
+  /**
+   * Every prepared room gets a fresh owner token (nobody holds it): a device that had opened
+   * one is no longer its spelleider and must open it again through a valid session. After
+   * "log out everywhere", a password change and a recovery.
+   */
+  async rotateRoomOwners() {
+    for (const r of this.rec?.rooms || []) {
+      try { await this.rooms?.op(r.code, 'rotate', { account: this.rec.uid }); } catch { /* gone: nothing to rotate */ }
+    }
   }
 
   // ----- sessions -----
@@ -467,7 +492,8 @@ export class AccountBox {
       data: emptyData(),
       rooms: [],
     };
-    if (this.ghostFails.until && t < this.ghostFails.until) this.rec.fails = { ...this.ghostFails };
+    const ghost = this.ghostFails.login;
+    if (ghost.until && t < ghost.until) this.rec.fails = { ...ghost };
     const token = this.newSession();
     await this.persist();
     return ok({ token, recoveryCode, account: this.profile() }, 201);
@@ -488,17 +514,19 @@ export class AccountBox {
   async op_recover({ recoveryCode, password }) {
     const problem = passwordProblem(password);
     if (problem) return fail(400, 'bad', problem);
-    if (this.locked()) return fail(429, 'locked', MESSAGES.locked);
+    if (this.locked('recover')) return fail(429, 'locked', MESSAGES.locked);
     const good = !!this.rec && timingSafeEqual(recoveryHash(this.rec.uid, recoveryCode), this.rec.rc || '');
-    if (!good) { await this.addFail(); return fail(401, 'recover', MESSAGES.recover); }
+    if (!good) { await this.addFail('recover'); return fail(401, 'recover', MESSAGES.recover); }
     // a new password, every session ends, and the used code is replaced by a new one
     const next = newRecoveryCode();
     this.rec.pw = await hashPassword(password, { iterations: this.iterations });
     this.rec.rc = recoveryHash(this.rec.uid, next);
     this.rec.sessions = {};
     this.rec.fails = { n: 0, since: 0, until: 0 };
+    this.rec.rcFails = { n: 0, since: 0, until: 0 };
     const token = this.newSession();
     await this.persist();
+    await this.rotateRoomOwners();
     return ok({ token, recoveryCode: next, account: this.profile() });
   }
 
@@ -515,6 +543,7 @@ export class AccountBox {
       const n = Object.keys(this.rec.sessions).length;
       this.rec.sessions = {};
       await this.persist();
+      await this.rotateRoomOwners();
       return ok({ ok: true, revoked: n });
     });
   }
@@ -523,9 +552,10 @@ export class AccountBox {
     return this.authed(args, async (sid) => {
       const problem = passwordProblem(args.newPassword);
       if (problem) return fail(400, 'bad', problem);
-      if (this.locked()) return fail(429, 'locked', MESSAGES.locked);
+      // a valid session is not stopped by the login lock; wrong current passwords count on their own
+      if (this.locked('reauth')) return fail(429, 'locked', MESSAGES.locked);
       if (!(await verifyPassword(args.password, this.rec.pw, { iterations: this.iterations }))) {
-        await this.addFail();
+        await this.addFail('reauth');
         return fail(401, 'password', 'Je huidige wachtwoord klopt niet.');
       }
       this.rec.pw = await hashPassword(args.newPassword, { iterations: this.iterations });
@@ -534,7 +564,9 @@ export class AccountBox {
       const revoked = Object.keys(this.rec.sessions).length - 1;
       this.rec.sessions = { [sid]: keep };
       this.rec.fails = { n: 0, since: 0, until: 0 };
+      this.rec.reFails = { n: 0, since: 0, until: 0 };
       await this.persist();
+      await this.rotateRoomOwners(); // this device opens its room again (openRoom) to lead it
       return ok({ ok: true, revoked });
     });
   }
@@ -565,9 +597,9 @@ export class AccountBox {
 
   op_delete(args) {
     return this.authed(args, async () => {
-      if (this.locked()) return fail(429, 'locked', MESSAGES.locked);
+      if (this.locked('reauth')) return fail(429, 'locked', MESSAGES.locked);
       if (!(await verifyPassword(args.password, this.rec.pw, { iterations: this.iterations }))) {
-        await this.addFail();
+        await this.addFail('reauth');
         return fail(401, 'password', 'Je wachtwoord klopt niet.');
       }
       let rooms = 0;

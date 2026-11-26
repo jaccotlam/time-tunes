@@ -51,7 +51,8 @@ export class GameError extends Error {
 
 /** A player's name: trimmed, single spaces, no control characters, max 24 characters. */
 export function cleanName(name, fallback = 'Speler') {
-  const s = String(name ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
+  // also zero-width and bidi control characters: a name must look on every screen like what it is
+  const s = String(name ?? '').replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
   return s || fallback;
 }
 
