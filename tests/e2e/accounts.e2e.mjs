@@ -226,12 +226,13 @@ async function sync(rooms, S) {
   await pb.locator(`[data-testid="deck-option"][data-deck-id="${S.plId}"]`).waitFor();
   assert((await playlistsOf(pb)).find((p) => p.id === S.plId)?.n === FIX.cards.length, 'device B: the playlist is there with all its songs');
   await go(pb, '#/instellingen/spotify');
-  await tid(pb, 'screen-spotify-setup').waitFor().catch(() => {});
+  await tid(pb, 'spotify-status').waitFor();
+  assert(/staat klaar/.test(await text(pb, 'spotify-status')) && await tid(pb, 'wiz-have-id').count() === 0, 'device B: the Spotify setup knows the Client ID from the account ("staat klaar", no questions)');
   assert(await pb.evaluate(() => localStorage.getItem('timetunesr.spotify.clientId.v1')) === JSON.stringify(CID), 'device B: the Spotify Client ID is stored');
-  await pb.waitForFunction((cid) => [...document.querySelectorAll('input')].some((i) => i.value === cid) || document.body.innerText.includes(cid), CID, { timeout: 5000 }).then(
-    () => assert(true, 'device B: the Spotify setup shows the Client ID'),
-    () => soft(false, 'device B: the Spotify setup screen shows the Client ID that came from the account', 'log in on a fresh device, open #/instellingen/spotify: neither an input value nor text holds the ID'),
-  );
+  await tid(pb, 'spotify-redo').click();
+  await tid(pb, 'wiz-have-id').click();
+  await pb.waitForFunction((cid) => [...document.querySelectorAll('[data-testid="spotify-client-id"]')].some((i) => i.value === cid), CID, { timeout: 5000 });
+  assert(true, 'device B: "Opnieuw instellen" > "Ik heb al een Client ID" shows the account\'s Client ID in the input');
 
   // B changes the playlist; A sees it after reopening the account screen
   await onDevice(pb, async (id) => { const pl = await import('/js/playlists.js'); pl.rename(id, 'Feestje van B'); }, S.plId);
@@ -421,7 +422,7 @@ async function resetDelete(rooms, S) {
   await tid(pa, 'prep-name').fill('De zesde');
   const B = S.B;
   const r5 = await onDevice(B.page, async (o) => { const a = await import('/js/account.js'); return a.prepareRoom(o); }, mk(MAX_PREPARED_ROOMS));
-  assert(r5.ok, `a ${MAX_PREPARED_ROOMS}th room can be made`);
+  assert(r5.ok, `the last allowed room (no. ${MAX_PREPARED_ROOMS}) can be made`);
   S.codes.push(r5.room.code);
   await tid(pa, 'prep-save').click();
   await tid(pa, 'prep-error').waitFor({ timeout: 15000 });
@@ -614,11 +615,12 @@ async function robustness(rooms3, accFile) {
   await go(po, '#/account');
   await tid(po, 'account-overview').waitFor();
   const cached = await po.evaluate(async () => { const out = []; for (const k of await caches.keys()) for (const r of await (await caches.open(k)).keys()) out.push(r.url); return out; });
-  assert(cached.length > 5 && !cached.some((u) => /\/account|\/rooms|\/health/.test(new URL(u).pathname)), `after using the account the caches hold ${cached.length} app files and no /account, /rooms or /health`);
+  assert(cached.length > 5 && !cached.some((u) => /^\/(account|rooms|health)(\/|$)/.test(new URL(u).pathname) || new URL(u).origin !== new URL(appUrl).origin), `after using the account the caches hold ${cached.length} app files and no /account, /rooms or /health`);
 
   await rooms3.stop('SIGTERM'); // writes the accounts file first
+  await po.goto('about:blank');
   const t0 = Date.now();
-  await po.reload();
+  await go(po);
   await tid(po, 'start-account').waitFor({ timeout: 8000 });
   const startMs = Date.now() - t0;
   assert(await tid(po, 'start-account').getAttribute('data-state') === 'in' && startMs < 4000, `server away: a logged-in app starts at once (${startMs} ms) and still says "Ingelogd als"`);
@@ -626,6 +628,7 @@ async function robustness(rooms3, accFile) {
   await po.locator('[data-testid="deck-option"]').filter({ hasText: 'Onderweg' }).waitFor({ timeout: 5000 });
   assert(true, 'server away: the playlists are visible');
   await onDevice(po, async () => { const pl = await import('/js/playlists.js'); const p = pl.all().find((x) => x.name === 'Onderweg'); pl.rename(p.id, 'Onderweg (offline)'); });
+  await po.evaluate(async () => { window.__acct ||= await import('/js/account.js'); });
   await po.waitForFunction(() => { const s = window.__acct.status(); return s.pending || !!s.error; }, null, { timeout: 5000 });
   assert(true, 'server away: a change is kept as "pending" and the app keeps working');
   await go(po, '#/spelleider');
@@ -640,7 +643,7 @@ async function robustness(rooms3, accFile) {
   await tid(D.page, 'account-overview').waitFor({ timeout: 30000 });
   assert((await playlistsOf(D.page)).some((p) => p.name === 'Onderweg (offline)'), 'a fresh device sees the change made while the server was away');
   // the accounts file survived the restart: the first session (token) still works too
-  assert(!!(await sessionOf(po))?.token && await tid(po, 'start-account').count() >= 0, 'the session survived the server restart');
+  assert(!!(await sessionOf(po))?.token && (await po.evaluate(async () => (await import('/js/account.js')).status().loggedIn)), 'the device stays logged in through the server restart');
 }
 
 // ======================================================================================

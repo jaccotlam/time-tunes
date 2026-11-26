@@ -22,9 +22,9 @@ import { createServer } from 'node:net';
 import { launch, startServer, assert, OUT } from './helpers.mjs';
 import { startRoomServer, phone, createRoom, waitForPlayers, serverHost } from './multi-helpers.mjs';
 import { installFakeItunes } from './fake-itunes.mjs';
-import { bestSquare, decadeOf, LINES, CENTER } from '../../app/js/multi/disco.js';
+import { bestSquare, decadeOf, LINES } from '../../app/js/multi/disco.js';
 import { artistVerdict, titleVerdict } from '../../app/js/multi/match.js';
-import { AVATARS, REACTIONS, REACT_GAP_MS, discoAwards } from '../../app/js/multi/party.js';
+import { AVATARS, REACTIONS, REACT_GAP_MS } from '../../app/js/multi/party.js';
 
 // ---------- a playlist of 30 songs with names that can be typed wrongly ----------
 const A1 = ['Blauwe', 'Gouden', 'Rode', 'Stille', 'Wilde', 'Zilveren', 'Zwarte', 'Kleine', 'Grote', 'Late'];
@@ -605,10 +605,7 @@ async function discoGame(browser, rooms, server) {
   // Anouk is right in 1-5, wrong in 6; Bram is right in 1-9; Cas is the odd one out (and the doubt).
   const X = Object.fromEntries(NAMES.map((n) => [n, { answers: 0, right: 0, doubts: 0, fastest: 0, best: 0, streak: 0, jokers: 0, wrongRounds: [] }]));
   const S = { doubtDone: false, cats: [], base: null, fastestBy: {}, wonRound: null };
-  const shotsDir = SHOTS;
-  void shotsDir;
   let won = false;
-  let frameFrom;
   for (let round = 1; round <= 36 && !won; round++) {
     // ----- the round starts -----
     await H.waitForFunction((r) => { const v = window.__ttHost?.session?.spectatorView(); return v?.phase === 'answering' && v.game.round === r; }, round, { timeout: 30000 });
@@ -644,7 +641,6 @@ async function discoGame(browser, rooms, server) {
     const fastNoMachine = eff.find((n) => plan.how[n] === 'doubt') || null;
     const expectFast = fast || fastNoMachine; // only a doubt that is made right: then it is the one made right first
     S.fastestBy[round] = expectFast;
-    const spend = round === 4 ? 'Anouk' : null;
     const earned = {};
     const before = {};
     for (const n of NAMES) {
@@ -792,19 +788,17 @@ async function discoGame(browser, rooms, server) {
 
     // ----- the phones: verdict moment (recorded), the numbers of the view -----
     for (const n of NAMES) {
-      const v = await pview(P[n]);
       const x = X[n];
       await poll(`round ${round}: ${n}'s phone numbers`, async () => {
         const w = await pview(P[n]);
         const m = w.game.mine;
-        const wantJok = x.jokers - (spend === n ? 0 : 0);
+        const wantJok = x.jokers;
         if (m.streak !== x.streak) return `${n}: streak ${m.streak}, expected ${x.streak}`;
         if (m.jokers !== wantJok) return `${n}: jokers ${m.jokers}, expected ${wantJok}`;
         if (m.jokerEarned !== earned[n]) return `${n}: jokerEarned ${m.jokerEarned}, expected ${earned[n]}`;
         if ((w.game.disco.fastest?.name ?? null) !== expectFast) return `${n}: fastest in the view ${w.game.disco.fastest?.name}, expected ${expectFast}`;
         return null;
       });
-      void v;
     }
     const verdicts = {};
     for (const n of NAMES) {
@@ -869,12 +863,11 @@ async function discoGame(browser, rooms, server) {
       assert((await pview(A)).game.mine.jokers === 1, 'she keeps her joker');
       stamps.Anouk = pick;
     } else if (round === 4) {
-      await jokerStory(R, S, plan, cat, stamps);
-    } else if (rightNames.includes('Anouk') && !(plan.doubt && false)) await stampNow('Anouk', finish ? 'best' : 'avoid');
-    if (round !== 4 || true) {
-      if (rightNames.includes('Bram') && round !== 4) await stampNow('Bram', finish ? 'best' : 'avoid');
-      if (rightNames.includes('Cas')) await stampNow('Cas', finish ? 'best' : 'avoid');
-    }
+      await jokerStory(R, S, stamps);
+    } else if (rightNames.includes('Anouk')) await stampNow('Anouk', finish ? 'best' : 'avoid');
+    // Bram does not choose in round 4: the spelleider's next round places his chip
+    if (rightNames.includes('Bram') && round !== 4) await stampNow('Bram', finish ? 'best' : 'avoid');
+    if (rightNames.includes('Cas')) await stampNow('Cas', finish ? 'best' : 'avoid');
     // tv ranking: every 3rd round, a few seconds after the reveal: the marks on the standings
     if (round === 3) {
       await D.locator('[data-testid="screen-ranking"]').waitFor({ timeout: 16000 });
@@ -914,7 +907,6 @@ async function discoGame(browser, rooms, server) {
       assert((await pview(P.Bram)).game.disco.choice == null, 'round 4: Bram has not chosen a square');
     }
     // the second display (and the host) saw it all
-    if (round === 4) shotsDir && await shot(D, 'round4');
     await H.getByTestId('room-next').click();
     if (round === 4) {
       await P.Bram.page.waitForFunction(() => window.__ttRoom.session.view.phase === 'answering' && window.__ttRoom.session.view.game.round === 5, null, { timeout: 15000 });
@@ -924,7 +916,6 @@ async function discoGame(browser, rooms, server) {
       assert(bv.game.mine.jokers === 1 && bv.game.mine.streak === 4, `round 4: the automatic placement did not spend Bram's joker (jokers ${bv.game.mine.jokers}, 🔥${bv.game.mine.streak})`);
       const av = await pview(P.Anouk);
       assert(av.game.mine.jokers === 0 && av.game.mine.card[S.jokerSq] !== cat && av.game.mine.marks[S.jokerSq] != null, 'round 4: Anouk\'s joker stays spent after the next round starts: the chip is still on the other colour');
-      assert(await A.page.locator(`[data-testid="disco-sq-${S.jokerSq}"][data-joker-chip="true"]`).count() === 1 || true, 'her chip is marked as a joker chip');
     }
   }
   assert(won, `the game was won (round ${S.wonRound}, categories ${S.cats.join(' ')})`);
@@ -934,9 +925,8 @@ async function discoGame(browser, rooms, server) {
 }
 
 /** Round 4, Anouk through the phone UI: the joker. */
-async function jokerStory(R, S, plan, cat, stamps) {
+async function jokerStory(R, S, stamps) {
   const { H, D, A, B } = R;
-  const P = R.P;
   const page = A.page;
   await page.locator('[data-testid="disco-moment"][data-moment="choose"]').waitFor({ timeout: 15000 });
   assert(await attr(page, 'disco-jokers', 'data-jokers') === '1', 'round 4: one joker in the header');
@@ -945,6 +935,7 @@ async function jokerStory(R, S, plan, cat, stamps) {
   assert(await attr(page, 'disco-choose', 'data-state') === 'choose', 'round 4: she is asked to choose a square of the round colour');
   assert(await page.locator('[data-testid="disco-card"] [data-joker="true"]').count() === 0, 'with the joker off no square is offered of another colour');
   let v = await pview(A);
+  const cat = v.game.disco.cat;
   assert(v.game.disco.jokerSquares.length > 0 && v.game.disco.jokerSquares.every((i) => v.game.mine.card[i] !== cat), 'the view offers jokerSquares, all of other colours');
   await toggle.click();
   await page.locator('[data-testid="disco-joker-toggle"][data-on="true"]').waitFor();
@@ -1013,7 +1004,6 @@ async function jokerStory(R, S, plan, cat, stamps) {
   await poll('tv spent after the flip', async () => { const a = (await tvRows(D)).find((x) => x.name === 'Anouk'); return a.joker === 'spent' && a.streak === '4' ? null : JSON.stringify(a); });
   assert(true, 'the joker is spent again after the flip back (tv: ingezet, 🔥4)');
   stamps.Anouk = jokerSq;
-  void plan; void cat;
 }
 
 
@@ -1204,7 +1194,6 @@ async function otherGames(R, { fresh = false } = {}) {
   assert(await A.page.getByTestId('react-btn').count() === 6, 'quiz: after answering the reaction bar is there');
   await avatarsOn(D, 'quiz, tv (answering)');
   await avatarsOn(H, 'quiz, host (answering)');
-  const q0 = (await reactionsOf(D)).length;
   await A.page.locator('[data-testid="react-btn"][data-emoji="🔥"]').click();
   await D.locator('[data-testid="screen-reaction"][data-emoji="🔥"][data-from="Anouk"]').first().waitFor({ state: 'attached', timeout: 8000 });
   await H.locator('[data-testid="host-reaction"][data-emoji="🔥"]').first().waitFor({ state: 'attached', timeout: 8000 });
@@ -1217,9 +1206,6 @@ async function otherGames(R, { fresh = false } = {}) {
   await avatarsOn(D, 'quiz, tv (after the reveal)');
   await avatarsOn(H, 'quiz, host (after the reveal)');
   assert(await A.page.getByTestId('react-bar').count() === 1, 'quiz: the bar is there after the reveal');
-  await A.page.waitForFunction(() => window.__ttRoom.session.view.phase === 'revealed');
-  await sleep(REACT_GAP_MS - 600 > 0 ? 400 : 0);
-  void q0;
   await H.evaluate(() => window.__ttHost.session.toLobby());
   await H.locator('[data-testid="screen-room-host"][data-view="lobby"]').waitFor({ timeout: 15000 });
 
