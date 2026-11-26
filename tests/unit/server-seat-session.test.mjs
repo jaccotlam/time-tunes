@@ -144,3 +144,40 @@ test('stoel: verwijderd = vergeten; een kamer die de server niet kent = vergeten
   await sleep(50);
   close();
 });
+
+test('stoel: checkSeat vraagt de server naar dit id + token: een vreemde kamer met dezelfde code = vergeten', async () => {
+  storage.delete(SEAT_KEY);
+  const { RoomHub } = await import('../../server/room.mjs');
+  const { code, host, close } = await discoRoom();
+  const s = createServerClientSession({ code, name: 'Dirk' });
+  s.start();
+  await until(() => s.online, 8000, 'online');
+  await host.send({ t: 'start', cards: cardsForServer(cards), seed: 8 });
+  await until(() => s.view?.phase === 'answering', 5000, 'spel');
+  assert.deepEqual(s.leave(), { seat: true });
+  await sleep(300);
+  assert.equal((await checkSeat())?.code, code, 'de server kent deze plek');
+  // the room goes, a stranger's new room gets the same code
+  srv.core.rooms.get(code).shutdown('closed', 'dicht');
+  const stranger = new RoomHub(code, {});
+  stranger.create({ ownerId: 'strange1', name: 'Vreemd', settings: { game: 'disco' } });
+  srv.core.rooms.set(code, stranger);
+  assert.equal(await checkSeat(), null, 'geen "Terug naar kamer" naar een vreemde kamer');
+  assert.equal(storedSeat(), null);
+  close();
+});
+
+test('stoel: na Verlaat in de lobby zet een laat binnenkomend bericht de plek niet terug', async () => {
+  storage.delete(SEAT_KEY);
+  const { code, host, close } = await discoRoom();
+  const s = createServerClientSession({ code, name: 'Eva' });
+  s.start();
+  await until(() => s.online && s.view, 8000, 'online');
+  // the spelleider starts the game at the moment Eva taps Verlaat in the lobby: the state of the
+  // new phase arrives after leave()
+  await host.send({ t: 'start', cards: cardsForServer(cards), seed: 4 });
+  assert.deepEqual(s.leave(), { seat: false });
+  await sleep(400);
+  assert.equal(storedSeat(), null, 'Verlaat blijft Verlaat');
+  close();
+});

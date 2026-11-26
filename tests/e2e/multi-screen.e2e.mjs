@@ -629,7 +629,7 @@ async function quizOnDisplay(browser, rooms, server) {
   await noScroll(D, 'quiz question');
   await send(ps[0], { choice: right });
   await D.waitForFunction(() => document.querySelector('[data-testid="quiz-answered"]')?.dataset.done === '1', null, { timeout: 8000 });
-  assert(/1 van 2 heeft geantwoord/.test((await D.getByTestId('quiz-answered').textContent()).replace(/\s+/g, ' ')), 'Quiz: "1 van 2 heeft geantwoord" follows the answer');
+  assert(/1 van 2 hebben geantwoord/.test((await D.getByTestId('quiz-answered').textContent()).replace(/\s+/g, ' ')), 'Quiz: "1 van 2 hebben geantwoord" follows the answer');
   // nothing about the answer before the reveal
   for (const raw of D.frames.slice(from)) {
     let m = null;

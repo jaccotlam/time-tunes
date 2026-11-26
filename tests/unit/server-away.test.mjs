@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRoomServer } from '../../server/core.mjs';
-import { AWAY_SEAT_MS } from '../../server/room.mjs';
+import { AWAY_SEAT_MS, RoomHub } from '../../server/room.mjs';
 import { SERVER_PROTOCOL_VERSION, cardsForServer } from '../../app/js/multi/server-protocol.js';
 import * as G from '../../app/js/multi/game.js';
 import { viewFor } from '../../app/js/multi/protocol.js';
@@ -51,7 +51,7 @@ async function room(core, settings, ids = ['playerA1', 'playerB1', 'playerC1']) 
 // ---------- 1. the fair start of a late joiner ----------
 test('laat instappen: "het verst achter" telt alleen wie online is (alle drie de spellen); niemand online = iedereen', () => {
   for (const kind of ['disco', 'bingo', 'timeline']) {
-    let r = G.createRoom({ code: 'TEST', settings: { game: kind, size: 3, goal: 10 } });
+    let r = G.createRoom({ code: 'TEST', settings: { game: kind, size: 5, goal: 10 } });
     for (const id of ['pA', 'pB', 'pC']) r = G.addPlayer(r, { id, name: id });
     r = G.startGame(r, { cards, seed: 5, now: 1 });
     const g = r.game;
@@ -224,8 +224,9 @@ test('POST /rooms/CODE/seat: ja alleen met het juiste token; een nieuwe kamer me
   // a closed room whose code comes back for a new room: the old token has no seat there
   const hub = core.rooms.get(code);
   hub.shutdown('closed', 'dicht');
-  core.rooms.delete(code);
-  core.rooms.set(code, core.rooms.get(code) || (await (async () => { const h = new (hub.constructor)(code, {}); h.create({ ownerId: 'strange1', name: 'Vreemd' }); return h; })()));
+  const stranger = new RoomHub(code, {});
+  stranger.create({ ownerId: 'strange1', name: 'Vreemd' });
+  core.rooms.set(code, stranger); // a new room got the same code
   assert.deepEqual(ask(code, { id: 'playerA1', token }).body, { seat: false });
   // leaving during a game keeps the seat: still yes
   const { code: c2, host: h2, players: p2 } = await room(core, { game: 'disco' });
