@@ -3,10 +3,19 @@
 // The Durable Object uses the WebSocket Hibernation API (no cost while phones are idle) and
 // keeps the room in its own SQLite-backed storage, so a room survives restarts and deploys.
 //
+// Accounts: one Durable Object per account (class Account, binding ACCOUNTS), addressed by the
+// normalised username; a session token carries that name, so the Worker finds the object
+// without any index. The password hashing (PBKDF2, ~15 ms CPU) runs inside that object, never
+// in the Worker (10 ms CPU per request on the Free plan). The account object reaches its
+// prepared rooms through the Room objects (prepCreate / prepOp, see prepared.mjs).
+//
 // Configuration (wrangler.jsonc "vars" or dashboard: Settings > Variables):
 //   ALLOWED_ORIGINS  comma-separated origins that may connect (default: see policy.mjs)
 import { DurableObject } from 'cloudflare:workers';
 import { RoomHub, randomToken } from './room.mjs';
+import { AccountBox } from './accounts.mjs';
+import { accountRoute, handleAccount, accountLimiters, ACCOUNT_LIMITS } from './account-http.mjs';
+import { prepareRoom, preparedOp } from './prepared.mjs';
 import {
   DEFAULT_ORIGINS, parseOrigins, originAllowed, corsHeaders, rateLimiter, route, health, createOptions,
   parseJson, versionMismatch, LIMITS, seatQuery,
@@ -16,6 +25,7 @@ import { makeCode } from '../app/js/multi/code.js';
 // best effort, per Worker instance (Cloudflare can add real rate limiting rules in the dashboard)
 const createLimit = rateLimiter(LIMITS.createPerIp);
 const socketLimit = rateLimiter(LIMITS.socketsPerIp);
+const accountLimits = accountLimiters();
 
 const json = (status, body, origin) => new Response(JSON.stringify(body), {
   status,
@@ -31,7 +41,8 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const r = route(request.method === 'OPTIONS' ? 'GET' : request.method, url.pathname);
-    const isServerPath = r.kind !== 'none' || /^\/(health|rooms)(\/|$)/.test(url.pathname);
+    const acct = accountRoute(request.method === 'OPTIONS' ? 'GET' : request.method, url.pathname);
+    const isServerPath = r.kind !== 'none' || !!acct || /^\/(health|rooms)(\/|$)/.test(url.pathname);
     if (!isServerPath) {
       // everything else is the app itself
       if (env.ASSETS) return env.ASSETS.fetch(request);
@@ -43,7 +54,17 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(origin) });
     const ip = request.headers.get('cf-connecting-ip') || '?';
 
-    if (r.kind === 'health') return json(200, health(), origin);
+    if (acct) {
+      if (!env.ACCOUNTS) return json(404, { code: 'noaccounts', message: 'Deze server kent geen accounts.' }, origin);
+      const text = await readBody(request, ACCOUNT_LIMITS.dataBody);
+      if (text == null) return json(413, { code: 'size', message: 'Dit verzoek is te groot.' }, origin);
+      const out = await handleAccount(
+        { method: request.method, path: url.pathname, auth: request.headers.get('authorization') || '', ip, body: text },
+        { boxFor: (key) => ({ call: (op, args) => env.ACCOUNTS.getByName(key).call(key, op, args) }), limiters: accountLimits },
+      );
+      return json(out.status, out.body, origin);
+    }
+    if (r.kind === 'health') return json(200, health({ accounts: !!env.ACCOUNTS }), origin);
     if (r.kind === 'badcode' || r.kind === 'none') return json(404, { exists: false, error: 'notfound' }, origin);
     if (r.kind === 'create') {
       const text = await readBody(request, 4096);
@@ -181,6 +202,30 @@ export class Room extends DurableObject {
     }
   }
 
+  /** A prepared room for an account (only the Account object calls this). */
+  async prepCreate(code, opts) {
+    const hub = this.makeHub(code);
+    const out = prepareRoom(hub, opts);
+    await this.schedule();
+    return out;
+  }
+
+  /** An account's operation on its prepared room: summary / edit / reset / open / delete. */
+  async prepOp(code, name, args) {
+    if (!this.hub?.exists()) return { ok: false, error: 'gone' };
+    const out = preparedOp(this.hub, name, args);
+    if (!this.hub.exists()) {
+      // deleted: forget everything this object stored (the sockets were told and closed)
+      await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.deleteAll();
+      this.hub = null;
+      this.code = null;
+      return out;
+    }
+    await this.schedule();
+    return out;
+  }
+
   async fetch(request) {
     const code = request.headers.get('x-room-code');
     const hub = this.makeHub(code);
@@ -222,5 +267,45 @@ export class Room extends DurableObject {
       if (!this.hub.conns.size) { await this.ctx.storage.deleteAll(); this.hub = null; this.code = null; return; }
     }
     await this.schedule();
+  }
+}
+
+/** The prepared rooms of an account, as the Account object reaches them: through the Room objects. */
+function roomsFor(env) {
+  return {
+    async create(opts) {
+      if (opts.code) return env.ROOMS.getByName(opts.code).prepCreate(opts.code, opts);
+      for (let i = 0; i < 12; i++) {
+        const code = makeCode();
+        const out = await env.ROOMS.getByName(code).prepCreate(code, opts);
+        if (out.ok || out.error !== 'taken') return out;
+      }
+      return { ok: false, status: 503, error: 'full', message: 'Geen vrije kamercode gevonden. Probeer het opnieuw.' };
+    },
+    op: (code, name, args) => env.ROOMS.getByName(code).prepOp(code, name, args),
+  };
+}
+
+/**
+ * One account (its id is derived from the normalised username: getByName). Its record is one
+ * value in the object's SQLite-backed storage; an unknown name stores nothing at all.
+ */
+export class Account extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.box = null;
+  }
+
+  async call(key, op, args) {
+    if (!this.box) {
+      const store = {
+        load: () => this.ctx.storage.get('account'),
+        save: (rec) => this.ctx.storage.put('account', rec),
+        remove: () => this.ctx.storage.deleteAll(),
+      };
+      this.box = new AccountBox(key, store, roomsFor(this.env));
+    }
+    if (this.box.key !== key) return { status: 400, body: { code: 'bad', message: 'Ongeldig verzoek.' } };
+    return this.box.call(op, args);
   }
 }

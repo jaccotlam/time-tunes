@@ -18,6 +18,7 @@ import {
 import { playerId, JOIN_KEY, PLAYER_ID_KEY } from './client-session.js';
 import { HOST_ID_KEY, MULTI_SEED_KEY } from './host-session.js';
 import { getClientId } from '../spotify.js';
+import { isAvatar, isReaction, REACT_GAP_MS } from './party.js';
 
 const spotifyClientId = () => { try { return getClientId() || ''; } catch { return ''; } };
 
@@ -63,6 +64,33 @@ function saveToken(code, id, token) {
   // keep the 20 most recent rooms
   const keep = Object.entries(all).sort((a, b) => (b[1].at || 0) - (a[1].at || 0)).slice(0, 20);
   store.set(TOKENS_KEY, Object.fromEntries(keep));
+}
+
+/** The avatar this phone picked last (party.js AVATARS); the join form preselects it. */
+export const AVATAR_KEY = 'timetunesr.multiAvatar.v1';
+export function storedAvatar() {
+  const a = store.get(AVATAR_KEY, null);
+  return isAvatar(a) ? a : null;
+}
+
+/**
+ * Reactions arriving at a leader or a display: ephemeral (never in a state). Keeps the last
+ * few for a screen that renders from a list, and calls the listeners of onReaction(fn).
+ */
+function reactionFeed() {
+  const list = [];
+  const fns = new Set();
+  return {
+    list,
+    on(fn) { fns.add(fn); return () => fns.delete(fn); },
+    push(m) {
+      const r = { id: String(m.id || ''), name: String(m.name || ''), avatar: String(m.avatar || ''), emoji: String(m.emoji || ''), at: Number(m.at) || 0, receivedAt: Date.now() };
+      list.push(r);
+      if (list.length > 30) list.shift();
+      for (const fn of fns) { try { fn(r); } catch (e) { console.error(e); } }
+    },
+    clear() { fns.clear(); },
+  };
 }
 
 /** The seat this phone has in a room via the server: { code, name, id, at }. */
@@ -256,6 +284,7 @@ function createLink({ role, code: initialCode, hooks }) {
   let destroyed = false;
   let everOnline = false;
   let running = false;
+  let features = []; // the server's optional additions (health `features`): 'screen', 'party'
 
   const log = (what) => { diag.log.push({ at: Date.now(), what }); if (diag.log.length > 40) diag.log.shift(); };
   const setStatus = (s) => { if (status !== s) { status = s; log(`status ${s}`); } hooks.onStatus?.(); };
@@ -312,6 +341,7 @@ function createLink({ role, code: initialCode, hooks }) {
         hooks.onFatal?.({ code: 'version', message: Number(h.data.v) > SERVER_PROTOCOL_VERSION ? 'De server is nieuwer dan deze app. Ververs de pagina (of sluit de app en open hem opnieuw).' : 'De server is ouder dan deze app. Probeer het over een paar minuten opnieuw.' });
         return;
       }
+      features = Array.isArray(h.data.features) ? h.data.features.filter((f) => typeof f === 'string') : [];
       const unfit = hooks.healthCheck?.(h.data);
       if (unfit) { setStep('server', 'fail', { code: unfit.code }); hooks.onFatal?.(unfit); return; }
       setStep('server', 'ok');
@@ -402,6 +432,8 @@ function createLink({ role, code: initialCode, hooks }) {
     get code() { return code; },
     get status() { return status; },
     get online() { return status === 'online' && welcomed; },
+    /** Does the server know this optional addition ('party': avatars, reactions, jokers ...)? */
+    supports: (f) => features.includes(f),
     start() { run(); },
     send(msg) {
       if (!ws || ws.readyState !== 1 || !welcomed) return false;
@@ -440,9 +472,13 @@ function lifecycle(retry) {
 const FATAL = ['version', 'removed', 'closed', 'full', 'room', 'bad', 'replaced', 'token', 'expired', 'busy', 'ratelimit'];
 
 // ---------- player ----------
-export function createServerClientSession({ code, name }) {
+export function createServerClientSession({ code, name, avatar: picked = null }) {
   const id = playerId();
   store.set(JOIN_KEY, { code, name });
+  // the avatar goes along with every hello (the server keeps the seat's own once a game runs)
+  let avatar = isAvatar(picked) ? picked : storedAvatar();
+  if (isAvatar(picked)) store.set(AVATAR_KEY, picked);
+  let lastReact = 0;
   let view = null;
   let meta = null;
   let error = null;
@@ -460,7 +496,7 @@ export function createServerClientSession({ code, name }) {
     role: 'player',
     code,
     hooks: {
-      hello: () => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, id, name, ...(tokenFor(code, id) ? { token: tokenFor(code, id) } : {}) }),
+      hello: () => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, id, name, ...(avatar ? { avatar } : {}), ...(tokenFor(code, id) ? { token: tokenFor(code, id) } : {}) }),
       roomCheck: async () => {
         const r = await request(`${serverBase().http}/rooms/${code}`);
         if (r.ok && r.data?.exists) return { ok: true };
@@ -542,8 +578,34 @@ export function createServerClientSession({ code, name }) {
       link.send({ t: 'answer', round: view.game.round, answer });
       emit();
     },
-    /** Discobingo, after the reveal: stamp (or move the stamp to) square `index`; null takes it back. */
-    stamp(index) { if (view?.game) link.send({ t: 'stamp', round: view.game.round, index }); },
+    /**
+     * Discobingo, after the reveal: stamp (or move the stamp to) square `index`; null takes it
+     * back. `joker: true`: the chip may go on an open square of another colour
+     * (view.game.disco.jokerSquares); the joker is spent while it lies there.
+     */
+    stamp(index, { joker = false } = {}) { if (view?.game) link.send({ t: 'stamp', round: view.game.round, index, ...(joker ? { joker: true } : {}) }); },
+    /** The avatar this phone shows (null = the server derives one). */
+    get avatar() { return avatar; },
+    /** Another avatar (party.js AVATARS): remembered here, sent now (the server takes it in the lobby only). False when not sent. */
+    setAvatar(a) {
+      if (!isAvatar(a)) return false;
+      avatar = a;
+      store.set(AVATAR_KEY, a);
+      return link.supports('party') ? link.send({ t: 'avatar', avatar: a }) : false;
+    },
+    /**
+     * Send a reaction (party.js REACTIONS). The server takes it in the lobby, once this phone
+     * answered the running question, after the reveal and on the winner screen, at most one per
+     * REACT_GAP_MS (also kept here). Returns whether it was sent; refusals are silent.
+     */
+    react(emoji) {
+      if (!isReaction(emoji) || !link.supports('party') || Date.now() - lastReact < REACT_GAP_MS) return false;
+      if (!link.send({ t: 'react', emoji })) return false;
+      lastReact = Date.now();
+      return true;
+    },
+    /** Does the server know this optional addition ('party', 'screen')? */
+    supports: (f) => link.supports(f),
     /** The leader is away long enough: this phone takes the lead (and plays the music). */
     takeOver() { link.send({ t: 'lead' }); },
     /** "Mix van de groep": add songs to / withdraw this phone's part. False when offline. */
@@ -596,6 +658,8 @@ export function createServerHostSession() {
   const received = []; // every message from the server (tests check that nothing leaks)
   const listeners = new Set();
   const emit = () => { for (const fn of listeners) { try { fn(api); } catch (e) { console.error(e); } } };
+  const reactions = reactionFeed();
+  let lastReact = 0;
 
   const ownerId = () => {
     let id = store.get(HOST_ID_KEY, null);
@@ -620,7 +684,7 @@ export function createServerHostSession() {
       hooks: {
         // cid: this phone's Spotify Client ID (a public value, '' = none); the server passes the
         // owner's on to the players, so only the spelleider has to set Spotify up
-        hello: (code) => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, id: ident.id, token: ident.token, cid: spotifyClientId() }),
+        hello: (code) => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, id: ident.id, token: ident.token, cid: spotifyClientId(), ...(storedAvatar() ? { avatar: storedAvatar() } : {}) }),
         roomCheck: async () => {
           const base = serverBase().http;
           if (!ident) {
@@ -656,6 +720,7 @@ export function createServerHostSession() {
         onMessage: (m) => {
           if (closing) return;
           if (received.length < 3000) received.push(m);
+          if (m.t === 'react') { reactions.push(m); return; }
           if (m.t === 'backup' && m.snap && ident && m.snap.code === ident.code) { store.set(BACKUP_KEY, { code: ident.code, snap: m.snap }); return; }
           if (m.t === 'error') {
             if (m.code === 'notfound') { link.retry({ force: true }); return; }
@@ -745,8 +810,26 @@ export function createServerHostSession() {
       if (!g) return;
       send({ t: 'answer', round: g.round, answer });
     },
-    /** Discobingo: the spelleider playing along stamps a square of their own card. */
-    stamp(index) { const g = st?.view?.game; if (g) send({ t: 'stamp', round: g.round, index }); },
+    /** Discobingo: the spelleider playing along stamps a square of their own card (`joker`: see the player session). */
+    stamp(index, { joker = false } = {}) { const g = st?.view?.game; if (g) send({ t: 'stamp', round: g.round, index, ...(joker ? { joker: true } : {}) }); },
+    /** The spelleider playing along picks another avatar (lobby only). False when not sent. */
+    setAvatar(a) {
+      if (!isAvatar(a)) return false;
+      store.set(AVATAR_KEY, a);
+      return link?.supports('party') ? !!link.send({ t: 'avatar', avatar: a }) : false;
+    },
+    /** The spelleider playing along sends a reaction (same rules as a player). */
+    react(emoji) {
+      if (!isReaction(emoji) || !link?.supports('party') || Date.now() - lastReact < REACT_GAP_MS) return false;
+      if (!link.send({ t: 'react', emoji })) return false;
+      lastReact = Date.now();
+      return true;
+    },
+    /** Reactions of the players as they arrive (ephemeral): fn({ id, name, avatar, emoji, at, receivedAt }); returns an unsubscribe. */
+    onReaction: (fn) => reactions.on(fn),
+    /** The last (at most 30) reactions that arrived here, oldest first. */
+    get reactions() { return reactions.list; },
+    supports: (f) => !!link?.supports(f),
     /** Discobingo: Goed (ok true) or Fout on a player's answer (a doubt, or a flip). */
     judge(pid, ok) { send({ t: 'judge', pid, ok: !!ok }); },
     reveal() { send({ t: 'reveal' }); },
@@ -780,6 +863,7 @@ export function createServerHostSession() {
       link?.stop();
       link = null;
       listeners.clear();
+      reactions.clear();
     },
   };
   return api;
@@ -802,6 +886,7 @@ export function createServerScreenSession({ code }) {
   let clock = 0; // server time - this device's time (spin of the ball, Quiz countdown)
   const listeners = new Set();
   const received = [];
+  const reactions = reactionFeed();
   const emit = () => { for (const fn of listeners) { try { fn(api); } catch (e) { console.error(e); } } };
 
   const base = serverBase();
@@ -826,6 +911,7 @@ export function createServerScreenSession({ code }) {
       onFatal: (e) => fatal(e),
       onMessage: (m) => {
         if (received.length < 3000) received.push(m);
+        if (m.t === 'react') { reactions.push(m); return; }
         if (m.t === 'error') {
           if (m.code === 'notfound') { link.retry({ force: true }); return; }
           // a server of before the display answers its hello (no id) with 'bad'
@@ -879,6 +965,11 @@ export function createServerScreenSession({ code }) {
     get diag() { return link?.diag || null; },
     takeNotice() { const n = notice; notice = null; return n; },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+    /** Reactions of the players as they arrive (ephemeral, not in the view): fn({ id, name, avatar, emoji, at, receivedAt }); returns an unsubscribe. */
+    onReaction: (fn) => reactions.on(fn),
+    /** The last (at most 30) reactions that arrived here, oldest first. */
+    get reactions() { return reactions.list; },
+    supports: (f) => !!link?.supports(f),
     start() {
       if (!base) { error = { code: 'noserver', message: 'Het grote scherm werkt alleen met de server voor samen spelen.' }; emit(); return; }
       connect();
@@ -904,6 +995,7 @@ export function createServerScreenSession({ code }) {
       offLifecycle();
       link?.stop('closed');
       listeners.clear();
+      reactions.clear();
     },
   };
   return api;

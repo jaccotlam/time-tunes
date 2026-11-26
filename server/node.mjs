@@ -7,15 +7,21 @@
 //   HOST             interface (default 0.0.0.0)
 //   ALLOWED_ORIGINS  comma-separated origins that may connect, e.g.
 //                    "https://jaccotlam.github.io,http://localhost:*" (default: see policy.mjs)
+//   ACCOUNTS_FILE    JSON file that keeps the accounts and their prepared rooms across a restart
+//                    (written atomically; holds password hashes: keep it private). Empty (default):
+//                    accounts and prepared rooms live in memory only and a restart loses them.
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { createRoomServer } from './core.mjs';
 import { LIMITS, DEFAULT_ORIGINS } from './policy.mjs';
 import { MAX_CLIENT_MESSAGE } from '../app/js/multi/server-protocol.js';
 
-export function startNodeServer({ port = Number(process.env.PORT) || 8787, host = process.env.HOST || '0.0.0.0', origins = process.env.ALLOWED_ORIGINS || DEFAULT_ORIGINS, quiet = false } = {}) {
+export function startNodeServer({
+  port = Number(process.env.PORT) || 8787, host = process.env.HOST || '0.0.0.0', origins = process.env.ALLOWED_ORIGINS || DEFAULT_ORIGINS, quiet = false,
+  accountsFile = process.env.ACCOUNTS_FILE || '', iterations, now,
+} = {}) {
   const log = quiet ? () => {} : (...a) => console.log(new Date().toISOString(), ...a);
-  const core = createRoomServer({ origins, log });
+  const core = createRoomServer({ origins, log, accountsFile, ...(iterations ? { iterations } : {}), ...(now ? { now } : {}) });
   const clientIp = (req) => String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '?';
 
   const server = createServer((req, res) => {
@@ -29,9 +35,14 @@ export function startNodeServer({ port = Number(process.env.PORT) || 8787, host 
     req.on('end', () => {
       if (res.writableEnded) return;
       const url = new URL(req.url, 'http://x');
-      const out = core.http({ method: req.method, path: url.pathname, origin: req.headers.origin || '', ip: clientIp(req), body: Buffer.concat(chunks).toString('utf8') });
-      res.writeHead(out.status, out.headers);
-      res.end(out.body == null || req.method === 'HEAD' ? undefined : JSON.stringify(out.body));
+      const send = (out) => {
+        res.writeHead(out.status, out.headers);
+        res.end(out.body == null || req.method === 'HEAD' ? undefined : JSON.stringify(out.body));
+      };
+      const out = core.http({ method: req.method, path: url.pathname, origin: req.headers.origin || '', ip: clientIp(req), auth: req.headers.authorization || '', body: Buffer.concat(chunks).toString('utf8') });
+      // an /account route answers later (password hashing); the room routes at once
+      if (typeof out?.then === 'function') out.then(send, () => { if (!res.headersSent) res.writeHead(500).end(); });
+      else send(out);
     });
   });
 
@@ -67,6 +78,7 @@ export function startNodeServer({ port = Number(process.env.PORT) || 8787, host 
         core,
         close: () => new Promise((r) => {
           clearInterval(timer);
+          core.flush();
           for (const ws of wss.clients) ws.terminate();
           server.close(() => r());
           setTimeout(r, 500);

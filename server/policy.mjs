@@ -1,7 +1,8 @@
 // Shared rules of the room server for both adapters: allowed origins, CORS, simple rate
 // limits, request routing and the JSON answers of the small HTTP API.
 //
-//   GET  /health                 -> { ok, v, service, features }  features: ['screen'] = knows displays
+//   GET  /health                 -> { ok, v, service, features }  features: ['screen'] = knows displays,
+//                                   'accounts' = knows accounts and prepared rooms (/account/..., account-http.mjs)
 //   POST /rooms                  -> { code, token }      body { v, id, name?, hostPlays?, settings? }
 //   POST /rooms/CODE/restore     -> { code, restored }   body { v, id, token, snap }
 //   GET  /rooms/CODE             -> { exists, phase, players, leaderOnline } (404 when unknown)
@@ -50,7 +51,7 @@ export function corsHeaders(origin) {
     h['access-control-allow-origin'] = origin;
     h.vary = 'Origin';
     h['access-control-allow-methods'] = 'GET, POST, OPTIONS';
-    h['access-control-allow-headers'] = 'content-type';
+    h['access-control-allow-headers'] = 'content-type, authorization'; // authorization: account sessions (Bearer)
     h['access-control-max-age'] = '600';
   }
   return h;
@@ -102,7 +103,8 @@ export function route(method, pathname) {
   return { kind: 'none' };
 }
 
-export const health = () => ({ ok: true, v: SERVER_PROTOCOL_VERSION, service: SERVICE, features: SERVER_FEATURES.slice() });
+/** accounts: this server has account storage (Cloudflare: the ACCOUNTS binding exists). */
+export const health = ({ accounts = true } = {}) => ({ ok: true, v: SERVER_PROTOCOL_VERSION, service: SERVICE, features: [...SERVER_FEATURES, ...(accounts ? ['accounts'] : [])] });
 
 /** Body of POST /rooms -> options for RoomHub.create, or null. */
 export function createOptions(body) {

@@ -37,6 +37,17 @@
 // older server answers a display hello (no id) with error 'bad' and closes it; /health of a
 // server that knows displays lists 'screen' in `features`, so the display can tell beforehand.
 //
+//
+// Party extras (optional additions within version 4; /health `features` lists 'party'):
+//   hello may carry `avatar` (one of party.js AVATARS; else the server derives one from the id);
+//   avatar {avatar}: another avatar, in the lobby only; stamp may carry `joker: true` (Discobingo:
+//   the chip on an open square of another colour, spending a joker); react {emoji}: one of
+//   party.js REACTIONS, from a seated player (lobby; after answering; after the reveal; winner
+//   screen), rate limited, never stored: the server passes it on as react {id, name, avatar,
+//   emoji, at} to the displays and the leader only (an older app ignores the unknown type).
+//   Refused reactions are dropped silently. A new app must not send avatar / react to a server
+//   without the 'party' feature: that one answers 'bad'.
+//
 // Version 2 (November 2026): the Quiz (settings questions/qtype/think, playing, the quiz part of
 // the view). Version 3 (November 2026): "Mix van de groep" (mix-add, mix-clear, settings.music,
 // start.play, meta.mix). Version 4 (November 2026): Discobingo (game 'disco', settings.win, stamp,
@@ -45,7 +56,7 @@
 
 export const SERVER_PROTOCOL_VERSION = 4;
 /** Optional additions within this version that the server announces in /health `features`. */
-export const SERVER_FEATURES = ['screen'];
+export const SERVER_FEATURES = ['screen', 'party'];
 /** Largest message from a phone (the deck at the start of a game). */
 export const MAX_CLIENT_MESSAGE = 512 * 1024;
 /** Every other message is small. */
@@ -59,8 +70,8 @@ export const CLIENT_PING_MS = 10000;
 /** Nothing heard for this long: the connection is dead. */
 export const STALE_MS = 25000;
 
-const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing', 'mix-add', 'mix-clear', 'stamp', 'judge'];
-const SERVER_TYPES = ['welcome', 'state', 'error', 'backup'];
+const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing', 'mix-add', 'mix-clear', 'stamp', 'judge', 'avatar', 'react'];
+const SERVER_TYPES = ['welcome', 'state', 'error', 'backup', 'react'];
 export const LEADER_TYPES = ['settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'playing', 'judge'];
 
 export const ID_RE = /^[A-Za-z0-9_-]{4,40}$/;

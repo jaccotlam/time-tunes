@@ -3,7 +3,18 @@
 // plugs it into `http` + `ws`; the unit tests drive it with fake sockets.
 // (The Cloudflare adapter, server/worker.mjs, uses RoomHub and policy.mjs directly: one
 // Durable Object per room.)
-import { RoomHub } from './room.mjs';
+//
+// Accounts (accounts.mjs, account-http.mjs) live in memory here, and with `accountsFile` also
+// in a JSON file (written atomically, a moment after each change) together with the prepared
+// rooms, so both survive a restart. Without a file a restart loses every account and prepared
+// room. http() answers the room routes synchronously as before; an /account route answers
+// with a Promise of the same { status, headers, body }.
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { RoomHub, PREPARED_IDLE_MS } from './room.mjs';
+import { AccountBox, memoryStore, PBKDF2_ITERATIONS } from './accounts.mjs';
+import { accountRoute, handleAccount, accountLimiters } from './account-http.mjs';
+import { prepareRoom, preparedOp } from './prepared.mjs';
 import {
   LIMITS, DEFAULT_ORIGINS, parseOrigins, originAllowed, corsHeaders, rateLimiter, route, health, createOptions,
   parseJson, versionMismatch, seatQuery,
@@ -15,7 +26,9 @@ function safely(what, fn) {
   try { return fn(); } catch (e) { console.error(`room ${what} failed:`, e?.stack || e); return undefined; }
 }
 
-export function createRoomServer({ origins = DEFAULT_ORIGINS, now = Date.now, limits = {}, log = () => {} } = {}) {
+export function createRoomServer({
+  origins = DEFAULT_ORIGINS, now = Date.now, limits = {}, log = () => {}, accountsFile = '', iterations = PBKDF2_ITERATIONS, accountLimits = {},
+} = {}) {
   const L = { ...LIMITS, ...limits };
   const allowed = parseOrigins(origins);
   const rooms = new Map(); // code -> RoomHub
@@ -25,10 +38,69 @@ export function createRoomServer({ origins = DEFAULT_ORIGINS, now = Date.now, li
   const socketLimit = rateLimiter({ ...L.socketsPerIp, now });
   let seq = 0;
 
+  // ---------- accounts + prepared rooms (persisted with accountsFile) ----------
+  const accounts = new Map(); // key -> record
+  const boxes = new Map(); // key -> AccountBox
+  const preparedStates = new Map(); // code -> state of a prepared room (the hub's own object)
+  const limiters = accountLimiters({ now, limits: accountLimits });
+  let writeTimer = 0;
+  function writeNow() {
+    clearTimeout(writeTimer);
+    writeTimer = 0;
+    if (!accountsFile) return;
+    const text = JSON.stringify({ v: 1, accounts: Object.fromEntries(accounts), rooms: Object.fromEntries(preparedStates) });
+    const tmp = `${accountsFile}.${process.pid}.tmp`;
+    try {
+      mkdirSync(dirname(accountsFile), { recursive: true });
+      writeFileSync(tmp, text, { mode: 0o600 });
+      renameSync(tmp, accountsFile); // atomic: a crash leaves the old file or the new one, never half
+    } catch (e) { console.error('accounts file not written:', e?.message || e); }
+  }
+  const scheduleWrite = () => {
+    if (!accountsFile || writeTimer) return;
+    writeTimer = setTimeout(writeNow, 200);
+    writeTimer.unref?.();
+  };
+
+  const roomsAdapter = {
+    async create(opts) {
+      const code = opts.code || makeFreshCode([...rooms.keys()]);
+      if (rooms.get(code)?.exists()) return { ok: false, error: 'taken' };
+      if (!rooms.has(code) && rooms.size >= L.maxRooms) return { ok: false, status: 503, error: 'full', message: 'De server is vol. Probeer het later opnieuw.' };
+      const out = prepareRoom(hubFor(code), opts);
+      if (!out.ok) { if (!rooms.get(code)?.exists()) rooms.delete(code); return out; }
+      log('prepare', code);
+      return out;
+    },
+    async op(code, name, args) {
+      const hub = rooms.get(code);
+      if (!hub) return { ok: false, error: 'gone' };
+      const out = preparedOp(hub, name, args);
+      if (!hub.exists()) rooms.delete(code);
+      return out;
+    },
+  };
+
+  function boxFor(key) {
+    let box = boxes.get(key);
+    if (!box) {
+      if (boxes.size > 5000) for (const [k, b] of boxes) if (!b.rec && !b.locked()) boxes.delete(k);
+      box = new AccountBox(key, memoryStore(accounts, key, scheduleWrite), roomsAdapter, { now, iterations, log });
+      boxes.set(key, box);
+    }
+    return box;
+  }
+
   function makeHub(code) {
     let timer = 0;
     const hub = new RoomHub(code, {
         now,
+        // only a prepared room is kept (in the accounts file); a normal room stays memory only
+        save: (snap) => {
+          if (snap?.prepared) preparedStates.set(code, snap);
+          else if (!preparedStates.delete(code)) return;
+          scheduleWrite();
+        },
         // Quiz: look at the question again right when its clock says so
         wake: (at) => {
           clearTimeout(timer);
@@ -55,12 +127,28 @@ export function createRoomServer({ origins = DEFAULT_ORIGINS, now = Date.now, li
 
   const json = (status, body, origin) => ({ status, headers: { ...corsHeaders(origin), 'content-type': 'application/json; charset=utf-8' }, body });
 
+  // the file of an earlier run: accounts, and the prepared rooms that have not expired
+  if (accountsFile) {
+    let saved = null;
+    try { saved = JSON.parse(readFileSync(accountsFile, 'utf8')); } catch (e) { if (e?.code !== 'ENOENT') console.error('accounts file not read:', e?.message || e); }
+    for (const [k, rec] of Object.entries(saved?.accounts || {})) if (rec && typeof rec === 'object') accounts.set(k, rec);
+    for (const [code, st] of Object.entries(saved?.rooms || {})) {
+      if (!st?.prepared || !(now() - (Number(st.lastActive) || 0) < PREPARED_IDLE_MS)) continue;
+      const hub = hubFor(code);
+      hub.load(st);
+      preparedStates.set(code, hub.state);
+    }
+  }
+
   /** req: { method, path, origin, ip, body } -> { status, headers, body } */
   function http(req) {
     const origin = req.origin || '';
     if (!originAllowed(origin, allowed)) return json(403, { error: 'origin', message: 'Dit adres mag deze server niet gebruiken.' }, null);
     if (req.method === 'OPTIONS') return { status: 204, headers: corsHeaders(origin), body: null };
     if (!requestLimit.allow(req.ip || '?')) return json(429, { error: 'ratelimit', message: 'Te veel verzoeken. Wacht even.' }, origin);
+    if (accountRoute(req.method, req.path)) {
+      return handleAccount(req, { boxFor, limiters, log }).then((out) => json(out.status, out.body, origin));
+    }
     const r = route(req.method, req.path);
     if (r.kind === 'health') return json(200, { ...health(), rooms: rooms.size }, origin);
     if (r.kind === 'badcode') return json(404, { exists: false, error: 'notfound' }, origin);
@@ -149,7 +237,10 @@ export function createRoomServer({ origins = DEFAULT_ORIGINS, now = Date.now, li
     http,
     upgrade,
     sweep,
+    /** Write the accounts file now (Node: before the process stops). */
+    flush: writeNow,
     get rooms() { return rooms; },
+    get accounts() { return accounts; },
     stats: () => ({ rooms: rooms.size, sockets: sockets.size }),
   };
 }

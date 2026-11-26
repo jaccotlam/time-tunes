@@ -31,9 +31,15 @@ import {
   addToContribution, contributionTotal, mixStats, mixMinimum, buildMix, MixError, MIX_PER_PLAYER,
 } from '../app/js/multi/mix.js';
 import { sha256Hex } from './sha256.mjs';
+import { resetPrepared } from './prepared.mjs';
+import { isAvatar, avatarOf, isReaction, REACT_GAP_MS, REACT_ROOM_MAX, REACT_ROOM_WINDOW_MS } from '../app/js/multi/party.js';
 
 export const ROOM_IDLE_MS = 6 * 60 * 60 * 1000; // a room with no activity for 6 hours expires
 export const UNCLAIMED_MS = 30 * 60 * 1000; // a created room nobody ever connected to
+/** A room an account prepared in advance (prepared.mjs) lives this long after its last activity. */
+export const PREPARED_IDLE_MS = 30 * 24 * 60 * 60 * 1000;
+/** How long this room may stay without activity before it expires. */
+export const idleLimit = (s) => (s?.prepared ? PREPARED_IDLE_MS : s?.claimed ? ROOM_IDLE_MS : UNCLAIMED_MS);
 export const MAX_CONNS_PER_ROOM = 40;
 export const MAX_SCREENS_PER_ROOM = 4;
 /** A full room gives up the seat of somebody offline this long (or who left on purpose) for a newcomer. */
@@ -180,7 +186,7 @@ export class RoomHub {
   info() {
     const s = this.state;
     if (!s) return { exists: false };
-    return { exists: true, phase: s.room.phase, players: s.room.players.length, leaderOnline: this.online(s.leaderId) };
+    return { exists: true, phase: s.room.phase, players: s.room.players.length, leaderOnline: this.online(s.leaderId), ...(s.prepared ? { name: s.prepared.name } : {}) };
   }
 
   snapshot() { return this.state; }
@@ -403,7 +409,7 @@ export class RoomHub {
       if (s.room.players.length >= G.MAX_ROOM_PLAYERS) this.freeSeat(); // room for a newcomer?
       try {
         // the fair start of a late joiner looks at who is online now (not at seats kept by leavers)
-        s.room = G.addPlayer(s.room, { id, name: m.name }, { online: this.presence() });
+        s.room = G.addPlayer(s.room, { id, name: m.name, avatar: m.avatar }, { online: this.presence() });
       } catch (e) {
         this.fatal(connId, e.code || 'bad', e.message);
         return;
@@ -432,6 +438,8 @@ export class RoomHub {
     s.lastActive = this.now();
     if (id === s.leaderId) s.leaderAwaySince = null;
     else if (m.name && s.room.players.some((p) => p.id === id)) s.room = G.addPlayer(s.room, { id, name: m.name }); // name update
+    // the phone's avatar comes along with every hello; on a known seat it only changes in the lobby
+    if (isAvatar(m.avatar) && s.room.phase === 'lobby' && s.room.players.some((p) => p.id === id)) s.room = G.setAvatar(s.room, id, m.avatar);
     this.sendTo(connId, { t: 'welcome', v: SERVER_PROTOCOL_VERSION, id, code: this.code, ...(token ? { token } : {}), owner: id === s.ownerId });
     this.backupKey = ''; // a (re)connected owner gets a fresh backup
     this.changed();
@@ -513,11 +521,14 @@ export class RoomHub {
         if (r.game?.kind === 'quiz' && m.round === r.game.round) s.room = startQuizClock(r, this.now());
         break;
       case 'withdraw': s.room = G.withdrawAnswer(r, mid); break;
+      case 'avatar': s.room = G.setAvatar(r, mid, m.avatar); break;
+      case 'react': this.react(mid, m); return; // never stored, nothing else changes
       case 'stamp': {
         if (!r.game || m.round !== r.game.round) return; // a choice for an earlier round
         const index = m.index === null ? null : Number.isInteger(m.index) && m.index >= 0 && m.index < 25 ? m.index : undefined;
         if (index === undefined) throw new G.GameError('answer', 'Kies een vakje.');
-        s.room = G.stampSquare(r, mid, index);
+        if (m.joker !== undefined && typeof m.joker !== 'boolean') throw new G.GameError('answer', 'Kies een vakje.');
+        s.room = G.stampSquare(r, mid, index, { joker: m.joker === true });
         break;
       }
       case 'judge': {
@@ -615,7 +626,9 @@ export class RoomHub {
       }
       case 'close': {
         if (mid !== s.ownerId && !isLeader) throw new G.GameError('notleader', 'Alleen de spelleider kan de kamer sluiten.');
-        this.shutdown('closed', 'De spelleider heeft de kamer gesloten.');
+        // a prepared room is emptied instead: its code stays valid for the account (prepared.mjs)
+        if (s.prepared) resetPrepared(this, 'closed', 'De spelleider heeft de kamer gesloten.');
+        else this.shutdown('closed', 'De spelleider heeft de kamer gesloten.');
         return;
       }
       default: return;
@@ -666,6 +679,32 @@ export class RoomHub {
       pile.push(id);
     }
     s.room = { ...s.room, game: { ...g, songs, pile } };
+  }
+
+  /**
+   * A reaction (party.js REACTIONS) from a seated player: in the lobby, after answering the
+   * running question, after the reveal or on the winner screen; at most one per REACT_GAP_MS
+   * per player and REACT_ROOM_MAX per REACT_ROOM_WINDOW_MS per room. Passed on at once to the
+   * displays and the leader only, never stored and never part of a state (a display that
+   * connects later does not get it). Anything refused is dropped without an answer.
+   */
+  react(mid, m) {
+    const s = this.state;
+    const r = s.room;
+    const p = r.players.find((x) => x.id === mid);
+    if (!p || !isReaction(m.emoji)) return;
+    const g = r.game;
+    if (r.phase === 'answering' && !(G.own(g?.per, mid) && G.own(g?.answers, mid))) return;
+    if (!['lobby', 'answering', 'revealed', 'won'].includes(r.phase)) return;
+    const t = this.now();
+    const log = (this.reactLog ??= { last: new Map(), recent: [] });
+    if (t - (log.last.get(mid) ?? -Infinity) < REACT_GAP_MS) return;
+    log.recent = log.recent.filter((x) => t - x < REACT_ROOM_WINDOW_MS);
+    if (log.recent.length >= REACT_ROOM_MAX) return;
+    log.last.set(mid, t);
+    log.recent.push(t);
+    const text = JSON.stringify({ t: 'react', id: p.id, name: p.name, avatar: avatarOf(p), emoji: m.emoji, at: t });
+    for (const [connId, c] of this.conns) if (c.screen || (c.mid && c.mid === s.leaderId)) this.sendTo(connId, text);
   }
 
   /** Close the room for everybody and forget it. */
@@ -719,6 +758,7 @@ export class RoomHub {
       // "Mix van de groep": counts only, never a title
       mix: { ...this.mixCounts(), mine: (mid != null && has(s.mix, mid) && s.mix[mid].tracks?.length) || 0 },
       screens: this.screenCount(), // displays ("groot scherm") watching this room
+      ...(s.prepared ? { roomName: s.prepared.name } : {}), // a prepared room's public name
       // the spelleider's Spotify Client ID, so players can log in for "Doe mijn favorieten erbij"
       spotifyClientId: typeof s.spotifyClientId === 'string' && SPOTIFY_CLIENT_ID_RE.test(s.spotifyClientId) ? s.spotifyClientId : null,
     };
@@ -741,7 +781,7 @@ export class RoomHub {
       code: r.code,
       phase: r.phase,
       settings: { ...r.settings },
-      players: r.players.map((p) => ({ id: p.id, name: p.name, host: !!p.host })),
+      players: r.players.map((p) => ({ id: p.id, name: p.name, host: !!p.host, avatar: avatarOf(p) })),
       removed: [],
       game: g ? {
         kind: g.kind,
@@ -810,7 +850,7 @@ export class RoomHub {
     // A game from the mix holds other players' favourites: those never go to the owner's
     // phone. Its backup is the room in the lobby (after a restore the phones send their
     // contributions again and the leader starts a new game).
-    const room = g?.mix ? G.backToLobby(s.room) : s.room;
+    const room = g?.mix ? G.backToLobby(s.room) : G.withoutAnswerTimes(s.room);
     const snap = { v: 1, code: s.code, createdAt: s.createdAt, ownerId: s.ownerId, ownerName: s.ownerName, leaderId: s.leaderId, members: s.members, room };
     this.sendTo(connId, { t: 'backup', snap });
   }
@@ -841,7 +881,7 @@ export class RoomHub {
       if (this.quizCheck()) moved = true;
       if (moved) this.changed();
     }
-    const limit = s.claimed ? ROOM_IDLE_MS : UNCLAIMED_MS;
+    const limit = idleLimit(s);
     if (t - s.lastActive > limit) {
       this.shutdown('expired', 'Deze kamer is verlopen omdat er lang niet gespeeld is. Maak een nieuwe kamer.');
       return { expired: true };
@@ -857,6 +897,6 @@ export class RoomHub {
     const quiz = quizNextEvent(s.room, QUIZ_START_FALLBACK_MS);
     if (quiz != null) return Math.min(quiz, this.conns.size ? this.now() + 15000 : quiz);
     if (this.conns.size) return this.now() + 15000;
-    return s.lastActive + (s.claimed ? ROOM_IDLE_MS : UNCLAIMED_MS) + 1000;
+    return s.lastActive + idleLimit(s) + 1000;
   }
 }

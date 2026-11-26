@@ -8,7 +8,10 @@
 // view holds nothing about the running song: no id, no title, artist or year. Answers are
 // judged on the host.
 import { SQUARES } from '../bingo.js';
-import { describeAnswer, scoreOf, FREE, choosableSquares, undecided, stillChoosing, own } from './game.js';
+import {
+  describeAnswer, scoreOf, FREE, choosableSquares, undecided, stillChoosing, own, discoFun, discoOutcome, jokerSquares, discoSummary,
+} from './game.js';
+import { avatarOf } from './party.js';
 import { PROMPTS } from './quiz.js';
 import { decadeLabel, goalCells, completeLines, reachedGoal, stampedCount, bestLineCount, squaresToGo, SPIN_MS } from './disco.js';
 
@@ -64,10 +67,11 @@ export function viewFor(room, pid, presence = {}) {
     code: room.code,
     phase: room.phase,
     settings: { ...room.settings },
-    you: me ? { id: me.id, name: me.name, host: !!me.host } : null,
+    you: me ? { id: me.id, name: me.name, host: !!me.host, avatar: avatarOf(me) } : null,
     players: room.players.map((p) => ({
       id: p.id,
       name: p.name,
+      avatar: avatarOf(p),
       host: !!p.host,
       online: p.id === pid ? true : !!presence[p.id],
       answered: room.phase === 'answering' && !!g?.answers[p.id],
@@ -99,7 +103,15 @@ export function viewFor(room, pid, presence = {}) {
   if (g.kind === 'disco') game.disco = discoView(room, pid, revealed);
   if (mineState && g.kind !== 'quiz') {
     if (g.kind === 'disco') {
+      const fun = discoFun(mineState);
+      const outcome = revealed && room.phase === 'revealed' && own(g.prev, pid) ? discoOutcome(g, pid) : null;
       game.mine = {
+        // the streak and jokers as they stand now (during a question: up to the last round)
+        streak: fun.streak,
+        jokers: fun.jokers,
+        // after the reveal: a joker earned / spent in this round
+        jokerEarned: !!outcome?.earned,
+        jokerSpent: !!outcome?.spent,
         card: mineState.card.slice(),
         // stamped squares show the year of the song that stamped them; '*' = free (centre, late start)
         marks: mineState.marks.map((m) => (m == null ? null : m === FREE ? FREE : g.songs[m]?.year ?? FREE)),
@@ -136,6 +148,7 @@ export function viewFor(room, pid, presence = {}) {
         correct: !!g.results[p.id].correct,
         none: !!g.results[p.id].none,
         pass: !!g.results[p.id].pass,
+        avatar: avatarOf(p),
         label: describeAnswer(g, p.id, answerFromResult(g.results[p.id]), { forOwner: true }),
         ...(g.kind === 'disco' ? discoResult(g, p.id) : {}),
       })),
@@ -181,6 +194,7 @@ function quizView(room, pid, revealed, presence = {}) {
     out.ranking = room.players.filter((p) => g.per[p.id]).map((p) => ({
       id: p.id,
       name: p.name,
+      avatar: avatarOf(p),
       score: scores[p.id],
       rank: rankNow[p.id],
       prevRank: Q.prevRanks?.[p.id] ?? null,
@@ -212,6 +226,9 @@ function discoView(room, pid, revealed) {
   const r = own(g.results, pid);
   // a card without marks (a broken state) is left out rather than breaking every view
   const ids = room.players.map((p) => p.id).filter((id) => Array.isArray(own(g.per, id)?.marks));
+  const fastest = shown || (room.phase === 'won' && g.current && g.results) ? own(g.disco, 'fastest') ?? null : null;
+  const fastPlayer = fastest ? room.players.find((p) => p.id === fastest) : null;
+  const summary = room.phase === 'won' ? discoSummary(room) : null;
   return {
     cat: live ? D.cat : null,
     spin: g.round, // a new value = a new spin of the ball
@@ -225,13 +242,25 @@ function discoView(room, pid, revealed) {
     mustChoose: shown ? stillChoosing(g).includes(pid) : false,
     waitingForHost: shown && r?.verdict === 'doubt',
     noSquare: shown && !!r?.correct && !choosableSquares(g, pid).length,
+    // with a joker: the open squares of another colour I may put the chip on (empty without one)
+    jokerSquares: shown ? jokerSquares(g, pid) : [],
+    // "⚡ Snelste" of this round, after the reveal only (never an answer time itself)
+    fastest: fastPlayer ? { id: fastPlayer.id, name: fastPlayer.name, avatar: avatarOf(fastPlayer) } : null,
+    // the winner screen: everybody's statistics and the awards ("Prijsuitreiking")
+    stats: summary ? summary.stats : null,
+    awards: summary ? summary.awards : null,
     pending: shown ? stillChoosing(g) : [],
     doubts: shown ? undecided(g) : [],
     // everybody's progress (no song data in it)
     progress: ids.map((id) => {
       const m = g.per[id].marks;
-      // toGo: squares still to stamp for the goal (0 = reached; 1 = "spannend")
-      return { id, name: nameOf(room, id), stamped: stampedCount(m), lines: completeLines(m).length, best: bestLineCount(m), bingo: reachedGoal(m, D.win), toGo: squaresToGo(m, D.win) };
+      const fun = discoFun(g.per[id]);
+      // toGo: squares still to stamp for the goal (0 = reached; 1 = "spannend"); streak and
+      // jokers as they stand (during a question: up to the last round, nothing of this one)
+      return {
+        id, name: nameOf(room, id), avatar: avatarOf(room.players.find((p) => p.id === id)), stamped: stampedCount(m), lines: completeLines(m).length,
+        best: bestLineCount(m), bingo: reachedGoal(m, D.win), toGo: squaresToGo(m, D.win), streak: fun.streak, jokers: fun.jokers,
+      };
     }),
   };
 }
@@ -241,7 +270,12 @@ function discoResult(g, id) {
   const r = g.results[id];
   const at = own(g.disco.choices, id);
   const stamped = r.correct && Number.isInteger(at) && own(g.per, id)?.marks?.[at] === g.current ? at : null;
+  const o = own(g.prev, id) ? discoOutcome(g, id) : null;
   return {
+    streak: discoFun(own(g.per, id)).streak, // after this round (an undecided doubt: as it was)
+    fastest: own(g.disco, 'fastest') === id,
+    jokerEarned: !!o?.earned,
+    jokerSpent: !!o?.spent, // the chip lies on another colour
     cat: r.cat ?? g.disco.cat,
     verdict: r.verdict ?? null, // 'right' | 'wrong' | 'doubt' | null (no answer / pass)
     auto: r.auto ?? null,

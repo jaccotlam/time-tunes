@@ -12,13 +12,21 @@
     "directory": "app",
     "binding": "ASSETS",
     // the server's own paths always go to the Worker, never to a static file
-    "run_worker_first": ["/health", "/rooms", "/rooms/*"]
+    "run_worker_first": ["/health", "/rooms", "/rooms/*", "/account", "/account/*"]
   },
   "durable_objects": {
-    "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+    "bindings": [
+      { "name": "ROOMS", "class_name": "Room" },
+      // one object per user account (server/accounts.mjs), addressed by the username
+      { "name": "ACCOUNTS", "class_name": "Account" }
+    ]
   },
-  // SQLite-backed Durable Objects: the only kind on the Workers Free plan
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
+  // SQLite-backed Durable Objects: the only kind on the Workers Free plan. A migration that has
+  // been deployed never changes: a new class gets a new tag after the last one.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Room"] },
+    { "tag": "v2", "new_sqlite_classes": ["Account"] }
+  ],
   "vars": {
     "ALLOWED_ORIGINS": "https://jaccotlam.github.io,https://time-tunes.jaccotlam.workers.dev,http://localhost:*,http://127.0.0.1:*"
   },
