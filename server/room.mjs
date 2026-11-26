@@ -36,13 +36,18 @@ const SPECTATOR = '!spectator';
 
 /**
  * Stored state of a room (Durable Object storage / memory). Rooms stored before the
- * "Mix van de groep" (protocol 1) have no `mix`: they get an empty one, nothing else changes.
+ * "Mix van de groep" (protocol 1) have no `mix`: they get an empty one. Rooms stored before
+ * Discobingo (protocol 3) have no `settings.win`: their settings are normalised (the missing
+ * value gets its default, every other value stays). Nothing else changes.
  */
 export function migrateState(state) {
   if (!state || typeof state !== 'object') return null;
   if (!state.mix || typeof state.mix !== 'object' || Array.isArray(state.mix)) state.mix = {};
+  if (state.room && typeof state.room === 'object') state.room = withSettings(state.room);
   return state;
 }
+
+const withSettings = (room) => ({ ...room, settings: G.normalizeSettings(room.settings || {}) });
 
 export function randomToken(bytes = 24) {
   const b = new Uint8Array(bytes);
@@ -145,7 +150,7 @@ export class RoomHub {
       leaderId: members[snap.leaderId] ? snap.leaderId : snap.ownerId,
       leaderAwaySince: t,
       members,
-      room: restartQuizQuestion(snap.room, t),
+      room: restartQuizQuestion(withSettings(snap.room), t),
       restoredAt: t,
       mix: {}, // contributions are not in the backup: the phones send them again
     };
@@ -328,6 +333,18 @@ export class RoomHub {
         if (r.game?.kind === 'quiz' && m.round === r.game.round) s.room = startQuizClock(r, this.now());
         break;
       case 'withdraw': s.room = G.withdrawAnswer(r, mid); break;
+      case 'stamp': {
+        if (!r.game || m.round !== r.game.round) return; // a choice for an earlier round
+        const index = m.index === null ? null : Number.isInteger(m.index) && m.index >= 0 && m.index < 25 ? m.index : undefined;
+        if (index === undefined) throw new G.GameError('answer', 'Kies een vakje.');
+        s.room = G.stampSquare(r, mid, index);
+        break;
+      }
+      case 'judge': {
+        if (typeof m.ok !== 'boolean' || typeof m.pid !== 'string') throw new G.GameError('bad', 'Kies Goed of Fout.');
+        s.room = G.judgeResult(r, m.pid, m.ok);
+        break;
+      }
       case 'settings': s.room = G.setSettings(r, m.patch && typeof m.patch === 'object' ? m.patch : {}); break;
       case 'start': {
         if (r.phase !== 'lobby' && r.phase !== 'won') throw new G.GameError('busy', 'Het spel is al bezig.');
@@ -526,6 +543,7 @@ export class RoomHub {
         current: forLeader ? g.current : null,
         results: g.results ? Object.fromEntries(Object.entries(g.results).map(([id, x]) => [id, {
           none: !!x.none, pass: !!x.pass, correct: !!x.correct, doubt: !!x.doubt, typed: !!x.typed, overridden: !!x.overridden,
+          ...(g.kind === 'disco' ? { verdict: x.verdict ?? null, decided: !!x.decided } : {}),
         }])) : null,
         roundWinners: g.roundWinners.slice(),
         winners: (g.winners || []).slice(),
@@ -566,7 +584,7 @@ export class RoomHub {
   maybeBackup(connId) {
     const s = this.state;
     const g = s.room.game;
-    const key = JSON.stringify([s.room.phase, g?.round, g?.seed, s.room.players.map((p) => p.id), s.room.removed.length, s.room.settings, s.leaderId, g?.results && Object.values(g.results).map((x) => x.correct)]);
+    const key = JSON.stringify([s.room.phase, g?.round, g?.seed, s.room.players.map((p) => p.id), s.room.removed.length, s.room.settings, s.leaderId, g?.results && Object.values(g.results).map((x) => x.verdict ?? x.correct), g?.disco?.choices]);
     if (key === this.backupKey) return;
     this.backupKey = key;
     // A game from the mix holds other players' favourites: those never go to the owner's

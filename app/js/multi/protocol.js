@@ -8,8 +8,9 @@
 // view holds nothing about the running song: no id, no title, artist or year. Answers are
 // judged on the host.
 import { SQUARES } from '../bingo.js';
-import { describeAnswer, scoreOf, FREE } from './game.js';
+import { describeAnswer, scoreOf, FREE, choosableSquares, undecided, stillChoosing } from './game.js';
 import { PROMPTS } from './quiz.js';
+import { decadeLabel, goalCells, completeLines, reachedGoal, stampedCount, bestLineCount, SPIN_MS } from './disco.js';
 
 /** Bump when old and new apps can not understand each other any more. */
 export const PROTOCOL_VERSION = 1;
@@ -95,8 +96,20 @@ export function viewFor(room, pid, presence = {}) {
     if (mineState) game.mine = { score: mineState.score, streak: mineState.streak, right: mineState.right, rank: game.quiz.rankOf };
     delete game.quiz.rankOf;
   }
+  if (g.kind === 'disco') game.disco = discoView(room, pid, revealed);
   if (mineState && g.kind !== 'quiz') {
-    if (g.kind === 'bingo') {
+    if (g.kind === 'disco') {
+      game.mine = {
+        card: mineState.card.slice(),
+        // stamped squares show the year of the song that stamped them; '*' = free (centre, late start)
+        marks: mineState.marks.map((m) => (m == null ? null : m === FREE ? FREE : g.songs[m]?.year ?? FREE)),
+        goalCells: goalCells(mineState.marks, g.disco.win),
+        lines: completeLines(mineState.marks).length,
+        stamped: stampedCount(mineState.marks),
+        bingo: reachedGoal(mineState.marks, g.disco.win),
+        winLine: g.winLines?.[pid] || null,
+      };
+    } else if (g.kind === 'bingo') {
       game.mine = {
         card: mineState.card.slice(),
         // stamped squares show the year of the song that stamped them (never the running song before the reveal)
@@ -124,6 +137,7 @@ export function viewFor(room, pid, presence = {}) {
         none: !!g.results[p.id].none,
         pass: !!g.results[p.id].pass,
         label: describeAnswer(g, p.id, answerFromResult(g.results[p.id]), { forOwner: true }),
+        ...(g.kind === 'disco' ? discoResult(g, p.id) : {}),
       })),
       roundWinners: g.roundWinners.map((id) => nameOf(room, id)),
     };
@@ -184,6 +198,60 @@ function quizView(room, pid, revealed) {
   return out;
 }
 
+/**
+ * The Discobingo part of a view. The category is public from the start of the round; the
+ * literal answers of others only come with the reveal (in reveal.results).
+ */
+function discoView(room, pid, revealed) {
+  const g = room.game;
+  const D = g.disco;
+  const live = room.phase === 'answering' || room.phase === 'revealed';
+  const shown = revealed && room.phase === 'revealed';
+  const r = g.results?.[pid];
+  const ids = room.players.map((p) => p.id).filter((id) => g.per[id]);
+  return {
+    cat: live ? D.cat : null,
+    spin: g.round, // a new value = a new spin of the ball
+    spunAt: live ? D.spunAt : null, // server time (compare with meta.now): an old spin is not animated again
+    spinMs: SPIN_MS,
+    win: D.win,
+    decades: D.decades.map(decadeLabel),
+    // after the reveal: my stamp choice and where I may put it
+    choice: shown && Number.isInteger(D.choices?.[pid]) ? D.choices[pid] : null,
+    choosable: shown ? choosableSquares(g, pid) : [],
+    mustChoose: shown ? stillChoosing(g).includes(pid) : false,
+    waitingForHost: shown && r?.verdict === 'doubt',
+    noSquare: shown && !!r?.correct && !choosableSquares(g, pid).length,
+    pending: shown ? stillChoosing(g) : [],
+    doubts: shown ? undecided(g) : [],
+    // everybody's progress (no song data in it)
+    progress: ids.map((id) => {
+      const m = g.per[id].marks;
+      return { id, name: nameOf(room, id), stamped: stampedCount(m), lines: completeLines(m).length, best: bestLineCount(m), bingo: reachedGoal(m, D.win) };
+    }),
+  };
+}
+
+/** Discobingo fields of one entry in reveal.results: the literal answer, the verdicts and the stamp. */
+function discoResult(g, id) {
+  const r = g.results[id];
+  const at = g.disco.choices?.[id];
+  const stamped = r.correct && Number.isInteger(at) && g.per[id]?.marks[at] === g.current ? at : null;
+  return {
+    cat: r.cat ?? g.disco.cat,
+    verdict: r.verdict ?? null, // 'right' | 'wrong' | 'doubt' | null (no answer / pass)
+    auto: r.auto ?? null,
+    decided: !!r.decided,
+    overridden: !!r.overridden,
+    doubt: r.verdict === 'doubt',
+    text: r.text ?? null,
+    guess: r.guess ?? null,
+    decade: r.decade ?? null,
+    stamped,
+    noSquare: !!r.correct && !choosableSquares(g, id).length,
+  };
+}
+
 const nameOf = (room, id) => room.players.find((p) => p.id === id)?.name || '?';
 
 /** Reconstruct the given answer from a judged result (for describeAnswer). */
@@ -192,6 +260,8 @@ export function answerFromResult(r) {
   if (r.pass) return { pass: true };
   if (r.slot != null) return { slot: r.slot };
   if (r.choice != null) return { choice: r.choice };
+  if (r.decade != null) return { decade: r.decade };
+  if (r.cat) return { guess: r.guess, text: r.text };
   return { index: r.index, guess: r.guess, text: r.text };
 }
 

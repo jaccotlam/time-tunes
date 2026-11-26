@@ -480,6 +480,8 @@ export function createServerClientSession({ code, name }) {
       link.send({ t: 'answer', round: view.game.round, answer });
       emit();
     },
+    /** Discobingo, after the reveal: stamp (or move the stamp to) square `index`; null takes it back. */
+    stamp(index) { if (view?.game) link.send({ t: 'stamp', round: view.game.round, index }); },
     /** The leader is away long enough: this phone takes the lead (and plays the music). */
     takeOver() { link.send({ t: 'lead' }); },
     /** "Mix van de groep": add songs to / withdraw this phone's part. False when offline. */
@@ -670,6 +672,10 @@ export function createServerHostSession() {
       if (!g) return;
       send({ t: 'answer', round: g.round, answer });
     },
+    /** Discobingo: the spelleider playing along stamps a square of their own card. */
+    stamp(index) { const g = st?.view?.game; if (g) send({ t: 'stamp', round: g.round, index }); },
+    /** Discobingo: Goed (ok true) or Fout on a player's answer (a doubt, or a flip). */
+    judge(pid, ok) { send({ t: 'judge', pid, ok: !!ok }); },
     reveal() { send({ t: 'reveal' }); },
     /** Quiz: the song plays on this phone, the thinking time may start. */
     quizPlaying(round) { return !!link?.send({ t: 'playing', round }); },

@@ -197,10 +197,10 @@ test('opgeslagen kamer van vóór de groepsmix werkt verder; herstart zet de bij
   assert.deepEqual(meta.mix, { total: 0, preview: 0, sure: 0, contributors: 0, mine: 0 });
 });
 
-test('protocolversie 3: een oudere app (versie 2, of 1) krijgt een nette melding', async () => {
+test('protocolversie 3 (of hoger): een oudere app (versie 2, of 1) krijgt een nette melding', async () => {
   const { core } = setup();
-  assert.equal(V, 3);
-  assert.equal(http(core, 'GET', '/health').body.v, 3);
+  assert.ok(V >= 3);
+  assert.equal(http(core, 'GET', '/health').body.v, V);
   assert.equal(http(core, 'POST', '/rooms', { v: 2, id: 'owner01' }).status, 409);
   assert.equal(http(core, 'POST', '/rooms', { v: 1, id: 'owner01' }).status, 409);
   const { code } = await room(core);
