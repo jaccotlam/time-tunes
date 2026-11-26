@@ -154,7 +154,7 @@ async function recordOnce() {
     }, round, { timeout: 30000 });
     const everyone = () => devs;
     const landedAll = () => Promise.all([
-      ...[host, pa, pb].map((d) => d.page.locator('[data-testid="disco-stage"][data-state="landed"]').waitFor({ timeout: 15000 })),
+      ...[host, pa, pb].map((d) => d.page.locator('[data-testid="disco-stage"][data-state="landed"]').waitFor({ state: 'attached', timeout: 15000 })),
       tv.page.locator('[data-testid="screen-display"][data-moment="listen"]').waitFor({ timeout: 15000 }),
     ]);
     const moment = (d, m) => d.page.locator(`[data-testid="disco-moment"][data-moment="${m}"]`).waitFor({ timeout: 15000 });
