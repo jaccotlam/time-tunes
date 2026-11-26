@@ -113,7 +113,8 @@ export class Room extends DurableObject {
       drop: (connId, c, reason) => { try { this.sockets().get(connId)?.close(c, reason); } catch { /* gone */ } },
       attach: (connId, rec) => {
         const ws = this.sockets().get(connId);
-        if (ws) ws.serializeAttachment({ connId, mid: rec.mid, lastSeen: rec.lastSeen });
+        // a display ("groot scherm") keeps `screen` here: after hibernation it is a display again
+        if (ws) ws.serializeAttachment({ connId, mid: rec.mid, lastSeen: rec.lastSeen, ...(rec.screen ? { screen: true } : {}) });
       },
       save: (snap) => {
         if (snap) this.ctx.storage.put('room', snap);
@@ -128,7 +129,7 @@ export class Room extends DurableObject {
     const conns = [];
     for (const ws of this.ctx.getWebSockets()) {
       const a = ws.deserializeAttachment();
-      if (a?.connId) conns.push({ connId: a.connId, mid: a.mid, lastSeen: Date.now() });
+      if (a?.connId) conns.push({ connId: a.connId, mid: a.mid, screen: a.screen === true, lastSeen: Date.now() });
     }
     hub.load(state, conns);
     this.hub = hub;

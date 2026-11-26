@@ -1,12 +1,12 @@
 // Shared rules of the room server for both adapters: allowed origins, CORS, simple rate
 // limits, request routing and the JSON answers of the small HTTP API.
 //
-//   GET  /health                 -> { ok, v, service }
+//   GET  /health                 -> { ok, v, service, features }  features: ['screen'] = knows displays
 //   POST /rooms                  -> { code, token }      body { v, id, name?, hostPlays?, settings? }
 //   POST /rooms/CODE/restore     -> { code, restored }   body { v, id, token, snap }
 //   GET  /rooms/CODE             -> { exists, phase, players, leaderOnline } (404 when unknown)
 //   GET  /rooms/CODE/ws          -> WebSocket (Upgrade)
-import { SERVER_PROTOCOL_VERSION, MAX_CLIENT_MESSAGE } from '../app/js/multi/server-protocol.js';
+import { SERVER_PROTOCOL_VERSION, MAX_CLIENT_MESSAGE, SERVER_FEATURES } from '../app/js/multi/server-protocol.js';
 import { isValidCode } from '../app/js/multi/code.js';
 
 export const SERVICE = 'timetunesr-rooms';
@@ -99,7 +99,7 @@ export function route(method, pathname) {
   return { kind: 'none' };
 }
 
-export const health = () => ({ ok: true, v: SERVER_PROTOCOL_VERSION, service: SERVICE });
+export const health = () => ({ ok: true, v: SERVER_PROTOCOL_VERSION, service: SERVICE, features: SERVER_FEATURES.slice() });
 
 /** Body of POST /rooms -> options for RoomHub.create, or null. */
 export function createOptions(body) {

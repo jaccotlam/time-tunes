@@ -10,6 +10,12 @@
 //   now()                         clock (tests use a fake one)
 //   lastSeen(connId)              (optional) extra "last heard" time (CF: auto-answered pings)
 //   wake(at | null)               (optional) call tick() at that time (Node: a timer; CF uses nextTick() for its alarm)
+// A display ("groot scherm") is a connection that only watches: it says hello with
+// `screen: true` and no id, is never a member or player, gets the spectator view (the same
+// public view a player gets, without anything of its own) and can send nothing but hello /
+// leave / ping. Displays count towards MAX_CONNS_PER_ROOM, at most MAX_SCREENS_PER_ROOM per
+// room, are never stored with the room (only in the connection record: CF attachment) and
+// play no part in presence, "everybody online has answered", take-over or the backup.
 // The Quiz runs on the server's clock: the thinking time starts at "playing" from the music phone
 // (or QUIZ_START_FALLBACK_MS after the question, as a safety net) and the question closes when
 // everybody online has answered, when the time is up (tick) or when the leader reveals.
@@ -29,6 +35,7 @@ import { sha256Hex } from './sha256.mjs';
 export const ROOM_IDLE_MS = 6 * 60 * 60 * 1000; // a room with no activity for 6 hours expires
 export const UNCLAIMED_MS = 30 * 60 * 1000; // a created room nobody ever connected to
 export const MAX_CONNS_PER_ROOM = 40;
+export const MAX_SCREENS_PER_ROOM = 4;
 export const RATE_WINDOW_MS = 10000;
 export const RATE_MAX_MESSAGES = 80; // per connection per window (pings excluded)
 export const RATE_MAX_PINGS = 30;
@@ -98,7 +105,7 @@ export class RoomHub {
     this.deps = deps;
     this.now = deps.now || Date.now;
     this.state = null;
-    this.conns = new Map(); // connId -> { mid, lastSeen, win, count, pings }
+    this.conns = new Map(); // connId -> { mid, screen, lastSeen, win, count, pings }
     this.dirty = false;
     this.backupKey = '';
     this.mixVersion = 0;
@@ -174,7 +181,10 @@ export class RoomHub {
   /** Load the persisted state (CF: after the object was evicted) and the open connections. */
   load(state, conns = []) {
     this.state = migrateState(state);
-    for (const c of conns) this.conns.set(c.connId, { mid: c.mid || null, lastSeen: c.lastSeen || this.now(), win: this.now(), count: 0, pings: 0 });
+    for (const c of conns) {
+      const mid = c.mid || null;
+      this.conns.set(c.connId, { mid, screen: !mid && c.screen === true, lastSeen: c.lastSeen || this.now(), win: this.now(), count: 0, pings: 0 });
+    }
   }
 
   persist() { this.deps.save?.(this.state ? this.state : null); }
@@ -187,14 +197,21 @@ export class RoomHub {
       return false;
     }
     const t = this.now();
-    this.conns.set(connId, { mid: null, lastSeen: t, win: t, count: 0, pings: 0 });
+    this.conns.set(connId, { mid: null, screen: false, lastSeen: t, win: t, count: 0, pings: 0 });
     this.attach(connId);
     return true;
   }
 
   attach(connId) {
     const c = this.conns.get(connId);
-    if (c) this.deps.attach?.(connId, { mid: c.mid, lastSeen: c.lastSeen });
+    if (c) this.deps.attach?.(connId, { mid: c.mid, lastSeen: c.lastSeen, ...(c.screen ? { screen: true } : {}) });
+  }
+
+  /** Displays connected now (welcomed ones). */
+  screenCount() {
+    let n = 0;
+    for (const c of this.conns.values()) if (c.screen) n++;
+    return n;
   }
 
   close(connId) {
@@ -208,7 +225,7 @@ export class RoomHub {
       }
       this.quizCheck(); // the question does not wait for somebody who dropped out
       this.changed();
-    }
+    } else if (c.screen) this.refresh(); // meta.screens
   }
 
   /** Quiz: close the question when everybody online has answered or the time is up. */
@@ -239,6 +256,7 @@ export class RoomHub {
     this.conns.delete(connId);
     this.deps.drop?.(connId, 4000, code);
     if (c?.mid && this.state) this.changed();
+    else if (c?.screen) this.refresh();
   }
 
   // ---------- messages ----------
@@ -260,6 +278,7 @@ export class RoomHub {
     this.guarded(connId, () => {
       if (m.t === 'hello') { this.hello(connId, m); return; }
       if (!this.state) { this.fatal(connId, 'notfound', 'Deze kamer bestaat niet (meer).'); return; }
+      if (c.screen) { this.screenAction(connId, m); return; }
       if (!c.mid || !has(this.state.members, c.mid)) { this.sendTo(connId, { t: 'error', code: 'bad', message: 'Zeg eerst hallo.' }); return; }
       this.state.lastActive = t;
       this.action(connId, c.mid, m);
@@ -276,9 +295,10 @@ export class RoomHub {
     const before = this.checkpoint();
     this.holding = true;
     this.held = false;
+    this.heldView = false;
     try {
       fn();
-      if (this.held && this.state) this.renderAll();
+      if ((this.held || this.heldView) && this.state) this.renderAll();
     } catch (e) {
       this.holding = false;
       this.rollback(before);
@@ -292,6 +312,7 @@ export class RoomHub {
       this.holding = false;
     }
     if (this.held) this.changed();
+    else if (this.heldView) this.refresh();
   }
 
   /** The parts of the state a message can change (the room objects themselves are never mutated). */
@@ -313,6 +334,7 @@ export class RoomHub {
     const pres = this.presence();
     const ids = new Set([...s.room.players.map((p) => p.id), s.ownerId, s.leaderId]);
     for (const id of ids) JSON.stringify(this.stateFor(id, pres));
+    JSON.stringify(this.stateForScreen(pres));
   }
 
   hello(connId, m) {
@@ -321,6 +343,8 @@ export class RoomHub {
     const s = this.state;
     if (!s) { this.fatal(connId, 'notfound', 'Deze kamer bestaat niet (meer).'); return; }
     if (m.code && m.code !== this.code) { this.fatal(connId, 'room', 'Deze kamer bestaat niet meer.'); return; }
+    if (m.screen === true) { this.helloScreen(connId, m); return; }
+    if (c.screen) { this.sendTo(connId, { t: 'error', code: 'screen', message: 'Dit is een groot scherm: dat kijkt alleen mee.' }); return; }
     const id = validId(m.id) ? m.id : null;
     if (!id) { this.fatal(connId, 'bad', 'Onbekende speler.'); return; }
     let token;
@@ -363,6 +387,31 @@ export class RoomHub {
     this.sendTo(connId, { t: 'welcome', v: SERVER_PROTOCOL_VERSION, id, code: this.code, ...(token ? { token } : {}), owner: id === s.ownerId });
     this.backupKey = ''; // a (re)connected owner gets a fresh backup
     this.changed();
+  }
+
+  /** A display says hello: no id, no token, nothing stored. Again on the same connection: welcome again. */
+  helloScreen(connId, m) {
+    const c = this.conns.get(connId);
+    if (c.mid) { this.sendTo(connId, { t: 'error', code: 'screen', message: 'Deze verbinding hoort al bij een speler.' }); return; }
+    if (!c.screen && this.screenCount() >= MAX_SCREENS_PER_ROOM) {
+      this.fatal(connId, 'screens', `Er zijn al ${MAX_SCREENS_PER_ROOM} grote schermen met deze kamer verbonden. Sluit er eerst een.`);
+      return;
+    }
+    c.screen = true;
+    this.attach(connId);
+    this.sendTo(connId, { t: 'welcome', v: SERVER_PROTOCOL_VERSION, code: this.code, screen: true });
+    this.refresh();
+  }
+
+  /** A display only watches: leave closes it, everything else is refused (the connection stays). */
+  screenAction(connId, m) {
+    if (m.t === 'leave') {
+      this.conns.delete(connId);
+      this.deps.drop?.(connId, 1000, 'leave');
+      this.refresh();
+      return;
+    }
+    this.sendTo(connId, { t: 'error', code: 'screen', message: 'Dit is een groot scherm: dat kijkt alleen mee.' });
   }
 
   action(connId, mid, m) {
@@ -544,6 +593,13 @@ export class RoomHub {
     if (this.holding) { this.held = true; return; } // a message is being handled: see guarded()
     this.persist();
     this.deps.wake?.(quizNextEvent(this.state.room, QUIZ_START_FALLBACK_MS));
+    this.refresh();
+  }
+
+  /** Send everybody a fresh state, without saving (nothing stored changed: a display came or went). */
+  refresh() {
+    if (!this.state) return;
+    if (this.holding) { this.heldView = true; return; }
     if (this.dirty) return;
     this.dirty = true;
     queueMicrotask(() => {
@@ -569,7 +625,8 @@ export class RoomHub {
       restored: !!s.restoredAt,
       now: this.now(), // the server's clock, for the Quiz countdown
       // "Mix van de groep": counts only, never a title
-      mix: { ...this.mixCounts(), mine: (has(s.mix, mid) && s.mix[mid].tracks?.length) || 0 },
+      mix: { ...this.mixCounts(), mine: (mid != null && has(s.mix, mid) && s.mix[mid].tracks?.length) || 0 },
+      screens: this.screenCount(), // displays ("groot scherm") watching this room
       // the spelleider's Spotify Client ID, so players can log in for "Doe mijn favorieten erbij"
       spotifyClientId: typeof s.spotifyClientId === 'string' && SPOTIFY_CLIENT_ID_RE.test(s.spotifyClientId) ? s.spotifyClientId : null,
     };
@@ -628,11 +685,21 @@ export class RoomHub {
     return msg;
   }
 
+  /** What a display gets: the public spectator view (nobody's own part) and the meta of nobody. */
+  stateForScreen(pres) {
+    return { t: 'state', view: viewFor(this.state.room, SPECTATOR, pres), meta: { ...this.meta(null), screen: true } };
+  }
+
   broadcast() {
     if (!this.state) return;
     const pres = this.presence();
     let ownerConn = null;
+    let screenText = null; // the same for every display: rendered once
     for (const [connId, c] of this.conns) {
+      if (c.screen) {
+        try { screenText ??= JSON.stringify(this.stateForScreen(pres)); this.sendTo(connId, screenText); } catch (e) { console.error('room', this.code, 'state for a screen failed:', e?.message || e); }
+        continue;
+      }
       if (!c.mid) continue;
       // one phone whose state can not be rendered must not keep the others waiting
       try { this.sendTo(connId, this.stateFor(c.mid, pres)); } catch (e) { console.error('room', this.code, 'state for', c.mid, 'failed:', e?.message || e); }
@@ -668,7 +735,7 @@ export class RoomHub {
         if (c.mid && this.state) {
           if (c.mid === this.state.leaderId && !this.online(c.mid)) { this.state.leaderAwaySince = t; this.persist(); }
           this.changed();
-        }
+        } else if (c.screen) this.refresh();
       }
     }
     const s = this.state;

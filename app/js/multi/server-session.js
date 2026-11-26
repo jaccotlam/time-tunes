@@ -6,7 +6,9 @@
 // so the screens room-host.js / room-player.js work with either:
 //   createServerHostSession()           the spelleider (or a player who took the lead)
 //   createServerClientSession({code, name})  a player
-// Both keep a step-by-step diagnosis (server reached, room found/made, in the room) so a
+// and one that exists only with the server:
+//   createServerScreenSession({code})   a display ("groot scherm") that only watches
+// All keep a step-by-step diagnosis (server reached, room found/made, in the room) so a
 // phone never just says "verbinden…" forever.
 import { MULTI_SERVER_URL } from '../../config.js';
 import { store } from '../ui.js';
@@ -145,7 +147,7 @@ export async function diagText(diag, { status, code } = {}) {
   lines.push(`Browser: ${navigator.userAgent}`);
   lines.push(`Online volgens browser: ${navigator.onLine ? 'ja' : 'nee'}`);
   lines.push(`Server: ${diag.server || '(geen)'}`);
-  lines.push(`Rol: ${diag.role === 'host' ? 'spelleider' : 'speler'}${code ? ` · kamer ${code}` : ''}`);
+  lines.push(`Rol: ${{ host: 'spelleider', screen: 'groot scherm' }[diag.role] || 'speler'}${code ? ` · kamer ${code}` : ''}`);
   lines.push(`Status: ${status || '?'} · pogingen: ${diag.attempts} · sinds start: ${Math.round((Date.now() - diag.started) / 1000)} s`);
   step('server', '1. Server bereikt');
   step('room', diag.role === 'host' ? '2. Kamer gemaakt/gevonden' : '2. Kamer gevonden');
@@ -184,6 +186,7 @@ export async function copyText(text) {
  * after any failure. hooks:
  *   hello()                  -> the hello message (id, token, name)
  *   roomCheck(diag)          -> async: true when the room is there (host: create/restore here)
+ *   healthCheck(data)        -> (optional) a fatal error {code, message} when this server can not serve us
  *   onMessage(m), onStatus(), onWelcome(m), onFatal(error)
  */
 function createLink({ role, code: initialCode, hooks }) {
@@ -257,6 +260,8 @@ function createLink({ role, code: initialCode, hooks }) {
         hooks.onFatal?.({ code: 'version', message: Number(h.data.v) > SERVER_PROTOCOL_VERSION ? 'De server is nieuwer dan deze app. Ververs de pagina (of sluit de app en open hem opnieuw).' : 'De server is ouder dan deze app. Probeer het over een paar minuten opnieuw.' });
         return;
       }
+      const unfit = hooks.healthCheck?.(h.data);
+      if (unfit) { setStep('server', 'fail', { code: unfit.code }); hooks.onFatal?.(unfit); return; }
       setStep('server', 'ok');
       // 2. the room exists (host: made or put back here)
       setStep('room', 'busy');
@@ -711,3 +716,126 @@ export function createServerHostSession() {
   };
   return api;
 }
+
+// ---------- groot scherm ----------
+/**
+ * A display ("groot scherm", #/scherm/CODE): watches room `code` and sends nothing but hello,
+ * leave and ping. Not a player and never the leader: no id, no token, no name, and it reads
+ * or writes none of the spelleider's or a player's keys in localStorage (a display often runs
+ * in a second tab of the spelleider's browser). Same reconnect / back-off / ping / diagnosis as
+ * a player; a room that is not (or no longer) there is waited for (status 'notfound'), so a
+ * display comes back by itself once the spelleider has put a restarted server's room back.
+ */
+export function createServerScreenSession({ code }) {
+  let view = null;
+  let meta = null;
+  let error = null;
+  let notice = null;
+  let clock = 0; // server time - this device's time (spin of the ball, Quiz countdown)
+  const listeners = new Set();
+  const received = [];
+  const emit = () => { for (const fn of listeners) { try { fn(api); } catch (e) { console.error(e); } } };
+
+  const base = serverBase();
+  let link = null;
+  const makeLink = () => createLink({
+    role: 'screen',
+    code,
+    hooks: {
+      hello: () => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, screen: true }),
+      healthCheck: (data) => (Array.isArray(data?.features) && data.features.includes('screen') ? null : NO_SCREEN),
+      roomCheck: async () => {
+        const r = await request(`${base.http}/rooms/${code}`);
+        if (r.ok && r.data?.exists) return { ok: true };
+        if (r.status === 404) return { ok: false, code: 'notfound' };
+        return { ok: false, code: r.code || (r.status ? `http-${r.status}` : 'network') };
+      },
+      onWelcome: () => emit(),
+      onStatus: () => emit(),
+      onClose: () => emit(),
+      onFatal: (e) => fatal(e),
+      onMessage: (m) => {
+        if (received.length < 3000) received.push(m);
+        if (m.t === 'error') {
+          if (m.code === 'notfound') { link.retry({ force: true }); return; }
+          // a server of before the display answers its hello (no id) with 'bad'
+          if (m.code === 'bad' && !link.online) { fatal(NO_SCREEN); return; }
+          if (FATAL.includes(m.code) || m.code === 'screens') { fatal({ code: m.code, message: m.message }); return; }
+          notice = { message: m.message || 'Dat lukte niet.' };
+          emit();
+          return;
+        }
+        if (m.t === 'state' && m.view) {
+          view = m.view;
+          meta = m.meta || null;
+          if (Number.isFinite(meta?.now)) clock = meta.now - Date.now();
+          emit();
+        }
+      },
+    },
+  });
+  function connect() {
+    link?.stop();
+    error = null;
+    link = makeLink();
+    link.start();
+    emit();
+  }
+
+  function fatal(e) {
+    error = e;
+    link?.stop('closed');
+    emit();
+  }
+
+  let offLifecycle = () => {};
+  let ticker = 0;
+
+  const api = {
+    isServer: true,
+    isScreen: true,
+    code,
+    /** The public view of the room (protocol.js viewFor for a spectator). Null before the first state. */
+    get view() { return view; },
+    /** meta: leader, leaderOnline, leaderAwayMs, now, mix counts, screens; `screen: true`, `you: null`. */
+    get meta() { return meta; },
+    get status() { return error ? 'closed' : link ? link.status : 'idle'; },
+    get error() { return error; },
+    get online() { return !!link?.online; },
+    /** The server's clock now (ms), corrected for this device's clock. */
+    serverNow: () => Date.now() + clock,
+    get received() { return received; },
+    get diag() { return link?.diag || null; },
+    takeNotice() { const n = notice; notice = null; return n; },
+    subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+    start() {
+      if (!base) { error = { code: 'noserver', message: 'Het grote scherm werkt alleen met de server voor samen spelen.' }; emit(); return; }
+      connect();
+      offLifecycle = lifecycle(() => { if (!error) link?.retry(); });
+      // the leader-away time on screen needs a tick now and then
+      ticker = setInterval(() => { if (meta && !meta.leaderOnline) emit(); }, 1000);
+    },
+    /** Try again now ("Probeer opnieuw"): after a fatal error with a fresh connection. */
+    retry() {
+      if (!base) return;
+      if (error || !link) { connect(); return; }
+      link.retry({ force: true });
+    },
+    copyDiag: async () => (link ? copyText(await diagText(link.diag, { status: api.status, code })) : false),
+    diagText: () => (link ? diagText(link.diag, { status: api.status, code }) : Promise.resolve('')),
+    /** Stop watching (the server counts one display less right away). */
+    leave() {
+      link?.send({ t: 'leave' });
+      setTimeout(() => api.destroy(), 200);
+    },
+    destroy() {
+      clearInterval(ticker);
+      offLifecycle();
+      link?.stop('closed');
+      listeners.clear();
+    },
+  };
+  return api;
+}
+
+const NO_SCREEN = { code: 'noscreen', message: 'Deze server kent het grote scherm nog niet. Werk de server bij, of volg het spel op een telefoon.' };

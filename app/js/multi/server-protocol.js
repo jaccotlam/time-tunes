@@ -24,6 +24,16 @@
 // spelleider has to set Spotify up. Both are optional extra fields, so the version stays 3: an
 // older app simply sends no cid and ignores the extra meta field, an older server ignores cid.
 //
+// A display ("groot scherm", a tv that only watches) says hello {v, code, screen: true}: no id,
+// no token, no name. The server answers welcome {v, code, screen: true} and from then on sends
+// state {view, meta} with the public spectator view (nobody's card, answer or choice; the song
+// only after the reveal) and meta.screen = true; it never sends a display a backup or lead part.
+// A display may send only hello / leave / ping; anything else gets error {code: 'screen'} (the
+// connection stays). At most 4 per room (error 'screens', closed); every state's meta has
+// `screens`: how many displays watch. Also an optional addition, so the version stays 4: an
+// older server answers a display hello (no id) with error 'bad' and closes it; /health of a
+// server that knows displays lists 'screen' in `features`, so the display can tell beforehand.
+//
 // Version 2 (November 2026): the Quiz (settings questions/qtype/think, playing, the quiz part of
 // the view). Version 3 (November 2026): "Mix van de groep" (mix-add, mix-clear, settings.music,
 // start.play, meta.mix). Version 4 (November 2026): Discobingo (game 'disco', settings.win, stamp,
@@ -31,6 +41,8 @@
 // (health / hello / POST /rooms).
 
 export const SERVER_PROTOCOL_VERSION = 4;
+/** Optional additions within this version that the server announces in /health `features`. */
+export const SERVER_FEATURES = ['screen'];
 /** Largest message from a phone (the deck at the start of a game). */
 export const MAX_CLIENT_MESSAGE = 512 * 1024;
 /** Every other message is small. */
@@ -118,6 +130,10 @@ export const ERROR_TITLES = {
   busy: 'De kamer is te druk',
   ratelimit: 'Te veel berichten',
   mix: 'Mix van de groep',
+  screen: 'Groot scherm',
+  screens: 'Te veel grote schermen',
+  noscreen: 'Server kent het grote scherm niet',
+  noserver: 'Geen server voor samen spelen',
 };
 
 /** Base addresses for a configured server ("https://x.y", "wss://x.y/", "x.y") -> { http, ws } or null. */
