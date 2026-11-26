@@ -232,7 +232,8 @@ function spinBall(g, now) {
 
 /**
  * Fair start for somebody who joins a running game: as far as the player who is furthest
- * behind (never close to winning). Bingo: a new card with that many squares stamped for
+ * behind among those online now (`online`; everybody when nobody is or it is not given),
+ * never close to winning. Bingo: a new card with that many squares stamped for
  * free, never more than size-2 in one line. Tijdlijn: that many cards from the pile.
  */
 export function lateStart(room, pid, online = null) {

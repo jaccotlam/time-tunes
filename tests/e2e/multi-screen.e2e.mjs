@@ -82,7 +82,12 @@ function displayGuard() {
   const sp = Storage.prototype;
   for (const m of ['setItem', 'removeItem', 'clear']) {
     const orig = sp[m];
-    sp[m] = function guarded(...a) { if (this === window.localStorage) writes.push([m, String(a[0])]); return orig.apply(this, a); };
+    sp[m] = function guarded(...a) {
+      let mine = false;
+      try { mine = this === window.localStorage; } catch { /* no access to storage here */ }
+      if (mine) writes.push([m, String(a[0])]);
+      return orig.apply(this, a);
+    };
   }
   window.__guard = true;
   const log = (window.__log = []);

@@ -30,7 +30,9 @@
 // state {view, meta} with the public spectator view (nobody's card, answer or choice; the song
 // only after the reveal) and meta.screen = true; it never sends a display a backup or lead part.
 // A display may send only hello / leave / ping; anything else gets error {code: 'screen'} (the
-// connection stays). At most 4 per room (error 'screens', closed); every state's meta has
+// connection stays). At most 4 per room: a hello may carry `sid` (the display tab's random id) so a
+// reconnect takes back its own slot; a fifth display takes the slot of the one heard from longest
+// ago, which gets error 'screenreplaced' and is closed (a server before this answered 'screens'). Every state's meta has
 // `screens`: how many displays watch. Also an optional addition, so the version stays 4: an
 // older server answers a display hello (no id) with error 'bad' and closes it; /health of a
 // server that knows displays lists 'screen' in `features`, so the display can tell beforehand.
@@ -133,6 +135,7 @@ export const ERROR_TITLES = {
   mix: 'Mix van de groep',
   screen: 'Groot scherm',
   screens: 'Te veel grote schermen',
+  screenreplaced: 'Een ander scherm kijkt nu mee',
   noscreen: 'Server kent het grote scherm niet',
   noserver: 'Geen server voor samen spelen',
 };

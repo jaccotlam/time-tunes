@@ -6,6 +6,8 @@
 //   POST /rooms/CODE/restore     -> { code, restored }   body { v, id, token, snap }
 //   GET  /rooms/CODE             -> { exists, phase, players, leaderOnline } (404 when unknown)
 //   GET  /rooms/CODE/ws          -> WebSocket (Upgrade)
+//   POST /rooms/CODE/seat        -> { seat }             body { id, token }: does this phone still have its seat
+//                                   (false for a wrong token or an unknown room: nothing for whoever lacks the token)
 import { SERVER_PROTOCOL_VERSION, MAX_CLIENT_MESSAGE, SERVER_FEATURES } from '../app/js/multi/server-protocol.js';
 import { isValidCode } from '../app/js/multi/code.js';
 
@@ -81,18 +83,19 @@ export const LIMITS = {
   maxRooms: 1000, // Node: rooms in memory at the same time
 };
 
-/** Which endpoint is this? -> { kind: 'health'|'create'|'restore'|'info'|'ws'|'none', code? } */
+/** Which endpoint is this? -> { kind: 'health'|'create'|'restore'|'seat'|'info'|'ws'|'none', code? } */
 export function route(method, pathname) {
   const p = pathname.replace(/\/+$/, '') || '/';
   if (p === '/health' && (method === 'GET' || method === 'HEAD')) return { kind: 'health' };
   if (p === '/rooms' && method === 'POST') return { kind: 'create' };
-  let m = p.match(/^\/rooms\/([A-Za-z]{4})(\/ws|\/restore)?$/);
+  let m = p.match(/^\/rooms\/([A-Za-z]{4})(\/ws|\/restore|\/seat)?$/);
   if (m) {
     const code = m[1].toUpperCase();
     if (!isValidCode(code)) return { kind: 'badcode' };
     if (!m[2] && method === 'GET') return { kind: 'info', code };
     if (m[2] === '/ws' && method === 'GET') return { kind: 'ws', code };
     if (m[2] === '/restore' && method === 'POST') return { kind: 'restore', code };
+    if (m[2] === '/seat' && method === 'POST') return { kind: 'seat', code };
   }
   m = p.match(/^\/rooms(\/|$)/);
   if (m) return { kind: 'badcode' };
@@ -115,6 +118,11 @@ export function createOptions(body) {
 
 export function parseJson(text) {
   try { return JSON.parse(text); } catch { return null; }
+}
+
+/** Body of POST /rooms/CODE/seat -> { id, token } (strings, possibly empty). */
+export function seatQuery(body) {
+  return { id: typeof body?.id === 'string' ? body.id : '', token: typeof body?.token === 'string' ? body.token : '' };
 }
 
 export const versionMismatch = {

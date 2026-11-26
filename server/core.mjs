@@ -6,7 +6,7 @@
 import { RoomHub } from './room.mjs';
 import {
   LIMITS, DEFAULT_ORIGINS, parseOrigins, originAllowed, corsHeaders, rateLimiter, route, health, createOptions,
-  parseJson, versionMismatch,
+  parseJson, versionMismatch, seatQuery,
 } from './policy.mjs';
 import { makeFreshCode } from '../app/js/multi/code.js';
 
@@ -85,6 +85,11 @@ export function createRoomServer({ origins = DEFAULT_ORIGINS, now = Date.now, li
         rooms.delete(code);
         return json(400, { error: e.code || 'bad' }, origin);
       }
+    }
+    if (r.kind === 'seat') {
+      if (String(req.body || '').length > 4096) return json(413, { error: 'size' }, origin);
+      const q = seatQuery(parseJson(req.body));
+      return json(200, { seat: !!rooms.get(r.code)?.hasSeat(q.id, q.token) }, origin);
     }
     if (r.kind === 'restore') {
       if (String(req.body || '').length > L.maxBody) return json(413, { error: 'size' }, origin);

@@ -73,7 +73,7 @@ export const SEAT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 /**
  * The room this phone can go back to ("Terug naar kamer ABCD"): { code, name, at } or null.
  * Only a seat of this phone's player id with a token from the server counts. Synchronous and
- * local: checkSeat() asks the server whether the room is still there.
+ * local: checkSeat() asks the server whether this phone still has that seat.
  */
 export function storedSeat() {
   const s = store.get(SEAT_KEY, null);
@@ -97,9 +97,20 @@ export async function checkSeat() {
   const seat = storedSeat();
   const base = serverBase();
   if (!seat || !base) return seat;
-  const r = await request(`${base.http}/rooms/${seat.code}`);
-  if (r.status === 404) { forgetSeat(seat.code); return null; }
-  return seat; // there, or the server is not reachable now: keep it
+  // the server checks this phone's id + token: a new room that got the same code says no
+  const id = store.get(SEAT_KEY, null)?.id;
+  const r = await request(`${base.http}/rooms/${seat.code}/seat`, { method: 'POST', body: { id, token: tokenFor(seat.code, id) } });
+  if (r.ok && typeof r.data?.seat === 'boolean') {
+    if (r.data.seat) return seat;
+    forgetSeat(seat.code);
+    return null;
+  }
+  if (r.status === 404) {
+    // a server of before /seat: at least the room must still be there
+    const i = await request(`${base.http}/rooms/${seat.code}`);
+    if (i.status === 404) { forgetSeat(seat.code); return null; }
+  }
+  return seat; // the server is not reachable now: keep it
 }
 
 function saveSeat(code, id, name) {
@@ -439,6 +450,7 @@ export function createServerClientSession({ code, name }) {
   let pendingAnswer = null;
   let lastSent = null; // { round, answer }: resent when a restarted server lost it
   let lastStep = ''; // phase + round of the last state (the seat's "last seen")
+  let leaving = false; // after leave(): a late state must not save the seat again
   let clock = 0; // server time - this phone's time (Quiz countdown)
   const listeners = new Set();
   const received = [];
@@ -455,7 +467,7 @@ export function createServerClientSession({ code, name }) {
         if (r.status === 404) return { ok: false, code: 'notfound' };
         return { ok: false, code: r.code || (r.status ? `http-${r.status}` : 'network') };
       },
-      onWelcome: (m) => { if (m.token) saveToken(code, id, m.token); saveSeat(code, id, name); emit(); },
+      onWelcome: (m) => { if (m.token) saveToken(code, id, m.token); if (!leaving) saveSeat(code, id, name); emit(); },
       onStatus: () => emit(),
       onClose: () => emit(),
       onFatal: (e) => fatal(e),
@@ -471,7 +483,7 @@ export function createServerClientSession({ code, name }) {
         }
         if (m.t === 'state' && m.view) {
           const step = `${m.view.phase}:${m.view.game?.round ?? ''}`;
-          if (step !== lastStep && link.online) { lastStep = step; saveSeat(code, id, name); } // still seen
+          if (step !== lastStep && link.online && !leaving) { lastStep = step; saveSeat(code, id, name); } // still seen
           view = m.view;
           meta = m.meta || null;
           if (Number.isFinite(meta?.now)) clock = meta.now - Date.now();
@@ -547,6 +559,7 @@ export function createServerClientSession({ code, name }) {
     /** Verlaat. Returns { seat }: whether this phone can come back to its seat (see keepsSeat). */
     leave() {
       const seat = api.keepsSeat;
+      leaving = true;
       link.send({ t: 'leave' });
       if (seat) saveSeat(code, id, name);
       else { store.remove(JOIN_KEY); forgetSeat(code); }
@@ -792,12 +805,14 @@ export function createServerScreenSession({ code }) {
   const emit = () => { for (const fn of listeners) { try { fn(api); } catch (e) { console.error(e); } } };
 
   const base = serverBase();
+  const sid = screenSid();
   let link = null;
   const makeLink = () => createLink({
     role: 'screen',
     code,
     hooks: {
-      hello: () => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, screen: true }),
+      // sid: this display's own random id (memory only, never stored): a reconnect takes back its own slot
+      hello: () => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, screen: true, sid }),
       healthCheck: (data) => (Array.isArray(data?.features) && data.features.includes('screen') ? null : NO_SCREEN),
       roomCheck: async () => {
         const r = await request(`${base.http}/rooms/${code}`);
@@ -815,7 +830,8 @@ export function createServerScreenSession({ code }) {
           if (m.code === 'notfound') { link.retry({ force: true }); return; }
           // a server of before the display answers its hello (no id) with 'bad'
           if (m.code === 'bad' && !link.online) { fatal(NO_SCREEN); return; }
-          if (FATAL.includes(m.code) || m.code === 'screens') { fatal({ code: m.code, message: m.message }); return; }
+          // screenreplaced: another display took this slot; no automatic retry (two tabs would take turns)
+          if (FATAL.includes(m.code) || m.code === 'screens' || m.code === 'screenreplaced') { fatal({ code: m.code, message: m.message }); return; }
           notice = { message: m.message || 'Dat lukte niet.' };
           emit();
           return;
@@ -891,6 +907,12 @@ export function createServerScreenSession({ code }) {
     },
   };
   return api;
+}
+
+function screenSid() {
+  const b = new Uint8Array(12);
+  globalThis.crypto.getRandomValues(b);
+  return Array.from(b, (x) => x.toString(36).padStart(2, '0')).join('').slice(0, 20);
 }
 
 const NO_SCREEN = { code: 'noscreen', message: 'Deze server kent het grote scherm nog niet. Werk de server bij, of volg het spel op een telefoon.' };

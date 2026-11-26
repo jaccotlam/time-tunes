@@ -9,7 +9,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { RoomHub, randomToken } from './room.mjs';
 import {
   DEFAULT_ORIGINS, parseOrigins, originAllowed, corsHeaders, rateLimiter, route, health, createOptions,
-  parseJson, versionMismatch, LIMITS,
+  parseJson, versionMismatch, LIMITS, seatQuery,
 } from './policy.mjs';
 import { makeCode } from '../app/js/multi/code.js';
 
@@ -63,6 +63,11 @@ export default {
       const info = await env.ROOMS.getByName(r.code).info(r.code);
       return json(info.exists ? 200 : 404, info, origin);
     }
+    if (r.kind === 'seat') {
+      const text = await readBody(request, 4096);
+      const q = seatQuery(text == null ? null : parseJson(text));
+      return json(200, { seat: await env.ROOMS.getByName(r.code).seat(r.code, q) }, origin);
+    }
     if (r.kind === 'restore') {
       const text = await readBody(request, LIMITS.maxBody);
       const b = text == null ? null : parseJson(text);
@@ -114,7 +119,7 @@ export class Room extends DurableObject {
       attach: (connId, rec) => {
         const ws = this.sockets().get(connId);
         // a display ("groot scherm") keeps `screen` here: after hibernation it is a display again
-        if (ws) ws.serializeAttachment({ connId, mid: rec.mid, lastSeen: rec.lastSeen, ...(rec.screen ? { screen: true } : {}) });
+        if (ws) ws.serializeAttachment({ connId, mid: rec.mid, lastSeen: rec.lastSeen, ...(rec.screen ? { screen: true, ...(rec.sid ? { sid: rec.sid } : {}) } : {}) });
       },
       save: (snap) => {
         if (snap) this.ctx.storage.put('room', snap);
@@ -129,7 +134,7 @@ export class Room extends DurableObject {
     const conns = [];
     for (const ws of this.ctx.getWebSockets()) {
       const a = ws.deserializeAttachment();
-      if (a?.connId) conns.push({ connId: a.connId, mid: a.mid, screen: a.screen === true, lastSeen: Date.now() });
+      if (a?.connId) conns.push({ connId: a.connId, mid: a.mid, screen: a.screen === true, sid: a.sid, lastSeen: Date.now() });
     }
     hub.load(state, conns);
     this.hub = hub;
@@ -159,6 +164,10 @@ export class Room extends DurableObject {
 
   async info(code) {
     return this.makeHub(code).info();
+  }
+
+  async seat(code, q) {
+    return !!this.makeHub(code).hasSeat(q.id, q.token);
   }
 
   async restore(code, body) {
