@@ -466,7 +466,7 @@ export function render(root, { params = [], navigate }) {
     if (!skipAsk) {
       const html = r.exists
         ? `<p>Iedereen gaat eruit en het spel wordt gewist${r.phase !== 'lobby' && r.phase ? ' (er loopt nu een spel)' : ''}. De naam, de instellingen, de muziek en de code <b>${esc(r.code)}</b> blijven, dus gedeelde links en QR-codes blijven werken.</p>`
-        : `<p>De kamer wordt opnieuw klaargezet met dezelfde naam en instellingen. De code <b>${esc(r.code)}</b> blijft als die nog vrij is; anders krijgt de kamer een nieuwe code.</p>`;
+        : `<p>De kamer wordt opnieuw klaargezet met dezelfde naam en instellingen. De code <b>${esc(r.code)}</b> blijft als die nog vrij is. Is hij inmiddels door een andere kamer in gebruik, verwijder deze kamer dan en zet een nieuwe klaar.</p>`;
       if (!(await ask({ title: `${r.name} opnieuw gebruiken?`, html, confirm: 'Opnieuw gebruiken', testid: 'myrooms-reset-confirm' }))) return;
     }
     busy = c;

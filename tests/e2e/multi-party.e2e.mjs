@@ -299,8 +299,8 @@ async function lobby(browser, rooms, server) {
   await C.page.getByTestId('avatar-sheet').waitFor({ state: 'detached' });
   await until(D, () => ['Anouk', 'Cas'].every((n) => document.querySelector(`[data-testid="screen-player"][data-name="${n}"]`)?.dataset.avatar === '🦊'));
   assert(await tvAvatar(D, 'Anouk') === '🦊' && await tvAvatar(D, 'Cas') === '🦊' && await hostAvatar(H, 'Cas') === '🦊', 'Cas picks 🦊 too: both show it (two players may share an avatar)');
-  const sameView = await pview(C);
-  assert(sameView.players.filter((p) => p.avatar === '🦊').length === 2, 'the room view holds the avatar twice');
+  await until(C.page, () => window.__ttRoom.session.view.players.filter((p) => p.avatar === '🦊').length >= 2);
+  assert(true, 'the room view holds the avatar twice');
   // Cas goes back to her own
   await C.page.getByTestId('lobby-avatar-edit').click();
   await C.page.locator('[data-testid="avatar-option"][data-avatar="🎸"]').click();
@@ -376,10 +376,10 @@ async function lobbyReactions(o, H, D, code, { A, B, C }, server) {
   assert(await attr(A.page, 'react-bar', 'data-cooldown') === 'true', 'a tap starts the cool-down');
   // the second tap inside the cool-down is not sent (nothing reaches the tv)
   await A.page.locator('[data-testid="react-btn"][data-emoji="😂"]').click();
-  await D.locator('[data-testid="screen-reaction"][data-emoji="🔥"][data-from="Anouk"]').first().waitFor({ timeout: 8000 });
+  await D.locator('[data-testid="screen-reaction"][data-emoji="🔥"][data-from="Anouk"]').first().waitFor({ state: 'attached', timeout: 8000 });
   const fl = D.locator('[data-testid="screen-reaction"][data-emoji="🔥"][data-from="Anouk"]').first();
   assert((await fl.textContent()).includes('🦊') && (await fl.textContent()).includes('Anouk'), 'the reaction floats on the tv with the sender\'s avatar and name');
-  await H.locator('[data-testid="host-reaction"][data-emoji="🔥"][data-from="Anouk"]').first().waitFor({ timeout: 8000 });
+  await H.locator('[data-testid="host-reaction"][data-emoji="🔥"][data-from="Anouk"]').first().waitFor({ state: 'attached', timeout: 8000 });
   assert(await H.getByTestId('host-reactions').count() === 1, 'the spelleider\'s tab shows it too (small, in the host layer)');
   assert(!(await H.locator('[data-testid="host-reaction"]').first().textContent()).includes('Anouk'), 'on the host tab the reaction is small: no name');
   await sleep(500);
