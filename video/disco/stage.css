@@ -47,18 +47,20 @@ img { display: block; }
 .tag.is-host { background: var(--mustard); }
 .tag small { font-family: Inter, sans-serif; font-weight: 600; font-size: 20px; margin-left: 10px; opacity: .8; }
 
-#hl { position: absolute; left: 0; top: 0; border-radius: 14px; border: 4px solid var(--mustard); box-shadow: 0 0 26px rgba(255, 198, 73, .6); opacity: 0; z-index: 6; }
+/* kader om een onderdeel van een scherm */
+.hl { position: absolute; left: 0; top: 0; border-radius: 14px; border: 4px solid var(--mustard); box-shadow: 0 0 26px rgba(255, 198, 73, .6); opacity: 0; z-index: 6; }
 .ring { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 7; opacity: 0; }
 .ring i, .ring b { position: absolute; left: 0; top: 0; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%; }
 .ring i { background: rgba(255, 255, 255, .34); border: 4px solid #fff; box-shadow: 0 0 0 2px rgba(23, 11, 36, .55), 0 6px 18px rgba(0, 0, 0, .45); }
 .ring b { border: 5px solid var(--mustard); opacity: 0; }
 
 #later {
-  position: absolute; left: 48px; top: 96px; width: 988px; height: 568px; display: none; z-index: 8; pointer-events: none;
+  position: absolute; left: 62px; top: 110px; width: 960px; height: 540px; display: none; z-index: 8; pointer-events: none;
+  background: rgba(13, 6, 22, .62); border-radius: 8px;
 }
 #later span {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 22px 54px; border-radius: 999px; white-space: nowrap;
-  font-family: "Inter Display", Inter, sans-serif; font-weight: 900; font-size: 66px; color: var(--ink); background: var(--mustard);
+  font-family: "Inter Display", Inter, sans-serif; font-weight: 900; font-size: 62px; color: var(--ink); background: var(--mustard);
   box-shadow: 0 20px 60px rgba(0, 0, 0, .6);
 }
 #later em { position: absolute; left: 50%; top: calc(50% + 70px); transform: translateX(-50%); font-style: normal; font-weight: 700; font-size: 24px; color: var(--text); background: rgba(23, 11, 36, .8); padding: 6px 18px; border-radius: 999px; white-space: nowrap; }
@@ -85,7 +87,7 @@ img { display: block; }
 .logo svg { width: 100%; height: 100%; }
 .word {
   font-family: "Inter Display", Inter, var(--font-display); font-size: 200px; line-height: 1.05; letter-spacing: -.035em; font-weight: 900; margin: 30px 0 0;
-  background: linear-gradient(90deg, #4fb3ff, #ff5fa8 38%, #ffc649 68%, #2ed3c0); -webkit-background-clip: text; background-clip: text; color: transparent;
+  padding-bottom: .12em; background: linear-gradient(90deg, #4fb3ff, #ff5fa8 38%, #ffc649 68%, #2ed3c0); -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 .tagline { font-size: 54px; color: var(--muted); margin: 18px 0 0; font-weight: 500; }
 .pill { display: inline-block; margin: 46px 0 0; padding: 12px 34px; border-radius: 999px; font-size: 32px; font-weight: 700; background: rgba(255, 255, 255, .07); border: 2px solid var(--line); color: var(--text); }

@@ -28,6 +28,6 @@ export const SCENES = [
   { id: 'year', title: 'Jaartal: 2 ernaast mag', caption: 'Anouk typt 2014 bij een nummer uit 2016. Dat is nog goed.' },
   { id: 'later', title: 'Even later…', caption: 'Ronde na ronde vult je kaart. Anouk mist nog één vakje voor een lijn.', label: 'Even later…' },
   { id: 'bingo', title: 'Een lijn vol: bingo!', caption: 'Bij Decennium tik je de goede tien jaar aan. Anouk stempelt haar laatste vakje: de lijn is vol, de ster telt mee.' },
-  { id: 'win', title: 'Anouk wint!', caption: 'De spelleider gaat naar de uitslag. Zin in nog een potje? Dan start hij er zo een.' },
+  { id: 'win', title: 'Anouk wint!', caption: 'Anouk had als eerste een lijn vol. Zin in nog een potje? Dan start de spelleider er zo een.' },
   { id: 'end', layout: 'end' },
 ];

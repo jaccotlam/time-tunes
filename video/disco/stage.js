@@ -119,17 +119,21 @@ window.renderFrame = async (t) => {
       burst.style.transform = `scale(${dt >= 0 ? 0.9 + (dt / 0.4) * 1.3 : 1})`;
     }
   }
-  // kaders
-  const hl = $('hl');
-  hl.style.opacity = 0;
+  // kaders (er kunnen er meer tegelijk in beeld zijn, bijvoorbeeld om elke telefoon)
+  const hls = [...document.querySelectorAll('.hl')];
+  let used = 0;
   if (src != null) {
     for (const h of ev.highlights) {
       if (src < h.t0 || src > h.t1) continue;
       const O = ORIGIN[h.dev];
-      Object.assign(hl.style, { left: `${O.x + h.x * O.s}px`, top: `${O.y + h.y * O.s}px`, width: `${h.w * O.s}px`, height: `${h.h * O.s}px` });
-      hl.style.opacity = smooth(clamp((src - h.t0) / 0.2)) * smooth(clamp((h.t1 - src) / 0.2));
+      let el = hls[used];
+      if (!el) { el = document.createElement('div'); el.className = 'hl'; $('devices').appendChild(el); hls.push(el); }
+      used += 1;
+      Object.assign(el.style, { left: `${O.x + h.x * O.s}px`, top: `${O.y + h.y * O.s}px`, width: `${h.w * O.s}px`, height: `${h.h * O.s}px` });
+      el.style.opacity = smooth(clamp((src - h.t0) / 0.2)) * smooth(clamp((h.t1 - src) / 0.2));
     }
   }
+  hls.slice(used).forEach((el) => { el.style.opacity = 0; });
 };
 window.stageReady = true;
 await window.renderFrame(0);

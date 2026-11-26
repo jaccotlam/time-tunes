@@ -22,9 +22,6 @@ export const PLAYERS = ['Anouk', 'Bram'];
  * en heeft Anouk een lijn door de ster met alle vier de kleuren: ze wint in ronde 4. De opname controleert dat.
  */
 export const SEED = 80;
-/** Kamercode: smalle letters, net als bij de andere video (zie video/README.md). Alleen als de app die code overneemt. */
-export const CODE = 'KJRT';
-
 /** De antwoorden per ronde. 'typo' en 'deel' worden bij de opname gecontroleerd met match.js van de app. */
 export const SCRIPT = {
   r1: { anouk: 'Rick Astly', bram: 'Astley' }, //  typfout = goed, alleen de achternaam = twijfel

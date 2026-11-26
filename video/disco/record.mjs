@@ -5,12 +5,11 @@
 // de tikken en de kaders. render.mjs maakt daar de video van.
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { TMP, TV, PHONE, SEED, CODE, PLAYERS, SCRIPT, PUBLIC_URL } from './config.mjs';
+import { TMP, TV, PHONE, SEED, PLAYERS, SCRIPT, PUBLIC_URL } from './config.mjs';
 import { startServer, launch, ensureDir, sleep, aliasPublic, capturePage } from '../lib.mjs';
 import { serveDisco, fakeMusic } from './common.mjs';
 import { simulate, winLineOf, fnFor } from './plan.mjs';
 import { startRoomServer, phone as multiPhone, waitForPlayers } from '../../tests/e2e/multi-helpers.mjs';
-import { CODE_ALPHABET } from '../../app/js/multi/code.js';
 import { artistVerdict, titleVerdict } from '../../app/js/multi/match.js';
 import { decadeOf } from '../../app/js/multi/disco.js';
 
@@ -19,7 +18,7 @@ const USER_AGENT_TV = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML
 const TITLE_SECONDS = 3.6;
 const END_SECONDS = 6.5;
 
-export async function record() {
+async function recordOnce() {
   const phoneDir = join(TMP, 'phone');
   rmSync(phoneDir, { recursive: true, force: true });
   ensureDir(phoneDir);
@@ -53,13 +52,6 @@ export async function record() {
       });
       await aliasPublic(p.context, server);
       await fakeMusic(p.context);
-      await p.context.addInitScript(() => {
-        // de kamercode is in de app willekeurig; de opname zet er vlak voor het aanmaken een klaar (zie hieronder)
-        const real = Math.random.bind(Math);
-        const queue = [];
-        window.__ttRandom = queue;
-        Math.random = () => (queue.length ? queue.shift() : real());
-      });
       p.page.on('pageerror', (e) => problems.push(`paginafout (${key}): ${e.message}`));
       return { key, page: p.page, dims };
     };
@@ -172,20 +164,20 @@ export async function record() {
 
     // --- 1. kamer maken en meedoen ---
     seg('room');
-    await hold(1.0);
+    await hold(0.7);
     await tap(host, 'start-host', { lead: 0.5 });
     await host.page.getByTestId('host-setup-form').waitFor();
     await hold(0.9);
-    await host.page.evaluate((vals) => window.__ttRandom.push(...vals), [...CODE].map((ch) => (CODE_ALPHABET.indexOf(ch) + 0.5) / CODE_ALPHABET.length));
     await tap(host, 'host-create', { lead: 0.5 });
     await host.page.locator('[data-testid="screen-room-host"][data-view="lobby"]').waitFor();
     await host.page.locator('[data-testid="conn-status"][data-state="online"]').waitFor({ timeout: 20000 });
     const code = (await host.page.getByTestId('room-code-big').textContent()).trim();
     ev.code = code;
     console.log('kamercode:', code);
-    if (code !== CODE) console.warn(`LET OP: kamercode ${code} in plaats van ${CODE}`);
+    // de kamerserver kiest de code; met brede letters (M, W) past de lobby niet op een telefoon (zie README): opnieuw
+    if (/[MW]/.test(code)) throw Object.assign(new Error(`kamercode ${code} heeft brede letters`), { retry: true });
     if ((await host.page.getByTestId('room-link').textContent()).trim() !== `${PUBLIC_URL}#/kamer/${code}`) problems.push('de link in de lobby is niet het publieke adres');
-    await hold(2.0);
+    await hold(1.3);
     await Promise.all(players.map(async (p, i) => {
       await hold(i * 0.7);
       await tap(p, 'start-join', { lead: 0.45 });
@@ -201,7 +193,7 @@ export async function record() {
       await p.page.locator('[data-testid="screen-room-player"][data-view="lobby"]').waitFor({ timeout: 20000 });
     }));
     await waitForPlayers(host.page, 2);
-    await hold(1.6);
+    await hold(1.2);
 
     // --- 2. de lobby: Discobingo en "Winnen met" ---
     seg('lobby');
@@ -211,7 +203,7 @@ export async function record() {
     await highlight(host, host.page.getByTestId('room-disco-settings'), 0.2, 3.6, 8);
     await hold(3.6);
     if ((await host.page.getByTestId('room-disco-win-line1').isChecked?.().catch(() => true)) === false) problems.push('"Winnen met: 1 lijn" staat niet aan');
-    await hold(1.0);
+    await hold(0.4);
 
     // --- 3. de discobal ---
     await scrollTo(host, 0, 400);
@@ -240,7 +232,7 @@ export async function record() {
     await Promise.all(players.map(async (p) => scrollTo(p, Math.max(0, (await topOf(p.page.getByTestId('disco-card'))) - 100), 900)));
     await hold(0.5);
     for (const p of players) await highlight(p, p.page.getByTestId('disco-card'), 0.1, 5.0, 4);
-    await hold(5.4);
+    await hold(4.8);
     await assertHidden(song, 'kaart');
 
     // --- 5. antwoorden ---
@@ -256,7 +248,7 @@ export async function record() {
     await locked(pb);
     await host.page.waitForFunction(() => /2 van 2|Iedereen is klaar/.test(document.body.innerText), null, { timeout: 8000 }).catch(() => {});
     await assertHidden(song, 'antwoorden');
-    await hold(1.6);
+    await hold(1.1);
 
     // --- 6. onthulling en een vakje kiezen ---
     seg('reveal');
@@ -306,16 +298,16 @@ export async function record() {
     await type(pb, 'disco-year-input', SCRIPT.r2.bram);
     await tap(pb, 'disco-lock', { lead: 0.4 });
     await locked(pb);
-    await hold(0.8);
+    await hold(0.6);
     await reveal();
-    await hold(1.3);
+    await hold(1.1);
     if ((await pa.page.getByTestId('disco-verdict').getAttribute('data-verdict')) !== 'right') problems.push('jaartal 2 ernaast is niet goed gerekend');
     await stamp(pa, line.year);
-    await hold(1.6);
+    await hold(1.0);
     await nextRound(2);
 
     // --- 9. even later: ronde 3 snel ---
-    seg('later', { speed: 4, label: 'Even later…' });
+    seg('later', { speed: 3, label: 'Even later…' });
     await Promise.all(devs.map((d) => waitRound(d, 3)));
     song = await checkSong(2);
     await landedAll();
@@ -355,7 +347,7 @@ export async function record() {
     await stamp(pa, line.decade);
     await pa.page.getByTestId('disco-bingo').waitFor({ timeout: 8000 });
     mark('bingo');
-    await hold(3.4);
+    await hold(3.8);
     const label = (await host.page.getByTestId('room-next').textContent()).trim();
     console.log('knop van de spelleider:', label);
     await tap(host, 'room-next', { lead: 0.6 });
@@ -365,7 +357,7 @@ export async function record() {
     // --- 11. uitslag ---
     seg('win');
     await smooth('cast');
-    await hold(5.6);
+    await hold(5.0);
     ev.duration = rel();
     for (const c of captures) await c.stop();
     ev.edit.push({ id: 'end', dur: END_SECONDS });
@@ -388,6 +380,16 @@ export async function record() {
     await browser.close();
     server.stop();
     await rooms.stop();
+  }
+}
+
+/** De kamerserver kiest de code zelf; bij brede letters (M, W) wordt opnieuw opgenomen. */
+export async function record() {
+  for (let attempt = 1; ; attempt++) {
+    try { return await recordOnce(); } catch (e) {
+      if (!e.retry || attempt >= 8) throw e;
+      console.log(`${e.message}: opnieuw (poging ${attempt + 1})`);
+    }
   }
 }
 

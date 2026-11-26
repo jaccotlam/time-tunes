@@ -5,6 +5,7 @@
 // (the spelleider's backup is deleted first, so it can not be a restore from the phone).
 // Then a short Quiz: a question closed by the server's timer (the Durable Object alarm) and a
 // restart in the middle of a question (same question, the clock starts again with the music).
+// Then a Discobingo round (answer judged by the Durable Object, a stamp) and a restart in the middle of round 2.
 // Then the "Mix van de groep": the spelleider and a player add their favourites (fake Spotify
 // and iTunes), wrangler restarts (the phones forget their own copy, so the songs can only come
 // from Durable Object storage), and a game from the mix is played.
@@ -135,6 +136,54 @@ export default async function run() {
     await QP.locator('[data-view="revealed"]').first().waitFor({ timeout: 15000 });
     assert((await QP.evaluate(() => window.__ttRoom.session.view.game.round)) === 3, 'question 3 answered and revealed after the restart');
     assert(QH.errors.length === 0 && QP.errors.length === 0, `no page errors in the quiz (${[...QH.errors, ...QP.errors].join('; ')})`);
+    // ---------- Discobingo: a round, a stamp, and a restart in the middle of a round ----------
+    const dh = await phone(browser, local, { seed: 7 });
+    await installFakeItunes(dh.context);
+    const DH = dh.page;
+    await DH.goto(`${URL_}/#/spelleider`);
+    const dcode = await createRoom(DH);
+    const dp = await phone(browser, local);
+    await installFakeItunes(dp.context);
+    const DP = dp.page;
+    await joinRoom(DP, `${URL_}/`, dcode, 'Dina');
+    await waitForPlayers(DH, 1);
+    assert(await DH.getByTestId('room-game-disco').isChecked(), 'Discobingo on Cloudflare: the lobby starts on Discobingo');
+    await DH.getByTestId('room-start').click();
+    const dround = (r) => DP.waitForFunction((n) => { const v = window.__ttRoom?.session?.view; return v?.phase === 'answering' && v.game.round === n && v.game.kind === 'disco'; }, r, { timeout: 30000 });
+    const dright = async () => {
+      const { song } = await serverHost(DH);
+      const cat = (await DP.evaluate(() => window.__ttRoom.session.view.game.disco.cat));
+      const ans = cat === 'decade' ? { decade: Math.floor(song.year / 10) * 10 } : cat === 'year' ? { guess: String(song.year) } : { text: cat === 'artist' ? song.artist : song.title };
+      await DP.evaluate((a) => window.__ttRoom.session.answer(a), ans); // no waiting for the ball: the server takes the answer
+      await DP.waitForFunction(() => window.__ttRoom.session.view.game.answer != null);
+    };
+    await dround(1);
+    await dright();
+    await DH.locator('[data-testid="room-reveal"][data-ready="true"]').waitFor({ timeout: 15000 });
+    await DH.getByTestId('room-reveal').click();
+    await DP.waitForFunction(() => window.__ttRoom.session.view.phase === 'revealed');
+    const rv = await DP.evaluate(() => window.__ttRoom.session.view);
+    assert(rv.game.reveal.mine.verdict === 'right' && rv.game.disco.choosable.length > 0, 'discobingo on Cloudflare: the answer is judged right by the Durable Object');
+    const sqIdx = rv.game.disco.choosable[0];
+    await DP.evaluate((i) => window.__ttRoom.session.stamp(i), sqIdx);
+    await DP.waitForFunction((i) => window.__ttRoom.session.view.game.mine.marks[i] != null, sqIdx);
+    assert(true, 'discobingo on Cloudflare: one reveal and one stamp');
+    await DH.getByTestId('room-next').click();
+    await dround(2);
+    const before = await DP.evaluate(() => { const v = window.__ttRoom.session.view; return { cat: v.game.disco.cat, spin: v.game.disco.spin, marks: v.game.mine.marks, card: v.game.mine.card }; });
+    await DH.evaluate(() => localStorage.removeItem('timetunesr.multiServerBackup.v1')); // so it can only come back from Durable Object storage
+    await stopWrangler(wr);
+    wr = await startWrangler(persist);
+    await DP.waitForFunction(() => { const s = window.__ttRoom.session; return s.status === 'online' && s.meta && s.view?.game?.round === 2 && s.view.phase === 'answering'; }, null, { timeout: 60000 });
+    const afterRestart = await DP.evaluate(() => { const v = window.__ttRoom.session.view; return { cat: v.game.disco.cat, marks: v.game.mine.marks, card: v.game.mine.card }; });
+    assert(afterRestart.cat === before.cat && afterRestart.card.join() === before.card.join() && afterRestart.marks.join() === before.marks.join(), 'after the restart: same round, same category, same card, same stamp');
+    await DH.waitForFunction(() => window.__ttHost.session.currentSong(), null, { timeout: 60000 });
+    await dright();
+    await DH.locator('[data-testid="room-reveal"][data-ready="true"]').waitFor({ timeout: 15000 });
+    await DH.getByTestId('room-reveal').click();
+    await DP.waitForFunction(() => window.__ttRoom.session.view.phase === 'revealed' && window.__ttRoom.session.view.game.reveal.mine.verdict === 'right');
+    assert(true, 'discobingo on Cloudflare: round 2 survived the restart and was revealed');
+    assert(DH.errors.length === 0 && DP.errors.length === 0, `no page errors in discobingo (${[...DH.errors, ...DP.errors].join('; ')})`);
     // ---------- Mix van de groep: contributions survive a restart (Durable Object storage) ----------
     const mh = await mixPhone(browser, local, `${URL_}/`, ACCOUNTS.ilse, { seed: 7, token: `${PLAYBACK} ${TOP}` });
     const MH = mh.page;
@@ -144,6 +193,7 @@ export default async function run() {
     const MP = mp.page;
     await joinRoom(MP, `${URL_}/`, mcode, 'Bram');
     await waitForPlayers(MH, 1);
+    await MH.getByTestId('room-game-bingo').check(); // the lobby now starts on Discobingo
     await MH.getByTestId('room-size-3').check();
     await shareFavourites(MP);
     await shareFavourites(MH);
