@@ -1,0 +1,204 @@
+/* TimeTunesr "Samen spelen": the phone's way in (#/kamer): disco ball, code boxes, lobby. */
+
+/* ---------- the disco ball on top ---------- */
+.join-hero { position: relative; display: grid; place-items: center; isolation: isolate; overflow-x: clip; }
+/* the canvas is square; the ball fills ~2/3 of it, so the margins pull the empty glow in */
+.join-ball { width: clamp(128px, 40vw, 160px); margin: -16px 0 -20px; }
+.join-ball canvas { margin: 0 auto; }
+/* light beams fanning out behind the ball */
+.join-hero::before {
+  content: ""; position: absolute; z-index: -1; left: 50%; top: 50%; width: 300px; height: 300px; margin: -150px 0 0 -150px; border-radius: 50%;
+  background: repeating-conic-gradient(from 0deg, rgba(255, 244, 230, .07) 0deg 7deg, transparent 7deg 30deg);
+  -webkit-mask-image: radial-gradient(closest-side, #000 25%, transparent 100%); mask-image: radial-gradient(closest-side, #000 25%, transparent 100%);
+  animation: join-beams 40s linear infinite; pointer-events: none;
+}
+@keyframes join-beams { to { transform: rotate(360deg); } }
+.view-connecting .join-ball { width: clamp(128px, 38vw, 160px); }
+.view-connecting .room-spinner { display: none; }
+.view-connecting .room-wait { padding-top: 0; }
+/* something goes wrong (the step-by-step diagnosis shows): no party ball, room for the advice */
+.view-connecting:has(.diag) .join-hero { display: none; }
+.view-connecting:has(.diag) .room-wait { padding-top: 16px; }
+
+/* ---------- join form ---------- */
+.view-join { gap: 10px; }
+.join-form { display: flex; flex-direction: column; gap: 12px; text-align: center; }
+.join-field { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+.join-label { font-family: var(--font-display); font-weight: 800; font-size: 1.05rem; letter-spacing: .02em; }
+.join-help { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: .86rem; color: var(--muted); line-height: 1.3; }
+.join-help .ico { width: 1.1em; height: 1.1em; color: var(--good); }
+.join-hint { margin: 0; font-size: .9rem; color: #ffc4b5; font-weight: 600; line-height: 1.3; }
+.join-hint:empty { display: none; }
+
+/* four letter boxes over one real input */
+.code-boxes { position: relative; width: 100%; max-width: 312px; }
+.code-cells { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: clamp(8px, 2.6vw, 12px); }
+.code-cell {
+  position: relative; display: grid; place-items: center; height: clamp(62px, 18vw, 74px); border-radius: 16px;
+  background: rgba(0, 0, 0, .3); border: 2px solid var(--line);
+  font-family: var(--font-display); font-weight: 900; font-size: clamp(2rem, 10vw, 2.5rem); line-height: 1; color: var(--mustard);
+  text-shadow: 0 0 18px rgba(255, 198, 73, .45);
+  transition: border-color .15s, background-color .15s, box-shadow .15s;
+}
+.code-cell.is-filled {
+  border-color: rgba(255, 198, 73, .6);
+  background: linear-gradient(180deg, rgba(255, 198, 73, .16), rgba(255, 198, 73, .04));
+  box-shadow: 0 8px 20px -10px rgba(255, 198, 73, .8);
+}
+.code-cell.is-bad { color: #ff8f8f; border-color: var(--bad); background: rgba(255, 93, 93, .12); text-shadow: none; box-shadow: none; }
+.code-cell.is-new { animation: cell-pop .24s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes cell-pop { from { transform: scale(.82); } to { transform: none; } }
+/* where the next letter goes: a bright border and a blinking caret */
+.code-boxes:focus-within .code-cell { border-color: rgba(185, 140, 255, .45); }
+.code-boxes:focus-within .code-cell.is-filled { border-color: rgba(255, 198, 73, .6); }
+.code-boxes:focus-within[data-len="0"] .code-cell:nth-child(1),
+.code-boxes:focus-within[data-len="1"] .code-cell:nth-child(2),
+.code-boxes:focus-within[data-len="2"] .code-cell:nth-child(3),
+.code-boxes:focus-within[data-len="3"] .code-cell:nth-child(4) {
+  border-color: var(--teal); box-shadow: 0 0 0 4px rgba(46, 211, 192, .22);
+}
+.code-boxes:focus-within[data-len="0"] .code-cell:nth-child(1)::after,
+.code-boxes:focus-within[data-len="1"] .code-cell:nth-child(2)::after,
+.code-boxes:focus-within[data-len="2"] .code-cell:nth-child(3)::after,
+.code-boxes:focus-within[data-len="3"] .code-cell:nth-child(4)::after {
+  content: ""; position: absolute; left: 50%; top: 24%; bottom: 24%; width: 3px; margin-left: -1.5px; border-radius: 2px;
+  background: var(--teal); animation: caret-blink 1.1s steps(1) infinite;
+}
+@keyframes caret-blink { 50% { opacity: 0; } }
+.code-boxes:focus-within[data-len="4"] .code-cell { border-color: rgba(255, 198, 73, .85); }
+/* filled in from the QR code: a calm "done" look */
+.code-boxes.is-from-link .code-cell { border-color: rgba(61, 220, 143, .55); box-shadow: 0 8px 20px -12px rgba(61, 220, 143, .9); }
+/* the real input: covers the boxes, invisible text, takes every tap, paste and key */
+.code-input {
+  position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; border-radius: 16px;
+  background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: transparent;
+  font-size: 16px; /* no zoom-on-focus on iOS */ letter-spacing: 0; text-align: center; outline: none; cursor: text;
+  -webkit-tap-highlight-color: transparent; appearance: none;
+}
+.code-input::selection { background: transparent; color: transparent; }
+.code-input:-webkit-autofill { -webkit-box-shadow: 0 0 0 100px transparent inset; transition: background-color 9999s; }
+.code-input:focus-visible { outline: none; } /* the boxes show the focus */
+.code-boxes:has(.code-input:focus-visible) { outline: 3px solid var(--mustard); outline-offset: 5px; border-radius: 18px; }
+.code-boxes.is-shake .code-cells { animation: code-shake .42s cubic-bezier(.36, .07, .19, .97); }
+.code-boxes.is-shake .code-cell { border-color: var(--bad); }
+@keyframes code-shake {
+  15%, 85% { transform: translateX(-3px); } 30%, 70% { transform: translateX(6px); } 45% { transform: translateX(-8px); } 60% { transform: translateX(8px); }
+}
+
+.join-name {
+  width: 100%; max-width: 312px; min-height: 56px; border-radius: 16px; border: 2px solid var(--line); background: rgba(0, 0, 0, .3);
+  padding: 10px 16px; font-size: 1.25rem; font-weight: 700; text-align: center; min-width: 0;
+}
+.join-name::placeholder { color: rgba(205, 185, 226, .6); font-weight: 500; }
+.join-name:focus { border-color: var(--teal); box-shadow: 0 0 0 4px rgba(46, 211, 192, .22); outline: none; }
+.join-name:focus-visible { outline: 3px solid var(--mustard); outline-offset: 3px; }
+.join-error { margin: 0 auto; width: 100%; max-width: 312px; text-align: center; animation: join-fade-in .2s ease-out; }
+.join-submit { max-width: 312px; margin: 2px auto 0; position: relative; overflow: hidden; }
+/* code and name are there: the button invites a tap */
+.join-form:has(.code-boxes[data-len="4"]):has(.join-name:not(:placeholder-shown)) .join-submit {
+  animation: join-ready 1.8s ease-in-out infinite alternate;
+}
+@keyframes join-ready {
+  from { box-shadow: 0 8px 24px rgba(255, 93, 115, .35), inset 0 -3px 0 rgba(0, 0, 0, .12); }
+  to { box-shadow: 0 8px 34px rgba(255, 198, 73, .6), 0 0 0 4px rgba(255, 198, 73, .18), inset 0 -3px 0 rgba(0, 0, 0, .12); }
+}
+.join-form p.join-note.muted { margin: 4px auto 0; max-width: 34ch; text-align: center; }
+.join-form p.p2p-note.muted { margin: 0 auto; max-width: 36ch; text-align: center; }
+@keyframes join-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---------- lobby: "Je doet mee!" ---------- */
+.view-lobby .join-ball { width: clamp(144px, 42vw, 172px); margin: -18px 0 -22px; }
+.view-lobby .join-hero { animation: hero-in .55s cubic-bezier(.25, 1.5, .45, 1) both; }
+/* one ring of light bursts out when you are in */
+.view-lobby .join-hero::after {
+  content: ""; position: absolute; z-index: -1; left: 50%; top: 50%; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%;
+  border: 3px solid var(--mustard); box-shadow: 0 0 24px var(--mustard), inset 0 0 18px rgba(255, 198, 73, .5);
+  opacity: 0; animation: hero-ring .9s .1s ease-out both; pointer-events: none;
+}
+@keyframes hero-in { from { transform: scale(.72); } to { transform: none; } }
+@keyframes hero-ring { from { transform: scale(.6); opacity: .9; } to { transform: scale(2.3); opacity: 0; } }
+
+.lobby-wait { padding-top: 0; gap: 10px; }
+.lobby-check {
+  position: relative; z-index: 1; width: 50px; height: 50px; margin-top: -30px; border: 4px solid var(--bg);
+  box-shadow: 0 0 0 2px rgba(61, 220, 143, .4), 0 6px 18px rgba(61, 220, 143, .45);
+  animation: pop-in .45s .12s cubic-bezier(.3, 1.8, .5, 1) both;
+}
+.lobby-check .ico { width: 28px; height: 28px; }
+@keyframes pop-in { from { transform: scale(0); } to { transform: none; } }
+.lobby-title { font-size: clamp(1.55rem, 7.4vw, 1.95rem); margin: 0; overflow-wrap: anywhere; animation: rise-in .4s .16s ease-out both; }
+.lobby-name {
+  background: linear-gradient(90deg, var(--mustard), var(--coral-2) 55%, var(--coral));
+  -webkit-background-clip: text; background-clip: text; color: var(--mustard); -webkit-text-fill-color: transparent;
+}
+@keyframes rise-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+.lobby-game {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; max-width: 360px; padding: 12px 14px 14px; border-radius: var(--radius-lg);
+  background: linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(120deg, rgba(255, 198, 73, .7), rgba(255, 93, 115, .55), rgba(185, 140, 255, .55), rgba(46, 211, 192, .6)) border-box;
+  border: 2px solid transparent; box-shadow: var(--shadow);
+  animation: rise-in .4s .22s ease-out both;
+}
+.lobby-game-kicker { font-size: .74rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+.lobby-game-name { font-family: var(--font-display); font-size: 1.6rem; line-height: 1.1; font-weight: 900; color: var(--mustard); }
+.game-disco .lobby-game-name {
+  background: linear-gradient(90deg, var(--cat-decade), var(--cat-artist) 38%, var(--cat-year) 66%, var(--cat-title));
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+.lobby-game-opts { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 4px; }
+.lobby-chip { padding: 3px 10px; border-radius: 999px; background: rgba(255, 255, 255, .07); border: 1px solid var(--line); font-size: .85rem; font-weight: 600; white-space: nowrap; }
+.lobby-mix { margin: 0; animation: rise-in .4s .26s ease-out both; }
+
+.lobby-hint {
+  display: inline-flex; align-items: center; gap: 10px; margin: 2px 0 0; padding: 8px 16px; border-radius: 999px;
+  background: rgba(46, 211, 192, .1); border: 1px solid rgba(46, 211, 192, .35); color: #bff3ec; font-weight: 600; font-size: .9rem; line-height: 1.25; max-width: 100%; text-align: left;
+  animation: rise-in .4s .3s ease-out both;
+}
+.lobby-dots { display: inline-flex; gap: 4px; flex: none; }
+.lobby-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); animation: dot-bounce 1.3s ease-in-out infinite; }
+.lobby-dots i:nth-child(2) { animation-delay: .16s; }
+.lobby-dots i:nth-child(3) { animation-delay: .32s; }
+@keyframes dot-bounce { 0%, 60%, 100% { transform: none; opacity: .5; } 30% { transform: translateY(-5px); opacity: 1; } }
+.lobby-awake { margin: 2px 0 0; max-width: 40ch; animation: join-fade-in .4s .34s ease-out both; }
+
+/* the players as tiles that pop in */
+.lobby-players-h { display: flex; align-items: center; gap: 8px; }
+.lobby-count {
+  display: inline-grid; place-items: center; min-width: 26px; height: 26px; padding: 0 7px; border-radius: 999px;
+  background: var(--surface-2); color: var(--text); font-size: .9rem; font-weight: 800;
+}
+.lobby-players { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); gap: 8px; }
+.lp {
+  display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 54px; padding: 8px 10px; border-radius: 16px;
+  background: var(--surface); border: 1px solid var(--line);
+}
+.lp.is-new { animation: tile-pop .5s var(--delay, 0ms) cubic-bezier(.3, 1.6, .5, 1) both; }
+@keyframes tile-pop { from { opacity: 0; transform: scale(.6) translateY(8px); } to { opacity: 1; transform: none; } }
+.lp-avatar {
+  display: grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 50%;
+  background: var(--av, var(--surface-2)); color: var(--ink); font-family: var(--font-display); font-weight: 900; font-size: 1.1rem;
+  box-shadow: 0 0 14px -2px var(--av, transparent);
+}
+.lp-name { flex: 1; min-width: 0; font-weight: 700; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lp-name small { font-weight: 400; color: var(--muted); }
+.lp.is-you { border-color: rgba(255, 198, 73, .55); background: linear-gradient(135deg, rgba(255, 198, 73, .12), rgba(255, 93, 115, .08)), var(--surface); }
+.lp.is-offline { opacity: .6; }
+.lp.is-offline .lp-avatar { filter: grayscale(1); box-shadow: none; }
+.lp .lp-off { color: #ffb3b3; }
+.lp-next { background: transparent; border: 2px dashed rgba(205, 185, 226, .3); color: var(--muted); animation: breathe 2.4s ease-in-out infinite; }
+.lp-next .lp-avatar { background: rgba(255, 255, 255, .06); color: var(--muted); box-shadow: none; }
+.lp-next .lp-avatar .ico { width: 18px; height: 18px; }
+.lp-next .lp-name { font-weight: 600; }
+@keyframes breathe { 50% { opacity: .55; } }
+
+/* ---------- reduced motion: fades only ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .join-hero::before { animation: none !important; }
+  .view-lobby .join-hero::after, .lobby-dots i, .code-boxes:focus-within .code-cell::after, .join-submit { animation: none !important; }
+  .view-lobby .join-hero, .lobby-check, .lobby-title, .lobby-game, .lobby-mix, .lobby-hint, .lobby-awake, .lp.is-new {
+    animation-name: join-fade-in !important; animation-duration: .35s !important; animation-timing-function: ease-out !important;
+  }
+  .code-cell.is-new, .code-boxes.is-shake .code-cells { animation: none !important; }
+  .lp-next { animation: none !important; opacity: .7; }
+}
