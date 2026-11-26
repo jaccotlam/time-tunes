@@ -25,6 +25,7 @@ import {
   createDiscoStage, discoLandedAt, discoController, discoAnswerHtml, discoCardHtml, cardStatsHtml, spinWaitHtml,
   discoMyResultHtml, regieHtml, discoProgressHtml, nextButtonHtml, discoLobbyHtml,
 } from './room-disco.js';
+import { createFloatLayer, awardsListHtml, avatarSheetHtml, avatarHtml } from './party-ui.js';
 
 export const name = 'room-host';
 const HOST_NAME_KEY = 'timetunesr.multiName.v1';
@@ -74,6 +75,11 @@ export function render(root, { deck, navigate }) {
   let sheetOpen = false;
   let ms = null; // this phone's own "Doe mijn favorieten erbij" (room server only)
   let msFor = '';
+  let avatarOpen = false; // the spelleider who plays along picks an avatar (lobby)
+  let ownJoker = null; // round in which the spelleider (playing along) switched the joker on
+  // the players' reactions, small and short in a corner of this tab
+  const hostFloats = createFloatLayer(document.body, { small: true, max: 5, testid: 'host-reaction' });
+  const offReact = session.onReaction?.((r) => hostFloats.push(r));
   const regions = {};
   const keys = {};
 
@@ -242,7 +248,7 @@ export function render(root, { deck, navigate }) {
     const serverKey = viaServer ? JSON.stringify([m?.leader, m?.leaderName, m?.owner, diagVisible(session.diag, session.status) ? diagKey(session.diag) : '']) : '';
     region('status', JSON.stringify([session.status, r.code, r.phase, r.game?.round, r.game?.kind, serverKey]), () => statusHtml(sv));
     region('join', JSON.stringify([r.code, m?.screens || 0]), () => joinBoxHtml(r.code) + screenBoxHtml(r.code));
-    region('players', JSON.stringify([sv.players, r.phase]), () => playersBlock(sv));
+    region('players', JSON.stringify([sv.players, r.phase, avatarOpen, canPickAvatar(), session.hostView?.()?.you?.avatar]), () => playersBlock(sv));
     region('sheet', JSON.stringify([sheetOpen, r.code, m?.screens || 0]), () => (sheetOpen ? sheetHtml(r.code) : ''));
     // a spelleider screen that does not lead (somebody took over) does not play the music;
     // Discobingo: the player appears when the ball has landed (that is when the music starts)
@@ -414,8 +420,12 @@ export function render(root, { deck, navigate }) {
       ? `<h2 class="room-h" data-testid="room-answered" data-done="${done}" data-total="${playing.length}">Geantwoord: ${done} van ${playing.length}</h2>`
       : `<h2 class="room-h">Spelers <span class="muted">(${n})</span></h2>`;
     const empty = n === 0 ? '<p class="muted" data-testid="room-empty">Nog niemand. Laat iedereen de code invullen of de QR-code scannen.</p>' : '';
-    return `${head}${empty}${n ? playersHtml(sv, { host: true, removable: true }) : ''}`;
+    // playing along: the own avatar can change in the lobby (like a phone)
+    const me = canPickAvatar() ? session.hostView()?.you : null;
+    const pick = me ? `<button type="button" class="btn btn-small btn-ghost host-av-pick" data-action="avatar-open" data-testid="host-avatar-pick" data-avatar="${esc(me.avatar)}">${avatarHtml(me, { cls: 'host-av' })}<span>Jouw avatar wijzigen</span></button>` : '';
+    return `${head}${empty}${n ? playersHtml(sv, { host: true, removable: true }) : ''}${pick}${me && avatarOpen ? avatarSheetHtml(me.avatar) : ''}`;
   }
+  const canPickAvatar = () => viaServer && session.room?.phase === 'lobby' && !!session.hostView?.()?.you && !!session.supports?.('party');
 
   function setupHtml() {
     const last = store.get(HOST_NAME_KEY, '') || '';
@@ -556,8 +566,15 @@ export function render(root, { deck, navigate }) {
     const g = hv.game;
     if (g.kind === 'disco') {
       const d = g.disco;
-      const choosing = hv.phase === 'revealed' && g.reveal?.mine?.correct && !d.waitingForHost && d.choosable.length > 0;
-      return `${discoCardHtml(g.mine, { mode: choosing ? 'choose' : 'show', choosable: d.choosable, choice: d.choice, cat: d.cat, testid: 'host-disco-card', name: hv.you?.name })}${cardStatsHtml(g.mine, d.win)}`;
+      // the joker: switched on here, or the chip already lies on another colour
+      const right = hv.phase === 'revealed' && g.reveal?.mine?.correct && !d.waitingForHost;
+      const onJoker = right && Number.isInteger(d.choice) && g.mine.card[d.choice] !== d.cat;
+      const jokerOn = right && (d.jokerSquares || []).length > 0 && (ownJoker === g.round || onJoker);
+      const choosing = right && (d.choosable.length > 0 || jokerOn);
+      const toggle = right && (d.jokerSquares || []).length > 0 && !g.mine.bingo
+        ? `<p class="host-joker"><button type="button" class="btn btn-small btn-ghost" data-action="host-joker" data-testid="host-joker-toggle" data-on="${jokerOn}" aria-pressed="${jokerOn}">🃏 ${onJoker ? 'Joker terug' : jokerOn ? 'Joker uit' : 'Zet joker in'}</button>
+          <small class="muted">${onJoker ? 'Je joker is weg zodra de volgende ronde begint; verplaats je fiche terug om hem te houden.' : 'Met je joker mag je fiche op elke kleur.'}</small></p>` : '';
+      return `${toggle}${discoCardHtml(g.mine, { mode: choosing ? 'choose' : 'show', choosable: d.choosable, joker: jokerOn ? d.jokerSquares : [], jokerChips: onJoker ? [d.choice] : [], choice: d.choice, cat: d.cat, testid: 'host-disco-card', name: hv.you?.name })}${cardStatsHtml(g.mine, d.win)}`;
     }
     if (g.kind === 'bingo') return viewBingoCard(hv, { highlight: g.reveal?.mine && !g.reveal.mine.none && !g.reveal.mine.pass ? g.reveal.mine.index : null });
     return `<details class="final-tl"><summary>Jouw tijdlijn · ${g.mine.timeline.length} van ${g.goal}</summary>${viewTimeline(g.mine.timeline)}</details>`;
@@ -582,6 +599,7 @@ export function render(root, { deck, navigate }) {
     const hv = session.hostView();
     return `${confettiHtml()}
       ${quiz ? quizPodiumHtml(sv) : sv.game.kind === 'disco' ? `${winnerHtml(sv)}
+      ${sv.game.disco?.awards?.length ? `<section class="host-awards" data-testid="host-awards-box"><h2 class="room-h">Prijzen</h2>${awardsListHtml(sv.game.disco.awards, { testid: 'host-awards', itemTestid: 'host-award', cls: 'is-host' })}</section>` : ''}
       ${discoProgressHtml(sv)}
       ${hv?.game?.mine ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw kaart, ${esc(hv.you.name)}</h2>${ownCard(hv)}</section>` : ''}` : `${winnerHtml(sv)}
       ${standingsHtml(sv)}`}
@@ -611,7 +629,7 @@ export function render(root, { deck, navigate }) {
     const sq = e.target.closest('[data-action="disco-stamp"]');
     if (sq && root.contains(sq)) {
       const hv = session.hostView();
-      if (session.room?.phase === 'revealed' && hv?.game?.disco && Number(sq.dataset.index) !== hv.game.disco.choice) { guard(() => session.stamp(Number(sq.dataset.index))); vibrate(25); }
+      if (session.room?.phase === 'revealed' && hv?.game?.disco && Number(sq.dataset.index) !== hv.game.disco.choice) { guard(() => session.stamp(Number(sq.dataset.index), sq.dataset.joker === 'true' ? { joker: true } : undefined)); vibrate(25); }
       return;
     }
     if (session.room?.phase === 'answering' && inDisco() && e.target.closest('[data-testid="host-own"]')) { if (dctl.onClick(e)) return; } else if (session.room?.phase === 'answering' && session.room.game?.kind !== 'quiz' && e.target.closest('[data-testid="host-own"]') && ctl.onClick(e)) return;
@@ -621,6 +639,23 @@ export function render(root, { deck, navigate }) {
     if (act.startsWith('pv-')) return; // the hidden player handles these
     switch (act) {
       case 'share': sheetOpen = true; draw(); break;
+      case 'avatar-open': avatarOpen = true; draw(); break;
+      case 'avatar-close': avatarOpen = false; draw(); break;
+      case 'avatar-pick':
+        avatarOpen = false;
+        if (!session.setAvatar?.(a.dataset.avatar)) toast('Dat lukte niet. Probeer het zo nog eens.', { kind: 'warn' });
+        draw();
+        break;
+      case 'host-joker': {
+        const hv = session.hostView();
+        const g = hv?.game;
+        if (g?.disco && session.room?.phase === 'revealed') {
+          if (Number.isInteger(g.disco.choice) && g.mine.card[g.disco.choice] !== g.disco.cat) { guard(() => session.stamp(null)); ownJoker = null; } else ownJoker = ownJoker === g.round ? null : g.round;
+          keys.own = null;
+          draw();
+        }
+        break;
+      }
       case 'sheet-close':
         if (a.classList.contains('sheet-backdrop') && e.target !== a) return;
         sheetOpen = false; draw(); break;
@@ -708,6 +743,7 @@ export function render(root, { deck, navigate }) {
 
   function onKey(e) {
     if (e.key === 'Escape' && sheetOpen) { sheetOpen = false; draw(); }
+    if (e.key === 'Escape' && avatarOpen) { avatarOpen = false; draw(); }
     if (inDisco()) dctl.onKeyDown(e); else ctl.onKeyDown(e);
   }
 
@@ -743,6 +779,8 @@ export function render(root, { deck, navigate }) {
     clearInterval(ticker);
     clearInterval(quizTicker);
     offPlayer();
+    offReact?.();
+    hostFloats.destroy();
     document.body.classList.remove('tt-quiz', 'tt-disco');
     stage?.destroy();
     if (unmountPv) unmountPv();
