@@ -54,6 +54,8 @@ for (const t of TRACKS) {
 }
 
 // ---------- small helpers ----------
+/** Failures of assertions that are kept but must not stop the run (real app bugs): the run fails at the end. */
+const SOFT = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const TV = { width: 1920, height: 1080 };
 const HOST_TV = { viewport: { width: 1280, height: 720 }, isMobile: false, hasTouch: false, userAgent: undefined };
@@ -184,12 +186,12 @@ async function noScroll(D, label) {
   await D.setViewportSize(TV);
 }
 
-async function waitCount(D, done, total) {
+async function waitCount(D, done, total, timeout = 10000) {
   try {
     await D.waitForFunction(([d, t]) => {
       const e = document.querySelector('[data-testid="screen-count"]');
       return !!e && Number(e.dataset.done) === d && Number(e.dataset.total) === t;
-    }, [done, total], { timeout: 10000 });
+    }, [done, total], { timeout });
   } catch (e) {
     const now = await D.evaluate(() => ({ count: { ...document.querySelector('[data-testid="screen-count"]')?.dataset }, players: window.__ttScreen.session.view.players.map((p) => `${p.name}:${p.online ? 'on' : 'off'}:${p.playing ? 'play' : '-'}:${p.answered ? 'ans' : '-'}`) }));
     throw new Error(`ASSERT: the display's "x van y" is not ${done} van ${total}: ${JSON.stringify(now)}`);
@@ -403,8 +405,10 @@ async function mainGame(browser, rooms, server) {
       S.left = true;
       await tile(D, 'Cas', 'online', 'false');
       total0 = 2;
-      await waitCount(D, 1, 2);
-      assert(true, 'Cas left: offline on the display and "1 van 2" (only online players count)');
+      // BUG (found by this test, kept on purpose): the display's "x van y" is not redrawn when a player
+      // goes offline (room-screen.js drawDisco: the key of region 'listen' has answered/playing but not
+      // online), so it keeps saying "1 van 3" until somebody else answers. Reported, the run goes on.
+      try { await waitCount(D, 1, 2, 4000); assert(true, 'Cas left: offline on the display and "1 van 2" (only online players count)'); } catch (e) { SOFT.push(`round ${round}: ${e.message}`); console.log(`  NOT OK (bug) - ${e.message}`); }
     } else if (casOnline && round !== 2) {
       await give(C, 'Cas');
       await waitCount(D, 2, total0);
@@ -722,6 +726,7 @@ export default async function run() {
     await quizOnDisplay(browser, rooms, server);
     await peerRoute(browser, server);
     await bingoOnDisplay(browser, rooms, server);
+    if (SOFT.length) throw new Error(`ASSERT: ${SOFT.length} known app bug(s):\n - ${SOFT.join('\n - ')}`);
   } finally {
     await browser.close();
     server.stop();
