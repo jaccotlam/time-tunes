@@ -5,7 +5,7 @@ import * as player from '../player.js';
 import { playableCards, PREFERRED_GAME } from '../multi/game.js';
 import { DISCO_MIN_SONGS } from '../multi/disco.js';
 import { createHostSession, storedRoom } from '../multi/host-session.js';
-import { usesServer, createServerHostSession, storedServerHost } from '../multi/server-session.js';
+import { usesServer, createServerHostSession, storedServerHost, copyText } from '../multi/server-session.js';
 import { DEFAULT_GOAL } from '../logic.js';
 import { QUIZ_COUNTS, QUIZ_TIMES, QUIZ_MIN_SONGS, quizTypesFor } from '../multi/quiz.js';
 import * as spotify from '../spotify.js';
@@ -17,7 +17,7 @@ import { icons, esc, toast, vibrate, store } from '../ui.js';
 import { playerViewHtml, mountPlayerView } from './playerview.js';
 import {
   patch, connBadge, playersHtml, standingsHtml, answerPanelHtml, answerController, myResultHtml, songHtml,
-  roundResultsHtml, winnerHtml, confettiHtml, viewBingoCard, viewTimeline, gameName, qrSvg, roomLink,
+  roundResultsHtml, winnerHtml, confettiHtml, viewBingoCard, viewTimeline, gameName, qrSvg, roomLink, appBase,
   keepAwake, diagHtml, diagKey, diagVisible,
   quizQuestionHtml, quizRevealHtml, quizPodiumHtml, quizLeft, tickQuizClocks,
 } from './room-ui.js';
@@ -33,6 +33,9 @@ const SETTINGS_KEY = 'timetunesr.multiSettings.v1';
 const DISCO_DEFAULT_KEY = 'timetunesr.multiDiscoDefault.v1';
 /** A laptop or tv: the big ball keeps turning while the song plays. */
 const wide = () => typeof matchMedia === 'function' && matchMedia('(min-width: 900px)').matches;
+/** The big screen of a room (tv / laptop): no query string, so a Spotify return (?code=) never travels along. */
+const screenLink = (code) => `${appBase()}#/scherm/${code}`;
+const tvIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="2.5" y="4.5" width="19" height="12.5" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 20.5h8M12 17v3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
 export function render(root, { deck, navigate }) {
   const cards = playableCards(deck.cards.filter((c) => c.previewUrl || c.itunesId || c.spotifyId));
@@ -238,9 +241,9 @@ export function render(root, { deck, navigate }) {
     const m = session.meta;
     const serverKey = viaServer ? JSON.stringify([m?.leader, m?.leaderName, m?.owner, diagVisible(session.diag, session.status) ? diagKey(session.diag) : '']) : '';
     region('status', JSON.stringify([session.status, r.code, r.phase, r.game?.round, r.game?.kind, serverKey]), () => statusHtml(sv));
-    region('join', JSON.stringify([r.code]), () => joinBoxHtml(r.code));
+    region('join', JSON.stringify([r.code, m?.screens || 0]), () => joinBoxHtml(r.code) + screenBoxHtml(r.code));
     region('players', JSON.stringify([sv.players, r.phase]), () => playersBlock(sv));
-    region('sheet', JSON.stringify([sheetOpen, r.code]), () => (sheetOpen ? sheetHtml(r.code) : ''));
+    region('sheet', JSON.stringify([sheetOpen, r.code, m?.screens || 0]), () => (sheetOpen ? sheetHtml(r.code) : ''));
     // a spelleider screen that does not lead (somebody took over) does not play the music;
     // Discobingo: the player appears when the ball has landed (that is when the music starts)
     if (regions.pv) regions.pv.hidden = !leads() || (inDisco() && vn === 'answering' && !landed);
@@ -360,10 +363,42 @@ export function render(root, { deck, navigate }) {
     </div>`;
   }
 
+  /**
+   * Via the server: open the big screen (a tv or laptop next to the room, in a new tab), its
+   * link to copy, share the join link, and whether a big screen is connected.
+   */
+  function screenBoxHtml(code) {
+    if (!viaServer) return '';
+    const link = screenLink(code);
+    const n = session.meta?.screens || 0;
+    return `<div class="screenbox" data-testid="host-screenbox">
+      <div class="screenbox-actions">
+        <a class="btn btn-small btn-primary screenbox-open" href="${esc(link)}" target="_blank" rel="noopener" data-testid="host-open-screen">${tvIcon}<span>Open het grote scherm</span></a>
+        <button class="btn btn-small btn-ghost screenbox-share" type="button" data-action="share-join" data-testid="host-share">${icons.share}<span>Deel</span></button>
+      </div>
+      <p class="screenbox-link"><span class="screenbox-url" data-testid="host-screen-link" title="Link van het grote scherm">${esc(link.replace(/^https?:\/\//, ''))}</span>
+        <button type="button" class="btn btn-small btn-ghost screenbox-copy" data-action="copy-screen" data-testid="host-copy-screen" aria-label="Kopieer de link van het grote scherm">Kopieer</button></p>
+      ${n > 0 ? `<p class="screenbox-on" data-testid="host-screen-connected" data-count="${n}" role="status"><i aria-hidden="true"></i>Groot scherm verbonden${n > 1 ? ` (${n})` : ''}</p>`
+    : '<p class="screenbox-hint muted">Zet de kamer groot op een tv of laptop: daar staan de QR-code en het spel voor iedereen.</p>'}
+    </div>`;
+  }
+
+  /** Share the join link: the share sheet where there is one (phones), otherwise copy it. */
+  async function shareJoin() {
+    const code = session.code;
+    const link = roomLink(code);
+    if (navigator.share) {
+      try { await navigator.share({ title: 'TimeTunesr', text: `Doe mee met TimeTunesr: kamer ${code}`, url: link }); return; } catch (e) { if (e?.name === 'AbortError') return; }
+    }
+    const ok = await copyText(link);
+    toast(ok ? 'Link gekopieerd. Plak hem in de groepsapp.' : 'Kopiëren lukte niet.', { kind: ok ? 'info' : 'warn' });
+  }
+
   function sheetHtml(code) {
     return `<div class="sheet-backdrop" data-testid="join-sheet" data-action="sheet-close">
       <div class="sheet" role="dialog" aria-label="Meedoen met deze kamer">
         ${joinBoxHtml(code)}
+        ${screenBoxHtml(code)}
         <button class="btn btn-primary" type="button" data-action="sheet-close" data-testid="join-sheet-close">${icons.check}<span>Klaar</span></button>
       </div>
     </div>`;
@@ -623,6 +658,10 @@ export function render(root, { deck, navigate }) {
         if (window.confirm(`${a.dataset.name} uit de kamer verwijderen?`)) guard(() => session.remove(a.dataset.id));
         break;
       case 'retry': session.retry(); break;
+      case 'share-join': shareJoin(); break;
+      case 'copy-screen':
+        copyText(screenLink(session.code)).then((ok) => toast(ok ? 'Link van het grote scherm gekopieerd.' : 'Kopiëren lukte niet.', { kind: ok ? 'info' : 'warn' }));
+        break;
       case 'copy-diag':
         session.copyDiag?.().then((ok) => toast(ok ? 'Diagnose gekopieerd. Plak hem in een bericht.' : 'Kopiëren lukte niet.', { kind: ok ? 'info' : 'warn' }));
         break;

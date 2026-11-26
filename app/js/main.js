@@ -16,6 +16,7 @@ import * as playlistsScreen from './screens/playlists.js';
 import * as playlistScreen from './screens/playlist.js';
 import * as roomHostScreen from './screens/room-host.js';
 import * as roomPlayerScreen from './screens/room-player.js';
+import * as roomScreenScreen from './screens/room-screen.js';
 
 const routes = [
   { re: /^#?\/?$/, screen: startScreen, needsDeck: false },
@@ -32,6 +33,8 @@ const routes = [
   { re: /^#\/pl\/(.+)$/, screen: playlistsScreen, needsDeck: false },
   { re: /^#\/spelleider\/?$/, screen: roomHostScreen, needsDeck: true },
   { re: /^#\/kamer(?:\/([A-Za-z]{4}))?\/?$/, screen: roomPlayerScreen, needsDeck: false },
+  // the big screen (tv / laptop) of a room: display only; #/scherm alone asks for the code
+  { re: /^#\/scherm(?:\/([A-Za-z0-9]{1,8}))?\/?$/, screen: roomScreenScreen, needsDeck: false },
 ];
 
 const root = document.getElementById('app');

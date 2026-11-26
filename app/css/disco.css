@@ -95,19 +95,29 @@
 .dq.is-free { background: radial-gradient(circle at 50% 38%, #fff0b8, var(--mustard) 55%, #e09a1a); }
 .dq.is-free .cat-ico { width: 62%; height: 62%; color: #fff8e6; filter: drop-shadow(0 1px 1px rgba(120, 60, 0, .5)); }
 .dq.is-stamped:not(.is-free) .dq-ico { opacity: .3; }
-/* the stamp: a round ink stamp with a double ring, slightly askew, with the year of the song */
+/* the stamp: a round game chip (no year, no number), dark with a cream edge so it stands out
+   on all four category colours; the striped rim and the inner ring make it read as a chip */
 .dq-stamp {
-  position: absolute; inset: 9%; display: grid; place-items: center; border-radius: 50%;
-  background: rgba(23, 11, 36, .86); color: #fff4e6; transform: rotate(-14deg);
-  border: 2px solid rgba(255, 244, 230, .92);
-  box-shadow: inset 0 0 0 2px rgba(23, 11, 36, .86), inset 0 0 0 3.5px rgba(255, 244, 230, .5), 0 2px 6px rgba(0, 0, 0, .35);
+  position: absolute; inset: 11%; border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, #3a1f5a 0 48%, #241034 49% 100%);
+  box-shadow: 0 0 0 1.5px rgba(23, 11, 36, .9), 0 3px 0 rgba(10, 4, 18, .55), 0 5px 10px rgba(0, 0, 0, .35);
 }
-.dq-stamp-in { display: grid; place-items: center; }
-.dq-stamp-in b { font-family: var(--font-display); font-weight: 900; font-size: clamp(.66rem, 3.4vw, .95rem); letter-spacing: .01em; font-variant-numeric: tabular-nums; line-height: 1; }
-.dq-stamp .ico { width: 1.1rem; height: 1.1rem; }
+.dq-stamp::before {
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background: repeating-conic-gradient(from 11deg, #fff4e6 0 17deg, transparent 17deg 45deg);
+  -webkit-mask: radial-gradient(circle, transparent 0 64%, #000 65%); mask: radial-gradient(circle, transparent 0 64%, #000 65%);
+}
+.dq-stamp::after {
+  content: ""; position: absolute; inset: 27%; border-radius: 50%;
+  background: radial-gradient(circle at 36% 30%, #6c48a0, #2c1546 72%);
+  box-shadow: 0 0 0 2px rgba(255, 244, 230, .9), inset 0 1px 1px rgba(255, 255, 255, .35);
+}
 /* lines that are complete (goalCells): lit up, the stamps turn gold */
 .dq.is-goal { box-shadow: 0 0 0 2px #fff, 0 0 16px 2px rgba(255, 244, 230, .55); z-index: 1; }
-.dq.is-goal .dq-stamp { background: linear-gradient(135deg, #ffe7a0, var(--mustard)); color: var(--cat-ink); border-color: var(--cat-ink); box-shadow: inset 0 0 0 2px #ffe7a0, inset 0 0 0 3.5px rgba(23, 11, 36, .55); }
+/* a chip in a complete line turns gold */
+.dq.is-goal .dq-stamp { background: radial-gradient(circle, #ffe08a 0 48%, #f0a92a 49% 100%); }
+.dq.is-goal .dq-stamp::before { background: repeating-conic-gradient(from 11deg, #fff8e6 0 17deg, transparent 17deg 45deg); }
+.dq.is-goal .dq-stamp::after { background: radial-gradient(circle at 36% 30%, #fff3c4, #ffc649 72%); box-shadow: 0 0 0 2px rgba(23, 11, 36, .75), inset 0 1px 1px rgba(255, 255, 255, .6); }
 .disco-card.is-bingo { border-color: var(--mustard); box-shadow: 0 0 0 2px rgba(255, 198, 73, .4), 0 12px 40px rgba(255, 198, 73, .25); }
 /* while answering: the open squares of the round's category */
 .dq.is-now { box-shadow: inset 0 0 0 3px rgba(255, 255, 255, .9), inset 0 -4px 0 rgba(23, 11, 36, .2); }
@@ -122,8 +132,19 @@ button.dq:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
   50% { box-shadow: 0 0 0 3px #fff, 0 0 22px 5px var(--c), inset 0 -4px 0 rgba(23, 11, 36, .2); filter: brightness(1.12); }
 }
 .dq.is-chosen { box-shadow: 0 0 0 3px #fff, 0 0 18px 3px var(--c); z-index: 2; }
-.dq.is-chosen .dq-stamp { animation: dq-stamp-in .42s cubic-bezier(.2, 1.6, .5, 1); }
-@keyframes dq-stamp-in { from { transform: rotate(-14deg) scale(2.3); opacity: 0; } to { transform: rotate(-14deg) scale(1); opacity: 1; } }
+/* the chip of this round drops in and bounces; a ring ripples out of the square */
+.dq.is-chosen .dq-stamp { animation: dq-chip-drop .46s cubic-bezier(.3, 1.4, .5, 1) both; }
+@keyframes dq-chip-drop {
+  0% { transform: translateY(-70%) scale(1.45); opacity: 0; }
+  55% { transform: translateY(5%) scale(.94); opacity: 1; }
+  78% { transform: translateY(-3%) scale(1.03); }
+  100% { transform: none; opacity: 1; }
+}
+.dq.is-chosen::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  box-shadow: 0 0 0 3px #fff; opacity: 0; animation: dq-ripple .55s ease-out .2s;
+}
+@keyframes dq-ripple { from { transform: scale(.9); opacity: .9; } to { transform: scale(1.45); opacity: 0; } }
 .disco-card-stats { margin: -4px 0 0; text-align: center; }
 
 /* ---------- answer forms ---------- */
@@ -300,7 +321,7 @@ button.dq:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
   .dq.is-choosable:not(.is-chosen), .disco-choose.is-todo, .regie-doubts.is-called { animation: none !important; }
   .dq.is-choosable:not(.is-chosen) { box-shadow: 0 0 0 3px #fff; }
-  .dq.is-chosen .dq-stamp, .just-landed .disco-banner-in, .disco-bingo { animation: none; }
+  .dq.is-chosen .dq-stamp, .dq.is-chosen::after, .just-landed .disco-banner-in, .disco-bingo { animation: none; }
 }
 
 /* rules screen */

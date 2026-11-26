@@ -172,8 +172,9 @@ export function discoCardHtml(mine, { mode = 'show', choosable = [], choice = nu
     // while answering: the open squares the round's category could stamp
     const now = mode === 'show' && cat && key === cat && !stamped;
     const cls = ['dq', `cat-${key}`, stamped ? 'is-stamped' : 'is-open', goal.has(i) ? 'is-goal' : '', can.has(i) ? 'is-choosable' : '', chosen ? 'is-chosen' : '', dim ? 'is-dim' : '', free ? 'is-free' : '', now ? 'is-now' : ''].filter(Boolean).join(' ');
-    const label = free ? 'Vrij vakje (ster)' : `${catName(key)}${stamped ? `, afgestempeld${year ? ` met een nummer uit ${year}` : ''}` : can.has(i) ? ', tik om af te stempelen' : ''}`;
-    const inner = `<span class="dq-ico">${catIcon(key)}</span>${stamped && !free ? `<span class="dq-stamp" aria-hidden="true"><span class="dq-stamp-in">${year ? `<b>${esc(year)}</b>` : icons.check}</span></span>` : ''}`;
+    const label = free ? 'Vrij vakje (ster)' : `${catName(key)}${stamped ? ', afgestempeld' : can.has(i) ? ', tik om af te stempelen' : ''}`;
+    // a stamped square carries a plain round game chip: no year, no number (data-year stays for tests)
+    const inner = `<span class="dq-ico">${catIcon(key)}</span>${stamped && !free ? '<span class="dq-stamp dq-chip" aria-hidden="true"></span>' : ''}`;
     const attrs = `class="${cls}" data-testid="disco-sq-${i}" data-index="${i}" data-cat="${esc(key)}" data-stamped="${stamped}" data-year="${esc(year)}" data-choosable="${can.has(i)}" data-chosen="${chosen}" data-goal="${goal.has(i)}"`;
     return isBtn
       ? `<button type="button" ${attrs} data-action="disco-stamp" aria-pressed="${chosen}" aria-label="${esc(label)}">${inner}</button>`
@@ -202,13 +203,13 @@ export function answerWords(a) {
 /** Typed text the way the server cleans it (game.js cleanText): no control characters, single spaces. */
 const cleanTyped = (v) => String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
 
-function proposedAnswer(cat, value) {
+export function proposedAnswer(cat, value) {
   const v = String(value ?? '');
   if (cat === 'year') { const g = parseYearGuess(v); return g == null ? null : { guess: g }; }
   if (cat === 'artist' || cat === 'title') { const t = cleanTyped(v); return t ? { text: t } : null; }
   return null;
 }
-const sameAnswer = (a, b) => !!a && !!b && !a.pass && !b.pass && (a.guess != null ? Number(a.guess) === Number(b.guess) : a.text != null && cleanTyped(b.text) === cleanTyped(a.text));
+export const sameAnswer = (a, b) => !!a && !!b && !a.pass && !b.pass && (a.guess != null ? Number(a.guess) === Number(b.guess) : a.text != null && cleanTyped(b.text) === cleanTyped(a.text));
 
 /**
  * The answer form of the round's category. `local` = { value } (what is typed, null = take
@@ -343,7 +344,7 @@ export function resultWords(r) {
   if (r.text != null) return `“${r.text}”`;
   return r.label || '';
 }
-const verdictOf = (r) => (r.none ? 'none' : r.pass ? 'pass' : r.verdict || (r.correct ? 'right' : 'wrong'));
+export const verdictOf = (r) => (r.none ? 'none' : r.pass ? 'pass' : r.verdict || (r.correct ? 'right' : 'wrong'));
 
 /** Own outcome on a phone: the verdict, then what to do with the card. */
 export function discoMyResultHtml(view) {
