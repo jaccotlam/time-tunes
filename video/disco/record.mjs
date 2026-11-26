@@ -17,7 +17,7 @@ import { decadeOf } from '../../app/js/multi/disco.js';
 const USER_AGENT_PHONE = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36';
 const USER_AGENT_TV = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 const TITLE_SECONDS = 3.6;
-const END_SECONDS = 8;
+const END_SECONDS = 7;
 
 async function recordOnce() {
   const phoneDir = join(TMP, 'phone');
@@ -193,10 +193,10 @@ async function recordOnce() {
 
     // --- 1. kamer maken (tab 1) ---
     seg('room', { layout: 'tabs' });
-    await hold(0.8);
+    await hold(0.6);
     await tap(host, 'start-host', { lead: 0.5 });
     await host.page.getByTestId('host-setup-form').waitFor();
-    await hold(1.0);
+    await hold(0.7);
     await tap(host, 'host-create', { lead: 0.5 });
     await host.page.locator('[data-testid="screen-room-host"][data-view="lobby"]').waitFor();
     await host.page.locator('[data-testid="conn-status"][data-state="online"]').waitFor({ timeout: 20000 });
@@ -204,14 +204,14 @@ async function recordOnce() {
     ev.code = code;
     console.log('kamercode:', code);
     if ((await host.page.getByTestId('room-link').textContent()).trim() !== `${PUBLIC_URL}#/kamer/${code}`) problems.push('de link in de lobby is niet het publieke adres');
-    await hold(1.6);
+    await hold(1.2);
 
     // --- 2. het grote scherm in een tweede tab ---
     seg('tabs', { layout: 'tabs' });
     const openBtn = host.page.getByTestId('host-open-screen');
     await reach(host, openBtn);
-    await highlight(host, openBtn, 0.1, 3.4, 8);
-    await hold(2.2);
+    await highlight(host, openBtn, 0.1, 2.6, 8);
+    await hold(1.6);
     const href = await openBtn.getAttribute('href');
     if (!href.endsWith(`#/scherm/${code}`)) problems.push(`"Open het grote scherm" wijst naar ${href}`);
     const opened = host.context.waitForEvent('page');
@@ -229,7 +229,7 @@ async function recordOnce() {
     await hold(0.5);
     await host.page.locator('[data-testid="host-screen-connected"]').waitFor({ timeout: 10000 });
     if (!(await tvPage.getByTestId('screen-code').getAttribute('aria-label')).replace(/\s/g, '').endsWith(code) || !(await tvPage.getByTestId('screen-qr').isVisible())) problems.push('de tv toont de code of de QR-code niet');
-    await hold(4.2);
+    await hold(3.0);
 
     // --- 3. meedoen: code en QR op de tv, de nieuwe meedoen-pagina op de telefoon ---
     seg('join', { layout: 'play' });
@@ -237,30 +237,28 @@ async function recordOnce() {
     const joiner = async (p, i) => {
       await tap(p, 'start-join', { lead: 0.45 });
       await p.page.getByTestId('join-form').waitFor();
-      await hold(0.5);
+      await hold(0.35);
       await tap(p, 'join-code', { lead: 0.35 });
-      await p.page.keyboard.type(code, { delay: 150 });
-      await hold(0.5);
+      await p.page.keyboard.type(code, { delay: 120 });
+      await hold(0.35);
       await tap(p, 'join-name', { lead: 0.35 });
-      await p.page.keyboard.type(PLAYERS[i], { delay: 90 });
-      await hold(0.4);
+      await p.page.keyboard.type(PLAYERS[i], { delay: 75 });
+      await hold(0.3);
       await tap(p, 'join-submit', { lead: 0.45 });
       await p.page.locator('[data-testid="screen-room-player"][data-view="lobby"]').waitFor({ timeout: 20000 });
     };
-    await joiner(pa, 0);
-    await hold(1.6);
-    await joiner(pb, 1);
+    await Promise.all([joiner(pa, 0), (async () => { await hold(2.6); await joiner(pb, 1); })()]);
     await waitForPlayers(host.page, 2);
     await tv.page.waitForFunction(() => document.querySelector('[data-testid="screen-count"]')?.dataset.count === '2', null, { timeout: 10000 });
-    await hold(2.4);
+    await hold(1.8);
 
     // --- 4. de discobal ---
     seg('spin', { layout: 'play' });
     mark('start');
     const startBtn = host.page.getByTestId('room-start');
     await reach(host, startBtn);
-    await highlight(host, startBtn, 0.1, 1.2, 8);
-    await hold(0.6);
+    await highlight(host, startBtn, 0.1, 1.0, 8);
+    await hold(0.5);
     await smooth('cast');
     await tap(host, 'room-start', { lead: 0.6 });
     await tv.page.locator('[data-testid="screen-display"][data-phase="answering"]').waitFor({ timeout: 15000 });
@@ -270,7 +268,7 @@ async function recordOnce() {
     await assertHidden(song, 'bal draait');
     await landedAll();
     mark('landed');
-    await hold(2.4);
+    await hold(1.8);
     await smooth('shot');
     await playing();
     await assertHidden(song, 'bal staat stil');
@@ -282,33 +280,33 @@ async function recordOnce() {
     await type(pa, 'disco-text-input', SCRIPT.r1.anouk);
     await tap(pa, 'disco-lock', { lead: 0.4 });
     await locked(pa);
-    await hold(1.3);
+    await hold(0.8);
     await moment(pb, 'question');
     await type(pb, 'disco-text-input', SCRIPT.r1.bram);
     await tap(pb, 'disco-lock', { lead: 0.4 });
     await locked(pb);
     await tv.page.waitForFunction(() => document.querySelector('[data-testid="screen-count"]')?.dataset.done === '2', null, { timeout: 8000 }).catch(() => problems.push('de tv toont niet dat iedereen heeft geantwoord'));
     await assertHidden(song, 'antwoorden');
-    await hold(1.6);
+    await hold(1.2);
 
     // --- 6. onthullen, het oordeel, een vakje kiezen ---
     seg('reveal', { layout: 'play' });
     await hold(0.2);
     await reveal();
     mark('revealed');
-    await hold(1.8);
+    await hold(1.4);
     const verdictA = await pa.page.getByTestId('disco-verdict').getAttribute('data-verdict');
     if (verdictA !== 'right') problems.push(`Anouks typfout is ${verdictA} in plaats van goed`);
     if (!(await tv.page.getByTestId('screen-song').isVisible())) problems.push('de tv toont het nummer niet na de onthulling');
-    await hold(2.2);
+    await hold(1.8);
     seg('chip', { layout: 'play' });
     await moment(pa, 'choose');
     await hold(0.8);
     const first = (await choosable(pa)).find((i) => i !== line.artist);
     await stamp(pa, first);
-    await hold(1.6);
+    await hold(1.4);
     await stamp(pa, line.artist);
-    await hold(2.0);
+    await hold(1.6);
 
     // --- 7. twijfel: de spelleider beslist (tab 1 groot) ---
     seg('doubt', { layout: 'host' });
@@ -317,13 +315,13 @@ async function recordOnce() {
     const doubts = host.page.getByTestId('disco-doubts');
     await reach(host, doubts);
     await hold(0.5);
-    await highlight(host, doubts, 0.2, 4.2, 6);
-    await hold(4.0);
+    await highlight(host, doubts, 0.2, 3.4, 6);
+    await hold(3.2);
     const row = await host.page.locator('[data-testid="disco-doubts"] [data-testid="disco-regie-row"]').first().getAttribute('data-row');
     await tap(host, `disco-judge-good-${row}`, { lead: 0.7 });
     await pb.page.locator('[data-testid="disco-verdict"][data-verdict="right"]').waitFor({ timeout: 8000 });
     await tv.page.waitForFunction(() => document.querySelector('[data-testid="screen-results"]')?.dataset.doubts === '0', null, { timeout: 8000 }).catch(() => {});
-    await hold(2.6);
+    await hold(1.8);
     await moment(pb, 'choose');
     await stamp(pb, (await choosable(pb))[0]);
     await hold(1.2);
@@ -338,7 +336,7 @@ async function recordOnce() {
     await hold(0.4);
     await smooth('shot');
     mark('landed2');
-    seg('year', { layout: 'play' });
+    seg('year', { layout: 'play', speed: 1.5 });
     await playing();
     await assertHidden(song, 'ronde 2');
     await moment(pa, 'question');
@@ -368,7 +366,7 @@ async function recordOnce() {
     await landedAll();
     await hold(0.3);
     await smooth('shot');
-    seg('leave', { layout: 'leave' });
+    seg('leave', { layout: 'leave', speed: 1.3 });
     await playing();
     await assertHidden(song, 'ronde 3');
     await moment(pb, 'question');
@@ -381,9 +379,9 @@ async function recordOnce() {
     pb.away = true;
     await tv.page.locator('[data-testid="screen-player"][data-name="Bram"][data-online="false"]').waitFor({ timeout: 10000 }).catch(() => problems.push('de tv toont Bram niet als weg'));
     await pb.page.getByTestId('room-back-to-seat').waitFor({ timeout: 10000 });
-    await hold(2.4);
+    await hold(2.2);
     // het spel wacht niet: Anouk antwoordt alleen, de spelleider onthult
-    seg('leave', { layout: 'play' });
+    seg('leave', { layout: 'play', speed: 1.3 });
     await moment(pa, 'question');
     await type(pa, 'disco-text-input', SCRIPT.r3.anouk);
     await tap(pa, 'disco-lock', { lead: 0.4 });
@@ -396,25 +394,25 @@ async function recordOnce() {
     // --- 10. Bram komt terug ---
     seg('back', { layout: 'leave' });
     await hold(0.8);
-    await tap(pb, 'room-back-to-seat', { lead: 0.6 });
+    await tap(pb, 'room-back-to-seat', { lead: 0.5 });
     await pb.page.waitForFunction(() => !!window.__ttRoom?.session?.view?.game?.mine, null, { timeout: 15000 });
     pb.away = false;
-    await tv.page.locator('[data-testid="screen-player"][data-name="Bram"][data-online="true"]').waitFor({ timeout: 10000 }).catch(() => problems.push('Bram is op de tv niet terug'));
-    await hold(3.2);
+    await tv.page.waitForFunction(() => window.__ttScreen.session.view.players.some((p) => p.name === 'Bram' && p.online), null, { timeout: 10000 }).catch(() => problems.push('Bram is op de tv niet terug'));
+    await hold(2.4);
     const cardB = await pb.page.evaluate(() => JSON.stringify(window.__ttRoom.session.view.game.mine.card));
     void cardB;
 
     // --- 11. spannend: de stand op de tv ---
     seg('close', { layout: 'play' });
     await moment(pa, 'choose').catch(() => {});
-    await hold(0.8);
+    await hold(0.5);
     await stamp(pa, line.title);
-    await hold(1.4);
+    await hold(1.0);
     await tv.page.locator('[data-testid="screen-display"][data-moment="ranking"]').waitFor({ timeout: 20000 });
     mark('ranking');
     const reason = await tv.page.getByTestId('screen-ranking').getAttribute('data-reason');
     if (reason !== 'close') problems.push(`de stand op de tv komt door "${reason}" in plaats van "close"`);
-    await hold(4.6);
+    await hold(3.8);
     await nextRound(3);
 
     // --- 12. de laatste ronde: bingo ---
@@ -425,7 +423,7 @@ async function recordOnce() {
     await landedAll();
     await hold(0.4);
     await smooth('shot');
-    seg('bingo', { layout: 'play' });
+    seg('bingo', { layout: 'play', speed: 1.3 });
     await playing();
     await assertHidden(song, 'ronde 4');
     await moment(pa, 'question');
@@ -445,7 +443,7 @@ async function recordOnce() {
     await stamp(pa, line.decade);
     await pa.page.getByTestId('disco-bingo').first().waitFor({ timeout: 8000 });
     mark('bingo');
-    await hold(4.2);
+    await hold(3.6);
     await reach(host, host.page.getByTestId('room-next'));
     console.log('knop van de spelleider:', (await host.page.getByTestId('room-next').textContent()).trim());
     await tap(host, 'room-next', { lead: 0.6 });
@@ -455,7 +453,7 @@ async function recordOnce() {
     // --- 13. de winnaar ---
     seg('win', { layout: 'play' });
     await smooth('cast');
-    await hold(6.0);
+    await hold(5.0);
     ev.duration = rel();
     for (const c of captures) await c.stop();
     ev.edit.push({ id: 'end', dur: END_SECONDS, layout });
