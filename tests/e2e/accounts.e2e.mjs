@@ -61,11 +61,13 @@ const go = (page, hash = '') => page.goto(`${appUrl}${hash}`);
 const sessionOf = (page) => page.evaluate((k) => JSON.parse(localStorage.getItem(k) || 'null'), ACCOUNT_KEY);
 async function token(page) { const s = await sessionOf(page); if (s?.token) secret(s.token); return s?.token || null; }
 /** The account has nothing left to save (and no error). */
-const saved = (page) => page.waitForFunction(async () => {
-  const a = await import('/js/account.js');
-  const s = a.status();
-  return !!a.current() && !s.pending && !s.saving && !s.error;
-}, null, { timeout: 20000 });
+async function saved(page) {
+  await page.evaluate(async () => { window.__acct ||= await import('/js/account.js'); });
+  await page.waitForFunction(() => {
+    const a = window.__acct; const s = a.status();
+    return !!a.current() && !s.pending && !s.saving && !s.error;
+  }, null, { timeout: 20000 });
+}
 const playlistsOf = (page) => page.evaluate(() => JSON.parse(localStorage.getItem('timetunesr.playlists.v1') || '{"lists":[]}').lists.map((p) => ({ id: p.id, name: p.name, n: p.tracks.length })));
 const onDevice = (page, fn, arg) => page.evaluate(async ([src, a]) => { const f = (0, eval)(`(${src})`); return f(a); }, [fn.toString(), arg]);
 
@@ -232,11 +234,11 @@ async function sync(rooms, S) {
   );
 
   // B changes the playlist; A sees it after reopening the account screen
-  await onDevice(pb, async (id) => { const pl = await import('/js/playlists.js'); const r = pl.rename(id, 'Feestje van B'); const a = await import('/js/account.js'); return [r, a.status()]; }, S.plId).then((x) => console.log('DBG2', JSON.stringify(x)));
-  await saved(pb); console.log('DBG3', Date.now());
+  await onDevice(pb, async (id) => { const pl = await import('/js/playlists.js'); pl.rename(id, 'Feestje van B'); }, S.plId);
+  await saved(pb);
   await go(pa, '#/');
   await go(pa, '#/account');
-  await pa.waitForFunction((id) => JSON.parse(localStorage.getItem('timetunesr.playlists.v1')).lists.find((p) => p.id === id)?.name === 'Feestje van B', S.plId, { timeout: 12000 }).catch(async (e) => { console.log('DBG A', JSON.stringify(await playlistsOf(pa)), 'B', JSON.stringify(await playlistsOf(pb)), JSON.stringify(await pa.evaluate(async () => { const a = await import('/js/account.js'); return [a.status(), location.hash]; })), JSON.stringify(await pb.evaluate(async () => { const a = await import('/js/account.js'); return [a.status(), (await a.fetchAccount())?.account?.data?.playlists?.map((p) => [p.name, p.updated])]; }))); throw e; });
+  await pa.waitForFunction((id) => JSON.parse(localStorage.getItem('timetunesr.playlists.v1')).lists.find((p) => p.id === id)?.name === 'Feestje van B', S.plId, { timeout: 12000 });
   assert(true, 'a rename on B reaches A after A reopens the account screen');
   await onDevice(pb, async (id) => { const pl = await import('/js/playlists.js'); pl.rename(id, 'Feestje'); }, S.plId);
   await saved(pb);
@@ -358,15 +360,14 @@ async function openAndPlay(rooms, S) {
   await cardA.getByTestId('myroom-open').click();
   await tid(pa, 'myrooms-confirm-yes').click(); // "open on another device: take over?"
   await pa.locator('[data-testid="screen-room-host"]').waitFor({ timeout: 20000 });
-  await tid(pa, 'host-room-name').waitFor();
-  await pa.waitForFunction(() => window.__ttHost?.session?.status === 'online' || window.__ttHost?.session?.meta?.leaderOnline, null, { timeout: 20000 });
+  await pa.waitForFunction(() => window.__ttHost?.session?.status === 'online', null, { timeout: 20000 });
   await pb.locator('[data-testid="host-error"][data-code="replaced"]').waitFor({ timeout: 20000 }).then(
     () => assert(true, 'device B gets the "replaced" treatment'),
     async () => soft(false, 'device B is told it was replaced when A opens the room', `host-error code: ${await pb.evaluate(() => window.__ttHost?.session?.error?.code || document.querySelector('[data-testid="screen-room-host"]')?.dataset.view)}`),
   );
   assert(await pa.evaluate(() => window.__ttHost.session.code) === S.code, 'device A leads the same room (same code)');
   await G.page.waitForFunction(() => window.__ttRoom.session.meta?.leaderOnline === true, null, { timeout: 15000 });
-  assert(await G.page.evaluate(() => window.__ttRoom.session.view.phase) !== undefined, 'the guest stays in the room through the hand-over');
+  assert(await G.page.locator('[data-testid="screen-room-player"][data-view="error"]').count() === 0, 'the guest stays in the room through the hand-over (no error screen)');
 }
 
 // ======================================================================================
@@ -382,7 +383,8 @@ async function resetDelete(rooms, S) {
   await tid(pa, 'myrooms-confirm-yes').click();
   await G.page.locator('[data-testid="screen-room-player"][data-view="error"]').waitFor({ timeout: 15000 });
   assert(/gesloten/i.test(await G.page.locator('[data-testid="screen-room-player"]').innerText()), 'Opnieuw gebruiken: the guest is out with the closed message');
-  await pa.locator(`[data-testid="myroom"][data-code="${S.code}"][data-phase="lobby"] [data-testid="myroom-waiting"][data-count="0"]`).waitFor({ timeout: 15000 });
+  await pa.locator(`[data-testid="myroom"][data-code="${S.code}"][data-phase="lobby"]`).waitFor({ timeout: 15000 });
+  assert(await pa.locator(`[data-testid="myroom"][data-code="${S.code}"] [data-testid="myroom-waiting"]`).count() === 0, 'nobody is waiting in it any more');
   assert(true, 'the room is still listed, same code, empty, back in the lobby');
   const info = await (await fetch(`${rooms.url}/rooms/${S.code}`)).json();
   assert(info.name === 'Feest zaterdag', 'the public room info still has the name after the reset');
@@ -397,12 +399,12 @@ async function resetDelete(rooms, S) {
     await go(J.page, '#/'); await go(J.page, `#/kamer/${c}`);
     await tid(J.page, 'join-name').fill('Laat');
     await tid(J.page, 'join-submit').click();
-    await J.page.locator('[data-testid="screen-room-player"][data-view="error"]').waitFor({ timeout: 15000 });
-    return J.page.locator('[data-testid="screen-room-player"]').innerText();
+    await J.page.locator('[data-testid="room-connecting"] h2', { hasText: 'niet gevonden' }).waitFor({ timeout: 15000 });
+    return (await J.page.locator('[data-testid="room-connecting"]').innerText()).replace(new RegExp(c, 'g'), 'CODE').replace(/\s+/g, ' ');
   };
   const gone = await msgOf(S.code);
   const never = await msgOf('QQQQ');
-  assert(gone === never && /bestaat niet/i.test(gone), 'a join attempt on the deleted code gets the normal not-found');
+  assert(gone === never && /niet gevonden/i.test(gone), 'a join attempt on the deleted code gets the normal "kamer niet gevonden"');
 
   // the 5-rooms limit: a stale form on A, the 5th room made meanwhile elsewhere
   const mk = (n) => ({ name: `Kamer ${n}`, settings: { game: 'disco' }, music: 'deck', play: 'preview', hostPlays: false, hostName: '' });
@@ -412,7 +414,7 @@ async function resetDelete(rooms, S) {
     if (!r.ok) throw new Error(`could not prepare room ${i}: ${JSON.stringify(r)}`);
     S.codes.push(r.room.code);
   }
-  await go(pa, '#/account/kamers');
+  await go(pa, '#/'); await go(pa, '#/account/kamers');
   await pa.locator('[data-testid="myroom"]').nth(MAX_PREPARED_ROOMS - 2).waitFor();
   await tid(pa, 'myrooms-new').click();
   await tid(pa, 'prep-form').waitFor();
@@ -424,7 +426,7 @@ async function resetDelete(rooms, S) {
   await tid(pa, 'prep-save').click();
   await tid(pa, 'prep-error').waitFor({ timeout: 15000 });
   assert(await tid(pa, 'prep-error').getAttribute('data-code') === 'limit' && new RegExp(`hoogstens ${MAX_PREPARED_ROOMS}`).test(await text(pa, 'prep-error')), `the 6th room shows the server's message: "${await text(pa, 'prep-error')}"`);
-  await go(pa, '#/account/kamers');
+  await go(pa, '#/'); await go(pa, '#/account/kamers');
   await pa.locator('[data-testid="myroom"]').nth(MAX_PREPARED_ROOMS - 1).waitFor();
   await tid(pa, 'myrooms-full').waitFor();
   assert(await pa.locator('[data-testid="myroom"]').count() === MAX_PREPARED_ROOMS, 'the list holds exactly the maximum');
@@ -624,7 +626,7 @@ async function robustness(rooms3, accFile) {
   await po.locator('[data-testid="deck-option"]').filter({ hasText: 'Onderweg' }).waitFor({ timeout: 5000 });
   assert(true, 'server away: the playlists are visible');
   await onDevice(po, async () => { const pl = await import('/js/playlists.js'); const p = pl.all().find((x) => x.name === 'Onderweg'); pl.rename(p.id, 'Onderweg (offline)'); });
-  await po.waitForFunction(async () => { const a = await import('/js/account.js'); const s = a.status(); return s.pending || !!s.error; }, null, { timeout: 5000 });
+  await po.waitForFunction(() => { const s = window.__acct.status(); return s.pending || !!s.error; }, null, { timeout: 5000 });
   assert(true, 'server away: a change is kept as "pending" and the app keeps working');
   await go(po, '#/spelleider');
   await tid(po, 'host-setup-form').waitFor({ timeout: 5000 });
