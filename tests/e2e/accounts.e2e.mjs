@@ -232,8 +232,8 @@ async function sync(rooms, S) {
   );
 
   // B changes the playlist; A sees it after reopening the account screen
-  await onDevice(pb, async (id) => { const pl = await import('/js/playlists.js'); pl.rename(id, 'Feestje van B'); }, S.plId);
-  await saved(pb);
+  await onDevice(pb, async (id) => { const pl = await import('/js/playlists.js'); const r = pl.rename(id, 'Feestje van B'); const a = await import('/js/account.js'); console.log('DBG2', r, JSON.stringify(a.status()), Date.now()); }, S.plId);
+  await saved(pb); console.log('DBG3', Date.now());
   await go(pa, '#/');
   await go(pa, '#/account');
   await pa.waitForFunction((id) => JSON.parse(localStorage.getItem('timetunesr.playlists.v1')).lists.find((p) => p.id === id)?.name === 'Feestje van B', S.plId, { timeout: 12000 }).catch(async (e) => { console.log('DBG A', JSON.stringify(await playlistsOf(pa)), 'B', JSON.stringify(await playlistsOf(pb)), JSON.stringify(await pa.evaluate(async () => { const a = await import('/js/account.js'); return [a.status(), location.hash]; })), JSON.stringify(await pb.evaluate(async () => { const a = await import('/js/account.js'); return [a.status(), (await a.fetchAccount())?.account?.data?.playlists?.map((p) => [p.name, p.updated])]; }))); throw e; });
