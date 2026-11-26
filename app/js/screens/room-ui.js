@@ -378,7 +378,7 @@ export function winnerHtml(view) {
   const why = g.endedBy === 'pile'
     ? 'De nummers zijn op: de hoogste score wint.'
     : g.kind === 'bingo' ? 'Als eerste een volle rij, kolom of diagonaal.'
-      : g.kind === 'disco' ? `Als eerste ${g.disco?.win === 'full' ? 'een volle kaart' : g.disco?.win === 'line2' ? '2 lijnen' : '1 lijn'} vol.`
+      : g.kind === 'disco' ? (g.disco?.win === 'full' ? 'Als eerste de hele kaart vol.' : `Als eerste ${g.disco?.win === 'line2' ? '2 lijnen' : '1 lijn'} vol.`)
         : `Als eerste ${g.goal} kaarten op de juiste plek.`;
   return `<div class="winner" data-testid="room-winner">
     <span class="winner-trophy">${icons.trophy}</span>

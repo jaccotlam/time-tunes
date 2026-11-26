@@ -29,6 +29,8 @@ import {
 export const name = 'room-host';
 const HOST_NAME_KEY = 'timetunesr.multiName.v1';
 const SETTINGS_KEY = 'timetunesr.multiSettings.v1';
+/** Set once the lobby has switched to Discobingo for this phone (version 2 default, one time). */
+const DISCO_DEFAULT_KEY = 'timetunesr.multiDiscoDefault.v1';
 /** A laptop or tv: the big ball keeps turning while the song plays. */
 const wide = () => typeof matchMedia === 'function' && matchMedia('(min-width: 900px)').matches;
 
@@ -198,6 +200,8 @@ export function render(root, { deck, navigate }) {
     const k = `${g.round}:${song.id}`;
     if (k === loadedFor) {
       // Discobingo: the music starts when the ball has landed (the round was started by a tap here)
+      // (only while answering: after an early Onthul the music is not started any more)
+      if (discoPlayFor === k && r.phase !== 'answering') discoPlayFor = null;
       if (discoPlayFor === k && discoLanded()) { discoPlayFor = null; player.play(); }
       return;
     }
@@ -534,7 +538,7 @@ export function render(root, { deck, navigate }) {
     }
     const win = g.roundWinners.length > 0;
     return `<div class="sticky-cta">
-      <button class="btn btn-primary btn-xl" type="button" data-action="next" data-testid="room-next">${win ? `${icons.trophy}<span>Naar de uitslag</span>` : left(g) ? `${icons.music}<span>Volgend nummer</span>` : `${icons.trophy}<span>Nummers op: uitslag</span>`}</button>
+      <button class="btn btn-primary btn-xl" type="button" data-action="next" data-testid="room-next">${win ? `${icons.trophy}<span>Naar de uitslag</span>` : left(g) ? `${icons.music}<span>Volgend nummer</span>` : `${icons.trophy}<span>Nummers op: naar de uitslag</span>`}</button>
     </div>`;
   }
 
@@ -597,6 +601,7 @@ export function render(root, { deck, navigate }) {
         window.scrollTo(0, 0);
         break;
       case 'reveal':
+        discoPlayFor = null; // revealed before the ball landed: the delayed start is off
         guard(() => session.reveal());
         vibrate(30);
         window.scrollTo(0, 0);
@@ -651,10 +656,12 @@ export function render(root, { deck, navigate }) {
     const nm = f.name.value.trim();
     if (plays && !nm) { toast('Vul je naam in, of speel niet mee.', { kind: 'warn' }); f.name.focus(); return; }
     if (nm) store.set(HOST_NAME_KEY, nm);
-    // via the server a new room starts with Discobingo unless a game was chosen before
-    if (viaServer) {
+    // via the server: the first room with this version starts on Discobingo, once (also for
+    // somebody who hosted Bingo before); after that the stored choice wins as usual
+    if (viaServer && !store.get(DISCO_DEFAULT_KEY, false)) {
       const st = store.get(SETTINGS_KEY, {}) || {};
-      if (!st.game) store.set(SETTINGS_KEY, { ...st, game: PREFERRED_GAME });
+      store.set(SETTINGS_KEY, { ...st, game: PREFERRED_GAME });
+      store.set(DISCO_DEFAULT_KEY, true);
     }
     player.unlock();
     session.create({ hostPlays: plays, hostName: nm });

@@ -68,16 +68,16 @@ export function render(root) {
 
       <section class="rule rule-multi rule-disco" data-testid="rules-disco">
         <h2><span class="rule-num">4</span>Discobingo</h2>
-        <p>Bingo met een discobal, met ieder een eigen telefoon. Iedereen heeft een eigen 5×5-kaart met vier soorten vakjes en een ster in het midden.</p>
+        <p>Bingo met een discobal. Ieder speelt op een eigen telefoon. Iedereen heeft een eigen 5×5-kaart met vier soorten vakjes en een ster in het midden.</p>
         ${legendHtml('rules-disco-legend')}
         <ol>
           <li>Per nummer draait de discobal en kiest de vraag: <em>decennium</em>, <em>artiest of band</em>, <em>jaartal</em> (2 jaar ernaast mag) of <em>titel</em>. Alle vier komen even vaak aan de beurt.</li>
           <li>Pas als de bal stilstaat, begint de muziek. Iedereen antwoordt op zijn eigen telefoon; wijzigen mag tot de onthulling. Weet je het niet? Tik op <em>Weet ik niet</em>.</li>
-          <li>Een getypte artiest of titel met een kleine typefout is gewoon goed. Twijfelgeval? Dan beslist de spelleider met <em>Goed</em> of <em>Fout</em>, en hij kan elk oordeel met één tik omdraaien.</li>
+          <li>Een kleine typefout is gewoon goed. Twijfelgeval? Dan beslist de spelleider met <em>Goed</em> of <em>Fout</em>. Elk oordeel draait hij met één tik om.</li>
           <li>Goed? Dan kies je zelf een open vakje van die kleur en stempel je het af. Verplaatsen mag tot de bal weer draait; wie niets kiest, krijgt het beste vakje.</li>
-          <li>Je wint met 1 lijn, 2 lijnen of een volle kaart (dat kiest de spelleider). Een lijn is een rij, kolom of diagonaal; de ster telt mee. Halen meerdere spelers het tegelijk, dan delen ze de winst.</li>
+          <li>Je wint met 1 lijn, 2 lijnen of een volle kaart; de spelleider kiest dat. Een lijn is een rij, kolom of diagonaal; de ster telt mee. Halen meerdere spelers het tegelijk, dan delen ze de winst.</li>
         </ol>
-        <p>Discobingo werkt alleen met de kamerserver en heeft minstens 25 nummers nodig. Wie later instapt, krijgt een kaart met evenveel vakjes als wie het verst achter ligt.</p>
+        <p>Discobingo werkt alleen met de kamerserver en heeft minstens 25 nummers nodig. Wie later instapt, krijgt een nieuwe kaart met evenveel gratis vakjes als de speler die er het minst heeft.</p>
       </section>
 
       <section class="rule rule-multi" data-testid="rules-quiz">
