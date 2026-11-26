@@ -67,6 +67,7 @@ export default async function run() {
     const P = (await phone(browser, local)).page;
     await joinRoom(P, `${URL_}/`, code, 'Sam');
     await waitForPlayers(H, 1);
+    await H.getByTestId('room-game-bingo').check(); // the lobby now starts on Discobingo
     await H.getByTestId('room-size-3').check();
     await H.getByTestId('room-start').click();
     await P.locator('[data-testid="play-panel"]').waitFor({ timeout: 20000 });
@@ -164,6 +165,7 @@ export default async function run() {
     await MH.locator('[data-testid="screen-room-host"][data-view="lobby"] [data-testid="conn-status"][data-state="online"]').waitFor({ timeout: 40000 });
     await MH.waitForFunction((n) => Number(document.querySelector('[data-testid="mix-counts"]')?.dataset.total) === n, total, { timeout: 20000 });
     assert(true, `after the restart the room still has the ${total} contributed songs`);
+    await MH.getByTestId('room-game-bingo').check();
     await MH.getByTestId('room-music-mix').check();
     await MP.getByTestId('room-music-is-mix').waitFor({ timeout: 20000 });
     await MH.getByTestId('room-start').click();

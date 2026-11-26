@@ -3,8 +3,8 @@
 // setting of their own can still log in for "Doe mijn favorieten erbij". A player with an own
 // Client ID uses his own. A room whose spelleider has none explains it (and points the
 // spelleider to the setup help); once the spelleider sets it up, the players can go on.
-// And an OLD app (the version before this change, from git) against the new server: it joins,
-// plays and shares as before. Node room server, phones of 390 px, fake Spotify + iTunes.
+// And an OLD app (the version before Discobingo, from git, protocol 3) against the new server
+// (protocol 4): it is told to refresh the page, as player and as spelleider. Node room server, phones of 390 px, fake Spotify + iTunes.
 import { spawn, execSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -126,40 +126,34 @@ export default async function run() {
     await D.getByTestId('mix-share').waitFor({ timeout: 20000 });
     assert(await D.getByTestId('mix-login-note').getAttribute('data-client') === 'room', 'once the spelleider has a Client ID, the waiting player can share right away');
 
-    // ---------- an old app (before this change) against the new server ----------
+    // ---------- an old app (before Discobingo, protocol 3) against the new server (protocol 4) ----------
+    // It can not join any more, but it must not break: it gets the neat "ververs de pagina" message
+    // (as player and as spelleider) instead of a half-working room.
     old = await startOldApp();
     if (!old) assert(true, `old app (${OLD_REF}) not in this git checkout: check skipped`);
     else {
       const ev = await mixPhone(browser, rooms, old.url, { top: ACCOUNTS.anouk.top.slice(0, 6) }, { clientId: OWN_CID });
       const E = ev.page;
       all.push(E);
-      await joinRoom(E, old.url, code, 'Eva', { via: 'link' });
-      await waitForPlayers(H, 4);
-      assert(true, 'old app joins a room of the new server (same protocol version, no message about versions)');
-      await E.getByTestId('mix-share').waitFor();
-      await shareFavourites(E);
-      await E.waitForURL(`${old.url}#/kamer/${code}`, { timeout: 20000 });
-      await waitShared(E, 6);
-      await H.waitForFunction(() => document.querySelector('[data-testid="mix-counts"]')?.dataset.contributors === '4', null, { timeout: 20000 });
-      assert(authorizes(ev).at(-1).clientId === OWN_CID, 'old app shares its favourites as before (own Client ID)');
-      // the old app as spelleider: its hello has no cid; new players get the clear explanation
+      await E.goto(`${old.url}#/kamer/${code}`);
+      await E.getByTestId('join-name').fill('Eva');
+      await E.getByTestId('join-submit').click();
+      await E.waitForFunction(() => /Ververs de pagina/.test(document.body.innerText), null, { timeout: 20000 });
+      assert(await E.locator('[data-testid="screen-room-player"][data-view="lobby"]').count() === 0, 'old app as player: no room, it is told to refresh the page');
+      assert(/Ververs de pagina/.test(await E.evaluate(() => document.body.innerText)), 'old app as player: the neat "ververs de pagina" message');
+      await shot(E, 'leader-05-old-app-player');
+      // the old app as spelleider: creating a room says the same
       const oldHost = await mixPhone(browser, rooms, old.url, ACCOUNTS.ilse, { clientId: OWN_CID });
       all.push(oldHost.page);
       await oldHost.page.goto(`${old.url}#/spelleider`);
-      const code3 = await createRoom(oldHost.page);
-      const fien = await mixPhone(browser, rooms, base, ACCOUNTS.bram, { clientId: false });
-      all.push(fien.page);
-      await joinRoom(fien.page, base, code3, 'Fien', { via: 'link' });
-      await fien.page.getByTestId('mix-no-client').waitFor();
-      await waitForPlayers(oldHost.page, 1);
-      assert(true, 'old app as spelleider on the new server: room works, a new player without Client ID gets the explanation');
-      // a short game in the old leader's room: nothing broke
-      await oldHost.page.getByTestId('room-size-3').check();
-      await oldHost.page.getByTestId('room-start').click();
-      await fien.page.locator('[data-testid="play-panel"]').waitFor({ timeout: 20000 });
-      assert(true, 'and a game starts in it');
+      await oldHost.page.getByTestId('host-setup-form').waitFor();
+      await oldHost.page.getByTestId('host-create').click();
+      await oldHost.page.waitForFunction(() => /Ververs de pagina/.test(document.body.innerText), null, { timeout: 20000 });
+      assert(await oldHost.page.locator('[data-testid="screen-room-host"][data-view="lobby"]').count() === 0, 'old app as spelleider: no room, it is told to refresh the page');
+      await shot(oldHost.page, 'leader-06-old-app-host');
+      assert(await contributors(H) === 3, 'the old app did not disturb the room: still 3 contributors');
     }
-    assert(await contributors(H) === (old ? 4 : 3), 'room counts are right');
+    assert(await contributors(H) === 3, 'room counts are right');
     assert(all.every((p) => !p.errors.length), `no page errors (${all.flatMap((p) => p.errors).join('; ')})`);
   } finally {
     await browser.close();

@@ -266,6 +266,7 @@ export default async function run() {
     assert(true, `after a server restart (room put back by the spelleider's phone) all ${ch.total} songs of the 3 phones are back: sent again automatically`);
 
     // ---------- Bingo from the mix (30-second fragments) ----------
+    await H.getByTestId('room-game-bingo').check(); // the lobby now starts on Discobingo
     await H.getByTestId('room-music-mix').check();
     await A.getByTestId('room-music-is-mix').waitFor();
     await H.getByTestId('room-mix-ok').waitFor();

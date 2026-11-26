@@ -119,6 +119,7 @@ export default async function run() {
     assert(await A.evaluate(() => window.__ttRoom.session.isServer === true), 'the player talks to the server');
 
     // ---------- Bingo to a win ----------
+    await H.getByTestId('room-game-bingo').check(); // the lobby now starts on Discobingo
     await H.getByTestId('room-size-3').check();
     await A.waitForFunction(() => window.__ttRoom.session.view?.settings.size === 3);
     await H.getByTestId('room-start').click();
