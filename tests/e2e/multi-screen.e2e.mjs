@@ -356,8 +356,8 @@ async function mainGame(browser, rooms, server) {
       await tile(D, 'Cas', 'online', 'true');
       S.returned = true;
     }
-    const casOnline = !(round >= 2 && round < 4);
-    const total0 = casOnline ? 3 : 2;
+    const casOnline = round !== 3 || !S.left || S.returned; // Cas is away in round 3 only
+    let total0 = casOnline ? 3 : 2;
 
     // the display: spin, then listen with the category of the host
     await D.locator('[data-testid="screen-display"][data-moment="listen"]').waitFor({ timeout: 15000 });
@@ -402,9 +402,10 @@ async function mainGame(browser, rooms, server) {
       assert(res?.seat === true, 'leaving during a game keeps the seat (leave() says seat: true)');
       S.left = true;
       await tile(D, 'Cas', 'online', 'false');
+      total0 = 2;
       await waitCount(D, 1, 2);
       assert(true, 'Cas left: offline on the display and "1 van 2" (only online players count)');
-    } else if (casOnline) {
+    } else if (casOnline && round !== 2) {
       await give(C, 'Cas');
       await waitCount(D, 2, total0);
     }
