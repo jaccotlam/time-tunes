@@ -19,8 +19,7 @@ const OWN_CID = 'cafebabecafebabecafebabecafebabe';
 const OLD_REF = 'eef2730';
 
 async function shot(page, name) {
-  await page.waitForTimeout(400);
-  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true });
+  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true, animations: 'disabled' });
 }
 const authorizes = (p) => p.sp.calls.filter((c) => c.what === 'authorize');
 const contributors = (page) => page.evaluate(() => Number(document.querySelector('[data-testid="mix-counts"]')?.dataset.contributors || 0));

@@ -157,8 +157,7 @@ export function fakeSpotify(base, { clientId = CLIENT_ID } = {}) {
 
 // Settings screens are long: capture the whole page.
 async function fullShot(page, name) {
-  await page.waitForTimeout(400);
-  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true });
+  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true, animations: 'disabled' });
 }
 
 /** The short way through the setup help with a Client ID you already have, up to "Verbind en test". */

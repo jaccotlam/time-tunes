@@ -505,8 +505,22 @@ export function diagKey(diag) {
   return JSON.stringify([diag.steps, !!diag.waking, busy ? Math.floor(Date.now() / 1000) : 0]);
 }
 
-/** "De spelleider is even weg" (+ after a while: take the lead). */
+/**
+ * "De spelleider is even weg" (+ after a while: take the lead). A prepared room whose owner has
+ * not opened it yet is no trouble: guests are simply early (a calm line, no take-over); where
+ * the server allows no take-over (meta.takeover false, takeoverMs null) none is offered or counted down.
+ */
 export function leaderAwayHtml(meta, { awayMs }) {
+  if (meta?.waitingForOwner) {
+    return `<div class="leader-away is-waiting" data-testid="waiting-for-owner" role="status">
+    <p><span class="lobby-dots" aria-hidden="true"><i></i><i></i><i></i></span><span><b>De spelleider opent de kamer zo.</b> Je bent er vroeg bij!</span></p>
+  </div>`;
+  }
+  if (meta?.takeover === false || !Number.isFinite(meta?.takeoverMs)) {
+    return `<div class="leader-away" data-testid="room-leader-away" data-can-take="false">
+    <p><b>De spelleider is even weg.</b> Je blijft in de kamer; het spel gaat verder zodra hij terug is.</p>
+  </div>`;
+  }
   const left = Math.max(0, Math.ceil((meta.takeoverMs - awayMs) / 1000));
   const can = left === 0;
   return `<div class="leader-away" data-testid="room-leader-away" data-can-take="${can}">

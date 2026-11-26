@@ -20,8 +20,7 @@ const TRACKS = [
 ].map(([title, artist, year], i) => ({ n: i + 1, itunesId: 7700000 + i, title, artist, year, previewUrl: `https://audio-ssl.itunes.apple.com/fake/q${i}.m4a` }));
 
 async function shot(page, name) {
-  await page.waitForTimeout(350);
-  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true });
+  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true, animations: 'disabled' });
 }
 /** A lobby option: scrolled to the middle first, so the sticky start button does not cover it. */
 async function segCheck(page, testid) {

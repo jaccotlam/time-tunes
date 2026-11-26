@@ -63,8 +63,7 @@ function assertUnique(list, what) { if (new Set(list).size !== list.length) thro
 // ---------- small helpers ----------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function shot(page, name) {
-  await page.waitForTimeout(350);
-  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true });
+  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true, animations: 'disabled' });
 }
 const pview = (p) => p.evaluate(() => window.__ttRoom?.session?.view || null);
 const hspec = (p) => p.evaluate(() => window.__ttHost?.session?.spectatorView() || null);

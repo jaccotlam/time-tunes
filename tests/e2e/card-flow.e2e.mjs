@@ -51,7 +51,6 @@ export default async function run() {
     });
     assert(/audio-ssl\.itunes\.apple\.com/.test(audioInfo.src), `audio from iTunes (${audioInfo.source}) at ${audioInfo.t.toFixed(1)}s of ${audioInfo.d.toFixed(1)}s`);
     assert(await page.getByTestId('player').getAttribute('data-status') === 'playing', 'player UI shows playing');
-    await page.waitForTimeout(800);
     await shot(page, '03-card-playing');
 
     // pause / restart

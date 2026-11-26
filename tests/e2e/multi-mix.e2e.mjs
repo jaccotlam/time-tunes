@@ -16,8 +16,7 @@ import { checkSquare } from '../../app/js/bingo.js';
 
 /** Whole-page screenshot (new screens are reviewed in full, at 390 px). */
 async function shot(page, name) {
-  await page.waitForTimeout(400);
-  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true });
+  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true, animations: 'disabled' });
 }
 
 export const CLIENT_ID = '0123456789abcdef0123456789abcdef';

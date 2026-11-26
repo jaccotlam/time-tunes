@@ -386,7 +386,7 @@ export function render(root, { params, navigate }) {
               <ul class="st-grid" data-testid="screen-players" data-fixed="tiles"></ul>
               <div data-region="empty"></div>
             </div>
-            <p class="sl-foot">${icons.music}<span>De muziek komt van de spelleider. Het spel begint zodra hij op <b>Start</b> tikt.</span></p>
+            <p class="sl-foot" data-region="foot"></p>
           </div>
         </div>`,
       disco: `<div class="sd">
@@ -480,7 +480,8 @@ export function render(root, { params, navigate }) {
       html = `<div class="s-pill is-warn" data-testid="screen-status" data-state="${esc(st)}" role="status"><i aria-hidden="true"></i><span>${esc(text)}</span>${show ? `<button class="btn btn-small btn-ghost" type="button" data-action="retry" data-testid="screen-retry">${icons.restart}<span>Nu opnieuw</span></button>` : ''}</div>`;
     } else if (v && meta && !meta.leaderOnline && v.phase !== 'lobby') {
       html = `<div class="s-pill" data-testid="screen-leader-away" role="status"><i aria-hidden="true"></i><span>De spelleider is even weg. Het spel gaat zo verder.</span></div>`;
-    } else if (v && meta && !meta.leaderOnline) {
+    } else if (v && meta && !meta.leaderOnline && !meta.waitingForOwner) {
+      // (a prepared room the owner has not opened yet is not "away": the lobby's foot line says it calmly)
       html = `<div class="s-pill" data-testid="screen-leader-away" role="status"><i aria-hidden="true"></i><span>De spelleider is even weg.</span></div>`;
     }
     region('status', html, () => html);
@@ -530,6 +531,10 @@ export function render(root, { params, navigate }) {
       <span class="sl-game-set">${esc(settingsText(s))}${s.music === 'mix' ? ' · Mix van de groep' : ''}</span>
       ${s.game === 'disco' ? `<span class="sl-cats" aria-hidden="true">${CATEGORIES.map((c) => `<span class="sl-cat cat-${c.key}">${catIcon(c.key)}</span>`).join('')}</span>` : ''}
     </div>`);
+    const wait = !!session.meta?.waitingForOwner;
+    region('foot', String(wait), () => (wait
+      ? `${icons.music}<span data-testid="waiting-for-owner">De spelleider opent de kamer zo. Wie er al is, staat al op het scherm.</span>`
+      : `${icons.music}<span>De muziek komt van de spelleider. Het spel begint zodra hij op <b>Start</b> tikt.</span>`));
     const n = v.players.length;
     const off = v.players.filter((p) => !p.online).length;
     region('count', JSON.stringify([n, off]), () => `<h2 class="sl-h" data-testid="screen-count" data-count="${n}" data-offline="${off}">${n ? `<b>${n}</b> ${n === 1 ? 'speler' : 'spelers'} binnen` : 'Wie doet er mee?'}${off ? `<small>${off} offline</small>` : ''}</h2>`);

@@ -66,8 +66,7 @@ const ID_KEYS = ['timetunesr.multiHostId.v1', 'timetunesr.multiServerHost.v1', '
   'timetunesr.multiJoin.v1', 'timetunesr.multiSeat.v1', 'timetunesr.multiServer.v1', 'timetunesr.multiSeed.v1'];
 const identity = (p) => p.evaluate((keys) => Object.fromEntries(keys.map((k) => [k, localStorage.getItem(k)])), ID_KEYS);
 async function shot(page, name) {
-  await page.waitForTimeout(300);
-  await page.screenshot({ path: join(OUT, `screen-${name}.png`) });
+  await page.screenshot({ path: join(OUT, `screen-${name}.png`), animations: 'disabled' });
 }
 
 /**

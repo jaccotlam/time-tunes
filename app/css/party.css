@@ -390,3 +390,10 @@
   }
   .rxbar.is-cool::after { animation: none; opacity: .6; }
 }
+
+/* a prepared room the spelleider has not opened yet: guests are early, nothing is wrong */
+.leader-away.is-waiting { background: rgba(185, 140, 255, .12); border-color: rgba(185, 140, 255, .45); }
+.leader-away.is-waiting p { display: flex; align-items: center; gap: 10px; }
+.ph-banner .leader-away.is-waiting { background: #2f1c4b; }
+/* the tv lobby's foot line is a region now (it says when the owner has not opened the room yet) */
+.scr .sl-foot[data-region] { display: flex; flex-direction: row; gap: .6rem; }
