@@ -369,7 +369,7 @@ export function render(root, { params, navigate }) {
   }
 
   function lobbyHtml() {
-    return `${session.meta?.roomName ? `<p class="lobby-room-name" data-testid="lobby-room-name">${esc(session.meta.roomName)}</p>` : ''}${lobbyWaitHtml(session.view)}`; // a prepared room's public name
+    return session.meta?.roomName ? lobbyWaitHtml(session.view).replace('<h2 class="lobby-title"', `<p class="lobby-room-name" data-testid="lobby-room-name">${esc(session.meta.roomName)}</p><h2 class="lobby-title"`) : lobbyWaitHtml(session.view); // a prepared room's public name, above "Je doet mee
   }
 
   function roundTitle(v) {

@@ -302,12 +302,12 @@ export function render(root, { params = [], navigate }) {
       <div class="share-rows set-card">
         ${row('Link om mee te doen', join, 'copy-join', 'share-copy-join')}
         ${row('Kamercode', r.code, 'copy-code', 'share-copy-code')}
-        ${row('Groot scherm (tv of laptop)', scr, 'copy-screen', 'share-copy-screen', `<a class="btn btn-small btn-ghost" href="${esc(scr)}" target="_blank" rel="noopener" data-testid="share-open-screen">${tvIcon}<span>Open</span></a>`)}
+        ${row('Groot scherm', scr, 'copy-screen', 'share-copy-screen', `<a class="btn btn-small btn-ghost" href="${esc(scr)}" target="_blank" rel="noopener" data-testid="share-open-screen">${tvIcon}<span>Open</span></a>`)}
         <p class="small muted">Het grote scherm kun je nu al openzetten: het toont de QR-code en wie er binnen is. Wie meedoet, wacht in de lobby tot jij de kamer opent en het spel start.</p>
       </div>
       <div class="acct-row share-actions">
         <button class="btn btn-primary" type="button" data-act="share-native" data-testid="share-send">${icons.share}<span>Deel de link</span></button>
-        <button class="btn btn-ghost" type="button" data-act="print" data-testid="share-print">${icons.print}<span>Print de kaart</span></button>
+        <button class="btn btn-ghost" type="button" data-act="print" data-testid="share-print">${icons.print}<span>Print</span></button>
       </div>`;
   }
 

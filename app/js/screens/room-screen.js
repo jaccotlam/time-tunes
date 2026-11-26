@@ -118,7 +118,7 @@ function rankingHtml(v, { reason, limit = 12 } = {}) {
 const verdictOf = (r) => (r.none ? 'none' : r.pass ? 'pass' : r.verdict || (r.correct ? 'right' : 'wrong'));
 const VERDICT_WORD = { right: 'Goed', wrong: 'Fout', doubt: 'Twijfel', none: '', pass: '' };
 
-function discoAnswersHtml(v) {
+function discoAnswersHtml(v, { flash = true } = {}) {
   const g = v.game;
   const d = g.disco;
   const rs = g.reveal?.results || [];
@@ -137,7 +137,7 @@ function discoAnswersHtml(v) {
     }
     const judged = r.overridden || (r.decided && r.auto === 'doubt');
     const icon = vd === 'right' ? icons.check : vd === 'wrong' ? icons.cross : vd === 'doubt' ? '?' : '–';
-    return `<li class="sr is-${vd}${r.fastest ? ' is-fast' : ''}" data-testid="screen-result" data-name="${esc(r.name)}" data-verdict="${vd}" data-stamp="${stamp}" data-judged="${!!judged}" data-fastest="${!!r.fastest}">
+    return `<li class="sr is-${vd}${r.fastest ? ` is-fast${flash ? ' is-flash' : ''}` : ''}" data-testid="screen-result" data-name="${esc(r.name)}" data-verdict="${vd}" data-stamp="${stamp}" data-judged="${!!judged}" data-fastest="${!!r.fastest}">
       <span class="sr-icon" aria-hidden="true">${icon}</span>
       <span class="sr-name">${avatarHtml(r, { cls: 'sr-av' })}<span class="sr-name-t">${esc(r.name)}</span>${resultMarks(r)}</span>
       <span class="sr-answer">${esc(resultWords(r))}</span>
@@ -337,6 +337,7 @@ export function render(root, { params, navigate }) {
   let seenPlayers = null; // ids seen in the lobby: who is new gets a burst
   let reveal = { key: '', at: 0, loaded: false }; // when this screen saw the reveal of a round
   let loadedKey = null; // the round that was already revealed when this screen came in ('' = none)
+  let flashFor = null; // the round whose answers already flashed "⚡ Snelste"
   let sawLive = false; // this display saw the game running (came in at the end, or reloaded: the ceremony goes to its overview)
   let cer = { k: null, start: 0, timer: 0, stepKey: '' }; // the prize ceremony of the won game
   // reactions float up from the bottom, never across the song or a QR code
@@ -563,7 +564,13 @@ export function render(root, { params, navigate }) {
     region('song', JSON.stringify([g.reveal?.song]), () => `<div data-testid="screen-song">${songHtml(v)}</div>`);
     region('listen', '', () => '');
     const reason = moment.startsWith('ranking') ? moment.split(':')[1] : '';
-    region('after', JSON.stringify([moment, g.reveal, g.disco]), () => (reason ? rankingHtml(v, { reason }) : discoAnswersHtml(v)));
+    // "⚡ Snelste" flashes once, when the answers of a round first appear (not on every later stamp)
+    const fk = `${g.round}:${g.disco.cat}`;
+    region('after', JSON.stringify([moment, g.reveal, g.disco]), () => {
+      const flash = !reason && flashFor !== fk;
+      if (!reason) flashFor = fk;
+      return reason ? rankingHtml(v, { reason }) : discoAnswersHtml(v, { flash });
+    });
   }
 
   function drawQuiz(v) {

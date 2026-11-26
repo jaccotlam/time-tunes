@@ -544,7 +544,7 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
     const x = verdictExtras(v, vv);
     // the flame grows with the streak (capped, so 10 in a row still fits)
     const flame = x.streak ? `<div class="ph-streak" data-testid="disco-streak" data-streak="${x.streak}" style="--s:${Math.min(1 + (x.streak - 2) * 0.18, 2).toFixed(2)}"><span class="ph-flame" aria-hidden="true">🔥</span><b>${x.streak} op rij!</b></div>` : '';
-    const fast = x.fast ? '<p class="ph-fast" data-testid="disco-fastest"><span aria-hidden="true">⚡</span><b>Snelste!</b><span>Jij was als eerste goed.</span></p>' : '';
+    const fast = x.fast ? '<p class="ph-fast" data-testid="disco-fastest"><span aria-hidden="true">⚡</span><b>Snelste!</b><span>Als eerste goed</span></p>' : '';
     const joker = x.joker ? '<div class="ph-joker-won" data-testid="disco-joker-earned" role="status"><span class="ph-joker-card" aria-hidden="true">🃏</span><span class="ph-joker-won-text"><b>Joker verdiend!</b><small>Zet hem in op elke kleur.</small></span></div>' : '';
     const over = x.over ? `<p class="ph-streak-over" data-testid="disco-streak-over">Reeks voorbij <small>(${x.over} op rij, mooi!)</small></p>` : '';
     const extras = flame || fast || joker || over ? `<div class="ph-extras">${flame}${fast}${joker}${over}</div>` : '';
@@ -578,9 +578,9 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
     const pill = vv ? `<span class="ph-pill is-${vv}" data-testid="disco-verdict" data-verdict="${vv}">${vv === 'right' ? `${icons.check}<span>Goed!</span>` : vv === 'wrong' ? `${icons.cross}<span>Helaas</span>` : vv === 'pass' ? '<span>Weet ik niet</span>' : vv === 'none' ? '<span>Geen antwoord</span>' : '<span>Twijfel</span>'}</span>` : '';
     let line = '';
     if (g.mine.bingo) line = `<p class="ph-instr is-bingo" data-testid="disco-choose" data-state="bingo"><b class="ph-bingo-badge" data-testid="disco-bingo">BINGO!</b><span>${d.choice != null && d.choosable.length > 1 ? 'Verplaatsen kan nog' : `Je hebt ${esc(winText(win))}`}</span></p>`;
-    else if (choosing && d.choice == null && jokerOn) line = '<p class="ph-instr is-todo is-joker" data-testid="disco-choose" data-state="joker"><span class="ph-joker-ico" aria-hidden="true">🃏</span><span>Kies een vakje in elke kleur</span></p>';
+    else if (choosing && d.choice == null && jokerOn) line = '<p class="ph-instr is-todo is-joker" data-testid="disco-choose" data-state="joker"><span class="ph-joker-ico" aria-hidden="true">🃏</span><span>Kies elk open vakje</span></p>';
     else if (choosing && d.choice == null) line = `<p class="ph-instr is-todo" data-testid="disco-choose" data-state="choose"><span>Kies een</span> ${catChip(d.cat)} <span>vakje</span></p>`;
-    else if (choosing && onJoker) line = '<p class="ph-instr is-done is-joker" data-testid="disco-choose" data-state="joker-chosen"><span class="ph-joker-ico" aria-hidden="true">🃏</span><span>Joker ingezet! Ander vakje? Tik erop.</span></p>';
+    else if (choosing && onJoker) line = '<p class="ph-instr is-done is-joker" data-testid="disco-choose" data-state="joker-chosen"><span class="ph-joker-ico" aria-hidden="true">🃏</span><span>Joker ingezet!</span></p>';
     else if (choosing) line = `<p class="ph-instr is-done" data-testid="disco-choose" data-state="chosen">${icons.check}<span>Fiche gezet! Ander vakje? Tik erop.</span></p>`;
     else if (revealed && r?.correct && d.noSquare) line = `<p class="ph-instr" data-testid="disco-choose" data-state="nosquare"><span>Geen open</span> ${catChip(d.cat, { short: true })} <span>vakje meer</span></p>`;
     else if (revealed && r) line = '<p class="ph-instr is-none" data-testid="disco-nothing">Geen vakje deze ronde</p>';

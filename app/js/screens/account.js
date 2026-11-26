@@ -5,7 +5,7 @@
 // account. Without a room server with accounts the screen explains that instead of showing
 // forms; the rest of the app does not depend on any of this.
 import * as account from '../account.js';
-import { copyText } from '../multi/server-session.js';
+import { copyText, storedServerHost } from '../multi/server-session.js';
 import { icons, esc, toast } from '../ui.js';
 import {
   syncNow, lastSync, takeNotice, setNotice, accountData, initial, personIcon, cloudIcon, doorIcon,
@@ -386,7 +386,25 @@ export function render(root, { params = [], navigate }) {
     afterLogin();
   }
 
+  /**
+   * A password change or a recovery rotates the owner tokens of all prepared rooms: when this
+   * device is the spelleider of one of them, fetch its new token at once (openRoom), so the
+   * spelleider screen just carries on. Returns the room's name, or ''.
+   */
+  async function refreshHostedRoom() {
+    const host = storedServerHost();
+    if (!host) return '';
+    const list = await account.myRooms();
+    const mine = list.ok ? list.rooms.find((r) => r.code === host.code && r.exists) : null;
+    if (!mine) return '';
+    const o = await account.openRoom(host.code);
+    return o.ok ? mine.name : '';
+  }
+
   function afterLogin() {
+    if (welcome?.kind === 'recover') {
+      refreshHostedRoom().then((nm) => { if (nm) toast(`Je bent nog steeds spelleider van ${nm}.`, { ms: 3000 }); });
+    }
     fresh = null;
     if (recoverMode) { carry = welcome; navigate('#/account'); return; } // the overview on its own route
     draw();
@@ -415,8 +433,10 @@ export function render(root, { params = [], navigate }) {
     }
     redrawPassword('', '');
     const n = r.revoked || 0;
+    const kept = await refreshHostedRoom().catch(() => '');
+    if (!alive) return;
     const msg = slot('pw-msg');
-    if (msg) msg.innerHTML = (`<p class="acct-ok" data-testid="account-pw-msg" role="status">${icons.check}<span>Je wachtwoord is gewijzigd.${n ? ` Op ${plural(n, 'ander toestel', 'andere toestellen')} ben je nu uitgelogd.` : ''}</span></p>`);
+    if (msg) msg.innerHTML = (`<p class="acct-ok" data-testid="account-pw-msg" role="status">${icons.check}<span>Je wachtwoord is gewijzigd.${n ? ` Op ${plural(n, 'ander toestel', 'andere toestellen')} ben je nu uitgelogd.` : ''}${kept ? ` Je blijft spelleider van ${esc(kept)}.` : ''}</span></p>`);
   }
 
   /** Redraw only the password card (the rest of the overview stays as it is). */

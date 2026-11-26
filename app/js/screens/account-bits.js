@@ -109,7 +109,7 @@ export function accountNoteHtml(kind) {
     return `<p class="acct-note is-in" data-testid="account-note" data-state="in">${cloudIcon}<span>${text} <span class="muted">(${esc(me.username)})</span></span></p>`;
   }
   if (!usesServer()) return '';
-  return `<p class="acct-note" data-testid="account-note" data-state="out">${cloudIcon}<span>Met een <a href="#/account" data-testid="account-note-link">account</a> staat ${what} op elk toestel.</span></p>`;
+  return `<p class="acct-note" data-testid="account-note" data-state="out">${cloudIcon}<span>Met een <a href="#/account" data-testid="account-note-link">account</a> ${kind === 'spotify' ? 'staat' : 'staan'} ${what} op elk toestel.</span></p>`;
 }
 
 /** Instellingen: a card with the account (one line and a button). */
