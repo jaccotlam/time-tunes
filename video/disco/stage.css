@@ -16,36 +16,23 @@ body {
 #devices { position: absolute; inset: 0; }
 img { display: block; }
 
-/* ---------- laptop / tv: 960 x 540 scherm ---------- */
-#tv { position: absolute; left: 48px; top: 96px; width: 988px; height: 612px; }
-.tv-frame {
-  position: absolute; left: 0; top: 0; width: 988px; height: 568px; border-radius: 24px; background: #0b0612;
-  box-shadow: 0 0 0 2px #4a2f6e, 0 0 0 6px #140a20, 0 40px 80px rgba(0, 0, 0, .55), 0 0 110px rgba(79, 179, 255, .10);
+/* ---------- vier schermen: grootte en plek komen uit stage.js (opstellingen) ---------- */
+.dev {
+  position: absolute; left: 0; top: 0; background: #0b0612; --pad: 12px; --rr: 22px; --ri: 12px; border-radius: var(--rr);
+  box-shadow: 0 0 0 2px #4a2f6e, 0 0 0 5px #140a20, 0 36px 70px rgba(0, 0, 0, .55), 0 0 100px rgba(79, 179, 255, .10);
 }
-.tv-screen { position: absolute; left: 14px; top: 14px; width: 960px; height: 540px; border-radius: 8px; overflow: hidden; background: var(--bg); }
-.tv-screen img { width: 960px; height: 540px; }
-.tv-neck { position: absolute; left: 456px; top: 568px; width: 76px; height: 26px; background: linear-gradient(#2a1748, #1a0d2c); }
-.tv-foot { position: absolute; left: 356px; top: 592px; width: 276px; height: 14px; border-radius: 8px; background: #2a1748; box-shadow: 0 10px 24px rgba(0, 0, 0, .5); }
-
-/* ---------- twee telefoons: 351 x 765 scherm ---------- */
-.ph {
-  position: absolute; top: 96px; width: 375px; height: 789px; border-radius: 46px; background: #0b0612;
-  box-shadow: 0 0 0 2px #4a2f6e, 0 0 0 6px #140a20, 0 40px 80px rgba(0, 0, 0, .6), 0 0 100px rgba(255, 93, 115, .10);
-}
-#ph-a { left: 1116px; } #ph-b { left: 1516px; }
-.ph-screen { position: absolute; left: 12px; top: 12px; width: 351px; height: 765px; border-radius: 36px; overflow: hidden; background: #120819; }
-.ph-screen img { position: absolute; left: 0; top: 0; width: 351px; height: 765px; }
-.statusbar {
-  position: absolute; left: 0; top: 0; right: 0; height: 0; z-index: 2; display: none;
-}
+.dev.is-ph { box-shadow: 0 0 0 2px #4a2f6e, 0 0 0 5px #140a20, 0 36px 70px rgba(0, 0, 0, .6), 0 0 90px rgba(255, 93, 115, .10); }
+.dev .scr { position: absolute; inset: var(--pad); border-radius: var(--ri); overflow: hidden; background: var(--bg); }
+.dev img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
 .tag {
-  position: absolute; left: 50%; top: -36px; transform: translateX(-50%); z-index: 5; padding: 7px 26px; border-radius: 999px; white-space: nowrap;
+  position: absolute; left: 0; top: 0; z-index: 5; padding: 6px 24px; border-radius: 999px; white-space: nowrap; transform: translateX(-50%);
   font-family: "Inter Display", Inter, sans-serif; font-weight: 800; font-size: 27px; line-height: 1.2; color: var(--ink); background: var(--teal);
   box-shadow: 0 8px 22px rgba(0, 0, 0, .5);
 }
+.tag.is-small { font-size: 19px; padding: 4px 16px; }
 #tag-b { background: var(--coral-2); }
-.tag.is-host { background: var(--mustard); }
-.tag small { font-family: Inter, sans-serif; font-weight: 600; font-size: 20px; margin-left: 10px; opacity: .8; }
+#tag-host { background: var(--mustard); }
+#tag-tv { background: var(--blue, #4fb3ff); }
 
 /* kader om een onderdeel van een scherm */
 .hl { position: absolute; left: 0; top: 0; border-radius: 14px; border: 4px solid var(--mustard); box-shadow: 0 0 26px rgba(255, 198, 73, .6); opacity: 0; z-index: 6; }
@@ -54,22 +41,11 @@ img { display: block; }
 .ring i { background: rgba(255, 255, 255, .34); border: 4px solid #fff; box-shadow: 0 0 0 2px rgba(23, 11, 36, .55), 0 6px 18px rgba(0, 0, 0, .45); }
 .ring b { border: 5px solid var(--mustard); opacity: 0; }
 
-#later {
-  position: absolute; left: 62px; top: 110px; width: 960px; height: 540px; display: none; z-index: 8; pointer-events: none;
-  background: rgba(13, 6, 22, .62); border-radius: 8px;
-}
-#later span {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 22px 54px; border-radius: 999px; white-space: nowrap;
-  font-family: "Inter Display", Inter, sans-serif; font-weight: 900; font-size: 62px; color: var(--ink); background: var(--mustard);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, .6);
-}
-#later em { position: absolute; left: 50%; top: calc(50% + 70px); transform: translateX(-50%); font-style: normal; font-weight: 700; font-size: 24px; color: var(--text); background: rgba(23, 11, 36, .8); padding: 6px 18px; border-radius: 999px; white-space: nowrap; }
-
 .lg { display: inline-flex; align-items: center; gap: 10px; padding: 8px 22px 8px 12px; border-radius: 999px; font-weight: 800; font-size: 26px; color: var(--cat-ink); background: var(--c); white-space: nowrap; }
 .lg i { width: 18px; height: 18px; border-radius: 50%; background: rgba(23, 11, 36, .55); display: block; }
 
 /* ---------- ondertitel links onder ---------- */
-#copy { position: absolute; left: 56px; top: 736px; width: 990px; height: 300px; opacity: 0; }
+#copy { position: absolute; left: 56px; top: 730px; width: 1040px; height: 320px; opacity: 0; }
 .kicker { font-size: 24px; font-weight: 800; letter-spacing: .15em; text-transform: uppercase; color: var(--teal); margin: 0 0 14px; white-space: nowrap; }
 .headrow { display: flex; align-items: center; gap: 22px; }
 .badge {
@@ -92,4 +68,5 @@ img { display: block; }
 .tagline { font-size: 54px; color: var(--muted); margin: 18px 0 0; font-weight: 500; }
 .pill { display: inline-block; margin: 46px 0 0; padding: 12px 34px; border-radius: 999px; font-size: 32px; font-weight: 700; background: rgba(255, 255, 255, .07); border: 2px solid var(--line); color: var(--text); }
 .endline { font-size: 52px; font-weight: 800; margin: 34px 0 0; color: var(--text); }
+.tip { margin: 30px 0 0; font-size: 38px; font-weight: 700; color: var(--teal); }
 .url { margin: 36px 0 0; font-family: "Inter Display", Inter, sans-serif; font-weight: 800; font-size: 60px; color: var(--mustard); letter-spacing: -.01em; }

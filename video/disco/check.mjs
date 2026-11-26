@@ -26,11 +26,11 @@ export function check(extra = []) {
   console.log(execFileSync(bin, ['-v', 'error', '-show_entries', 'stream=codec_name,codec_type,width,height,pix_fmt,r_frame_rate,nb_frames:format=duration,size', '-of', 'default=nw=1', OUT_FILE], { encoding: 'utf8' }).trim());
   const ev = JSON.parse(readFileSync(join(TMP, 'events.json'), 'utf8'));
   const { scenes, duration } = timeline(ev);
-  const dir = join(TMP, 'check');
+  const dir = process.env.TT_STILLS || join(TMP, 'check');
   rmSync(dir, { recursive: true, force: true }); mkdirSync(dir, { recursive: true });
   const times = scenes.flatMap((s) => {
     const len = s.o1 - s.o0;
-    return len > 7 ? [s.o0 + len * 0.2, s.o0 + len * 0.6, s.o0 + len * 0.93] : [s.o0 + len * 0.6];
+    return len > 7 ? [s.o0 + len * 0.15, s.o0 + len * 0.5, s.o0 + len * 0.9] : [s.o0 + len * 0.6];
   }).map((t) => ({ t, id: [...scenes].reverse().find((s) => s.o0 <= t)?.id }))
     .concat(extra.map((t) => ({ t, id: [...scenes].reverse().find((s) => s.o0 <= t)?.id })));
   times.sort((a, b) => a.t - b.t);
@@ -43,6 +43,9 @@ export function check(extra = []) {
   console.log('\nscènes (begintijd, duur):');
   for (const s of scenes) console.log(`  ${s.o0.toFixed(1).padStart(5)} s  ${(s.o1 - s.o0).toFixed(1).padStart(5)} s  ${s.id}`);
   console.log(`einde ${duration.toFixed(1)} s`);
+  // elke ondertitel moet minstens 3,5 s te lezen zijn
+  const short = scenes.filter((s) => SCENES.find((x) => x.id === s.id)?.caption && s.o1 - s.o0 < 3.5);
+  console.log('ondertitels korter dan 3,5 s:', short.map((s) => `${s.id} (${(s.o1 - s.o0).toFixed(1)} s)`).join(', ') || 'geen');
   // stilstaande en zwarte stukken (ffmpeg meldt ze op stderr)
   const detect = (vf) => spawnSync(FFMPEG, ['-hide_banner', '-nostats', '-i', OUT_FILE, '-vf', vf, '-an', '-f', 'null', '-'], { encoding: 'utf8' }).stderr || '';
   const freeze = detect('freezedetect=n=-60dB:d=2.5');
