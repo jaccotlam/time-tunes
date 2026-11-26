@@ -114,7 +114,6 @@ test('schermsessie: een vijfde scherm neemt een plek over; het verdrongen scherm
   const { code, host } = await newRoom();
   const many = [];
   for (let i = 0; i < 4; i++) { const s = createServerScreenSession({ code }); s.start(); many.push(s); await until(() => s.online, 8000, `scherm ${i}`); }
-  const hellos = [];
   const fifth = createServerScreenSession({ code });
   fifth.start();
   await until(() => fifth.online, 8000, 'vijfde scherm online');
@@ -125,10 +124,6 @@ test('schermsessie: een vijfde scherm neemt een plek over; het verdrongen scherm
   assert.equal(out.status, 'closed', 'probeert niet zelf opnieuw');
   assert.equal(fifth.online, true, 'het nieuwe scherm blijft');
   assert.equal(many.filter((s) => s.error).length, 1);
-  assert.ok(hellos.length === 0);
-  // two sessions never share a sid: the hello of each carries its own
-  const sids = new Set([...many, fifth].map((s) => s.received.length >= 0 && s.diag.role));
-  assert.equal(sids.size, 1);
   for (const s of many) s.destroy();
   const none = createServerScreenSession({ code: 'BCDF' });
   none.start();

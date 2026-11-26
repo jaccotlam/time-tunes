@@ -92,7 +92,7 @@ export function viewFor(room, pid, presence = {}) {
     endedBy: room.phase === 'won' ? g.endedBy : null,
   };
   if (g.kind === 'quiz') {
-    game.quiz = quizView(room, pid, revealed);
+    game.quiz = quizView(room, pid, revealed, presence);
     if (mineState) game.mine = { score: mineState.score, streak: mineState.streak, right: mineState.right, rank: game.quiz.rankOf };
     delete game.quiz.rankOf;
   }
@@ -150,11 +150,13 @@ export function viewFor(room, pid, presence = {}) {
  * The quiz part of a view: the question and its four answers (everybody may see those),
  * the clock (server time), how many answered; which answer is right only after the reveal.
  */
-function quizView(room, pid, revealed) {
+function quizView(room, pid, revealed, presence = {}) {
   const g = room.game;
   const Q = g.quiz;
   const q = Q.q;
   const ids = room.players.map((p) => p.id).filter((id) => g.per[id]);
+  // "x van y hebben geantwoord" counts who is there: an away player's seat is never waited for
+  const here = ids.filter((id) => id === pid || !!presence[id]);
   const scores = Object.fromEntries(ids.map((id) => [id, g.per[id].score]));
   const rankNow = Object.fromEntries(ids.map((id) => [id, 1 + ids.filter((o) => scores[o] > scores[id]).length]));
   const out = {
@@ -168,8 +170,8 @@ function quizView(room, pid, revealed) {
     options: q && room.phase !== 'won' ? q.options.slice() : [],
     startedAt: room.phase === 'answering' ? Q.startedAt : null,
     deadline: room.phase === 'answering' ? Q.deadline : null,
-    answered: room.phase === 'answering' ? ids.filter((id) => g.answers[id]).length : 0,
-    playing: ids.length,
+    answered: room.phase === 'answering' ? here.filter((id) => g.answers[id]).length : 0,
+    playing: here.length, // taking part and online
     choice: room.phase === 'answering' && g.answers[pid] ? g.answers[pid].choice : null,
     reveal: null,
     ranking: null,

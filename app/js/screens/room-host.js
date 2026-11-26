@@ -407,7 +407,8 @@ export function render(root, { deck, navigate }) {
   function playersBlock(sv) {
     const n = sv.players.length;
     const answering = session.room.phase === 'answering';
-    const playing = sv.players.filter((p) => p.playing);
+    // who is away keeps the seat but is never waited for (as on the big screen)
+    const playing = sv.players.filter((p) => p.playing && p.online);
     const done = playing.filter((p) => p.answered).length;
     const head = answering
       ? `<h2 class="room-h" data-testid="room-answered" data-done="${done}" data-total="${playing.length}">Geantwoord: ${done} van ${playing.length}</h2>`
@@ -515,12 +516,11 @@ export function render(root, { deck, navigate }) {
   }
 
   function revealCta(sv) {
-    const playing = sv.players.filter((p) => p.playing);
-    const online = playing.filter((p) => p.online);
+    const online = sv.players.filter((p) => p.playing && p.online);
     const ready = online.length > 0 && online.every((p) => p.answered);
-    const done = playing.filter((p) => p.answered).length;
+    const done = online.filter((p) => p.answered).length;
     return `<div class="sticky-cta">
-      <button class="btn btn-primary btn-xl room-reveal ${ready ? 'is-ready' : ''}" type="button" data-action="reveal" data-testid="room-reveal" data-ready="${ready}">${icons.eye}<span>${ready ? 'Iedereen is klaar: onthul!' : `Onthul (${done}/${playing.length})`}</span></button>
+      <button class="btn btn-primary btn-xl room-reveal ${ready ? 'is-ready' : ''}" type="button" data-action="reveal" data-testid="room-reveal" data-ready="${ready}">${icons.eye}<span>${ready ? 'Iedereen is klaar: onthul!' : `Onthul (${done}/${online.length})`}</span></button>
     </div>`;
   }
 
