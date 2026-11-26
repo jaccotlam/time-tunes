@@ -1,7 +1,7 @@
 // Discobal: a 3D mirror ball on a 2D canvas that "lands" on a round category.
 // Self-contained ES module, no dependencies, no external assets.
 //
-//   const ball = createDiscoBall(containerEl, { categories, size: 'auto', onLand, onPhase });
+//   const ball = createDiscoBall(containerEl, { categories, size: 'auto', onLand, onPhase, turnWhenLanded });
 //   ball.idle();                                  // slow rotation, all colours drifting
 //   await ball.spinTo('artist', { duration });    // resolves true when landed, false if superseded
 //   ball.show('artist');                          // landed state at once (no onLand, no pulse)
@@ -20,6 +20,9 @@ const CAM = 5;               // camera distance in ball radii
 const BALL_R = 0.335;        // ball radius as a fraction of the canvas side
 const LAND_ANGLE = 0.61;     // rotation the ball always comes to rest at (deterministic landing)
 const IDLE_SPEED = 0.32;     // rad/s
+const LANDED_SPEED = 0.2;    // rad/s, only with options.turnWhenLanded
+const WINDUP_MS = 250;       // ease-in to full speed at the start of a spin
+const SLOW_FRAME_MS = 22;    // adaptive resolution steps down above this (smoothed) frame time
 const SPOTS = 84;
 const MAX_GLINTS = 72;
 const PULSE_MS = 950;
@@ -43,7 +46,7 @@ const LAMPS = [[0.60, 0.50, 0.62], [-0.64, 0.44, 0.63], [-0.52, -0.54, 0.66], [0
   [-0.05, -0.78, 0.62], [0.82, 0.05, 0.57], [0.02, 0.80, 0.60], [-0.84, -0.04, 0.54]];
 const NL = LAMPS.length;
 const WHITE_COS = Math.cos(12.5 * Math.PI / 180);
-const LAMP_COS = Math.cos(25 * Math.PI / 180);
+const LAMP_COS = Math.cos(36 * Math.PI / 180);
 
 function parseHex(hex) {
   let h = String(hex || '#ffffff').trim().replace('#', '');
@@ -124,6 +127,7 @@ export function createDiscoBall(container, options = {}) {
   const sizeOpt = options.size == null ? 'auto' : options.size;
   const onLand = typeof options.onLand === 'function' ? options.onLand : null;
   const onPhase = typeof options.onPhase === 'function' ? options.onPhase : null;
+  const turnWhenLanded = !!options.turnWhenLanded;
 
   const canvas = document.createElement('canvas');
   canvas.setAttribute('role', 'img');
@@ -145,6 +149,8 @@ export function createDiscoBall(container, options = {}) {
   let spin = null;             // { t0, T, th0, dTh, resolve, timer, key }
   let pulseT0 = -1e9;
   let lastT = 0, raf = 0, destroyed = false;
+  let learnedCap = 2;          // adaptive pixel-ratio cap (2 -> 1.5 -> 1), never raised again
+  let prevFrameT = 0, frameEma = 0, slowFrames = 0;
   let pageVisible = typeof document === 'undefined' || document.visibilityState !== 'hidden';
   let onScreen = true;
 
@@ -216,11 +222,11 @@ export function createDiscoBall(container, options = {}) {
     const over = makeCanvas(OS); {
       const g = over.getContext('2d'); const m = OS / 2;
       let gr = g.createRadialGradient(m - ra * 0.12, m - ra * 0.18, ra * 0.35, m, m, ra);
-      gr.addColorStop(0, 'rgba(10,4,20,0)'); gr.addColorStop(0.72, 'rgba(10,4,20,0.12)');
-      gr.addColorStop(0.93, 'rgba(8,3,16,0.5)'); gr.addColorStop(1, 'rgba(6,2,12,0.75)');
+      gr.addColorStop(0, 'rgba(10,4,20,0)'); gr.addColorStop(0.8, 'rgba(10,4,20,0.06)');
+      gr.addColorStop(0.95, 'rgba(8,3,16,0.28)'); gr.addColorStop(1, 'rgba(6,2,12,0.45)');
       g.fillStyle = gr; g.beginPath(); g.arc(m, m, ra, 0, TAU); g.fill();
       gr = g.createRadialGradient(m - ra * 0.38, m - ra * 0.45, 0, m - ra * 0.38, m - ra * 0.45, ra * 0.6);
-      gr.addColorStop(0, 'rgba(255,250,255,0.10)'); gr.addColorStop(1, 'rgba(255,250,255,0)');
+      gr.addColorStop(0, 'rgba(255,250,255,0.13)'); gr.addColorStop(1, 'rgba(255,250,255,0)');
       g.fillStyle = gr; g.beginPath(); g.arc(m, m, ra, 0, TAU); g.fill();
     }
     // hanging cap (fixed: rotation is about the vertical axis)
@@ -253,7 +259,7 @@ export function createDiscoBall(container, options = {}) {
     let w = typeof sizeOpt === 'number' ? sizeOpt : container.clientWidth;
     if (!w || w < 40) w = 260;
     w = Math.round(w);
-    const d = Math.min(2, (typeof devicePixelRatio === 'number' && devicePixelRatio) || 1);
+    const d = Math.min(2, (typeof devicePixelRatio === 'number' && devicePixelRatio) || 1, resCap());
     if (w === cssSize && d === dpr && sprites) return false;
     cssSize = w; dpr = d;
     S = Math.round(w * dpr);
@@ -264,6 +270,13 @@ export function createDiscoBall(container, options = {}) {
     bg.width = BS; bg.height = BS;
     buildSprites();
     return true;
+  }
+
+  const landedTurning = () => turnWhenLanded && !reduced;
+  // a frozen landed ball is a single frame: always draw it at full resolution (deterministic look)
+  function resCap() {
+    if (mode === 'landed' && !landedTurning() && !animating(performance.now())) return 2;
+    return learnedCap;
   }
 
   // ---------- colour state ----------
@@ -444,17 +457,37 @@ export function createDiscoBall(container, options = {}) {
       const hb = ry + 0.1;
       const tn = tone[i];
       const room = Math.sin(rx * 7.3 + ry * 4.1 + 1.3) * Math.sin(ry * 6.2 - rz * 3.7 + rx * 1.9);
-      let env = 0.09 + 0.34 / (1 + hb * hb * 22) * (0.4 + 0.6 * (rz > 0 ? rz : 0))
-        + (room > 0 ? room * room * 0.22 : 0) + tn * tn * tn * 0.3;
-      if (ry > 0.5) env *= 0.7;
+      // chrome: tiles facing the viewer reflect the (dimly lit) room behind the camera
+      const face = wz * wz;
+      let env = 0.1 + 0.24 * face + 0.3 / (1 + hb * hb * 22) * (0.4 + 0.6 * (rz > 0 ? rz : 0))
+        + (room > 0 ? room * room * 0.24 : 0) + tn * tn * tn * 0.32;
+      if (ry > 0.5) env *= 0.78;
       let r = env * silR, g = env * silG, b = env * silB;
+      // rim light: grazing tiles catch a back light in the key colour
+      const edge = 1 - wz;
+      if (edge > 0.45) {
+        const e = (edge - 0.45) / 0.55, rl = e * e * (0.25 + 0.55 * tn);
+        r += keyRGB[0] * rl * 0.75 + ambRGB[0] * rl * 0.5;
+        g += keyRGB[1] * rl * 0.75 + ambRGB[1] * rl * 0.5;
+        b += keyRGB[2] * rl * 0.75 + ambRGB[2] * rl * 0.5;
+      }
 
+      // coloured lamps: the strongest one sets the tile colour, the others only add a little
+      // (summing them all would wash overlapping colours out to white)
+      let best = 0, bk = -1, lr = 0, lg = 0, lb = 0;
       for (let k = 0; k < NL; k++) {
         const L = LP[k];
         let t = (rx * L[0] + ry * L[1] + rz * L[2] - LAMP_COS) / (1 - LAMP_COS);
         if (t <= 0) continue;
-        t = t * t * (0.35 + 1.25 * ((tn * 7.31 + k * 0.37) % 1));
-        r += lampRGB[k * 3] * t; g += lampRGB[k * 3 + 1] * t; b += lampRGB[k * 3 + 2] * t;
+        t = t * (2 - t) * (0.2 + 0.85 * ((tn * 7.31 + k * 0.37) % 1));
+        lr += lampRGB[k * 3] * t; lg += lampRGB[k * 3 + 1] * t; lb += lampRGB[k * 3 + 2] * t;
+        if (t > best) { best = t; bk = k; }
+      }
+      if (bk >= 0) {
+        const o = bk * 3, rest = 0.22;
+        r += lampRGB[o] * best * (1 - rest) + lr * rest;
+        g += lampRGB[o + 1] * best * (1 - rest) + lg * rest;
+        b += lampRGB[o + 2] * best * (1 - rest) + lb * rest;
       }
       let spec = 0;
       for (let k = 0; k < WL.length; k++) {
@@ -501,9 +534,9 @@ export function createDiscoBall(container, options = {}) {
     ctx.globalCompositeOperation = 'lighter';
     for (let g = 0; g < gc; g++) {
       const x = glints[g * 3], y = glints[g * 3 + 1], v = glints[g * 3 + 2];
-      const sz = R * (0.16 + 0.42 * v) * (1 + pulse * 0.5);
+      const sz = R * (0.2 + 0.5 * v) * (1 + pulse * 0.5);
       const w = sz * (1 + blur), hh = sz / (1 + blur * 0.35);
-      const a = Math.min(1, 0.35 + v * 0.75);
+      const a = Math.min(1, 0.45 + v * 0.8);
       for (let c = 0; c <= NC; c++) {
         const ww = keyW[c]; if (ww < 0.01) continue;
         ctx.globalAlpha = ww * a;
@@ -533,6 +566,7 @@ export function createDiscoBall(container, options = {}) {
   function animating(now) {
     if (mode === 'spin') return true;
     if (mode === 'idle' && !reduced) return true;
+    if (mode === 'landed' && landedTurning()) return true;
     if (h > 0) return true;
     return now - pulseT0 < PULSE_MS * 1.6;
   }
@@ -546,9 +580,19 @@ export function createDiscoBall(container, options = {}) {
     }
     if (mode === 'spin' && spin) {
       const p = clamp01((now - spin.t0) / spin.T);
-      const e = 1 - (1 - p) * (1 - p) * (1 - p);
-      const nt = spin.th0 + spin.dTh * e;
-      omega = reduced ? 0 : (spin.dTh * 3 * (1 - p) * (1 - p)) / (spin.T / 1000);
+      // velocity: smoothstep ramp up over the wind-up, then quadratic decay to rest at p = 1
+      const a = spin.a;
+      let pos, vel;
+      if (p < a) {
+        const x = p / a;
+        pos = a * (x * x * x - 0.5 * x * x * x * x); vel = x * x * (3 - 2 * x);
+      } else {
+        const y = (1 - p) / (1 - a);
+        pos = a / 2 + (1 - a) / 3 * (1 - y * y * y); vel = y * y;
+      }
+      const I = a / 2 + (1 - a) / 3;
+      const nt = spin.th0 + spin.dTh * (p >= 1 ? 1 : pos / I);
+      omega = reduced ? 0 : (spin.dTh * vel / I) / (spin.T / 1000);
       q += reduced ? 0 : (nt - theta) / Math.PI;
       theta = nt;
       s = reduced ? smooth(0, 1, p) : smooth(0.42, 0.93, p);
@@ -556,6 +600,9 @@ export function createDiscoBall(container, options = {}) {
     } else if (mode === 'idle') {
       omega = reduced ? 0 : IDLE_SPEED;
       if (!reduced) { theta = (theta + IDLE_SPEED * dt) % TAU; q += dt * 0.22; }
+    } else if (mode === 'landed' && landedTurning()) {
+      omega = LANDED_SPEED;
+      theta = (theta + LANDED_SPEED * dt) % TAU;
     } else {
       omega = 0;
     }
@@ -565,8 +612,23 @@ export function createDiscoBall(container, options = {}) {
     raf = 0;
     if (destroyed) return;
     step(now);
+    // adaptive resolution: smoothed frame time above SLOW_FRAME_MS for ~15 frames -> step down
+    if (prevFrameT) {
+      const d = now - prevFrameT;
+      if (d < 250) {
+        frameEma = frameEma ? frameEma * 0.85 + d * 0.15 : d;
+        slowFrames = frameEma > SLOW_FRAME_MS ? slowFrames + 1 : 0;
+        if (slowFrames >= 15 && dpr > 1) {
+          learnedCap = dpr > 1.5 ? 1.5 : 1;
+          slowFrames = 0; frameEma = 0;
+        }
+      }
+    }
+    prevFrameT = now;
+    if (measure()) prevFrameT = 0;   // a resize/rebuild frame is not representative
     render(now);
     if (animating(now)) schedule();
+    else if (measure()) render(now);   // back to full resolution for the frozen final frame
   }
   function schedule() {
     if (raf || destroyed || !pageVisible || !onScreen) return;
@@ -574,7 +636,8 @@ export function createDiscoBall(container, options = {}) {
   }
   function kick() {
     lastT = performance.now();
-    if (!raf && pageVisible && onScreen) { render(lastT); schedule(); }
+    prevFrameT = 0;
+    if (!raf && pageVisible && onScreen) { measure(); render(lastT); schedule(); }
   }
 
   function setLabel(text) { canvas.setAttribute('aria-label', text); }
@@ -640,7 +703,7 @@ export function createDiscoBall(container, options = {}) {
       setLabel('Discobal draait…');
       phase('spinning', key);
       return new Promise((resolve) => {
-        spin = { t0: now, T, th0: theta, dTh, resolve, key, timer: 0 };
+        spin = { t0: now, T, th0: theta, dTh, resolve, key, timer: 0, a: reduced ? 0 : Math.min(0.3, WINDUP_MS / T) };
         const mine = spin;
         // lands even if no frames are rendered (hidden tab, off screen)
         mine.timer = setTimeout(() => {
@@ -674,6 +737,7 @@ export function createDiscoBall(container, options = {}) {
     },
     get canvas() { return canvas; },
     get phase() { return mode; },
+    get pixelRatio() { return dpr; },   // current internal pixel ratio (adaptive), for diagnostics
   };
 
   // ---------- environment hooks ----------
