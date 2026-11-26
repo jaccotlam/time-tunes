@@ -524,7 +524,7 @@ export function render(root, { params, navigate }) {
 
   function drawLobby(v) {
     const s = v.settings;
-    region('game', JSON.stringify([s, session.meta?.mix?.total]), () => `<div class="sl-game" data-testid="screen-game" data-game="${esc(s.game)}">
+    region('game', JSON.stringify([s, session.meta?.mix?.total, session.meta?.roomName]), () => `${session.meta?.roomName ? `<p class="sl-room-name" data-testid="screen-room-name">${esc(session.meta.roomName)}</p>` : ''}<div class="sl-game" data-testid="screen-game" data-game="${esc(s.game)}">
       <span class="sl-game-name${s.game === 'disco' ? ' is-disco' : ''}">${esc(gameName(s.game))}</span>
       <span class="sl-game-set">${esc(settingsText(s))}${s.music === 'mix' ? ' · Mix van de groep' : ''}</span>
       ${s.game === 'disco' ? `<span class="sl-cats" aria-hidden="true">${CATEGORIES.map((c) => `<span class="sl-cat cat-${c.key}">${catIcon(c.key)}</span>`).join('')}</span>` : ''}

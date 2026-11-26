@@ -66,7 +66,8 @@ export function createRoomServer({
     async create(opts) {
       const code = opts.code || makeFreshCode([...rooms.keys()]);
       if (rooms.get(code)?.exists()) return { ok: false, error: 'taken' };
-      if (!rooms.has(code) && rooms.size >= L.maxRooms) return { ok: false, status: 503, error: 'full', message: 'De server is vol. Probeer het later opnieuw.' };
+      // prepared rooms have a cap of their own: they live 30 days and must never crowd out normal rooms
+      if (preparedStates.size >= L.maxPreparedRooms) return { ok: false, status: 503, error: 'full', message: 'De server is vol. Probeer het later opnieuw.' };
       const out = prepareRoom(hubFor(code), opts);
       if (!out.ok) { if (!rooms.get(code)?.exists()) rooms.delete(code); return out; }
       log('prepare', code);
@@ -80,6 +81,9 @@ export function createRoomServer({
       return out;
     },
   };
+
+  /** Rooms in memory that are not prepared ones (those count against maxPreparedRooms). */
+  const normalRooms = () => rooms.size - preparedStates.size;
 
   function boxFor(key) {
     let box = boxes.get(key);
@@ -146,7 +150,11 @@ export function createRoomServer({
     if (!originAllowed(origin, allowed)) return json(403, { error: 'origin', message: 'Dit adres mag deze server niet gebruiken.' }, null);
     if (req.method === 'OPTIONS') return { status: 204, headers: corsHeaders(origin), body: null };
     if (!requestLimit.allow(req.ip || '?')) return json(429, { error: 'ratelimit', message: 'Te veel verzoeken. Wacht even.' }, origin);
-    if (accountRoute(req.method, req.path)) {
+    const acct = accountRoute(req.method, req.path);
+    if (acct) {
+      if (acct.op === 'signup' && accounts.size >= L.maxAccounts) {
+        return Promise.resolve(json(503, { code: 'full', message: 'De server is vol: er kunnen geen accounts meer bij. Probeer het later opnieuw.' }, origin));
+      }
       return handleAccount(req, { boxFor, limiters, log }).then((out) => json(out.status, out.body, origin));
     }
     const r = route(req.method, req.path);
@@ -163,7 +171,7 @@ export function createRoomServer({
       if (!opts) return json(400, { error: 'bad' }, origin);
       if (opts.versionMismatch) return json(409, versionMismatch, origin);
       if (!createLimit.allow(req.ip || '?')) return json(429, { error: 'ratelimit', message: 'Te veel nieuwe kamers. Wacht een paar minuten.' }, origin);
-      if (rooms.size >= L.maxRooms) return json(503, { error: 'full', message: 'De server is vol. Probeer het later opnieuw.' }, origin);
+      if (normalRooms() >= L.maxRooms) return json(503, { error: 'full', message: 'De server is vol. Probeer het later opnieuw.' }, origin);
       const code = makeFreshCode([...rooms.keys()]);
       try {
         const out = hubFor(code).create(opts);
@@ -184,7 +192,7 @@ export function createRoomServer({
       const b = parseJson(req.body);
       if (!b || typeof b !== 'object') return json(400, { error: 'bad' }, origin);
       if (Number(b.v) !== versionMismatch.v) return json(409, versionMismatch, origin);
-      if (!rooms.has(r.code) && rooms.size >= L.maxRooms) return json(503, { error: 'full' }, origin);
+      if (!rooms.has(r.code) && normalRooms() >= L.maxRooms) return json(503, { error: 'full' }, origin);
       const fresh = !rooms.has(r.code);
       try {
         const out = hubFor(r.code).restore(b.snap, { id: b.id, token: b.token });

@@ -15,6 +15,11 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      # Render's own proxy sits in front of the service and APPENDS the address that connected to
+      # it to X-Forwarded-For (it keeps whatever the client sent before that): 1 trusted hop, so
+      # the per-IP limits use the last entry, never one a client can write (server/node.mjs)
+      - key: TRUST_PROXY
+        value: "1"
       # web addresses that may use this server (comma-separated; ":*" = any port)
       - key: ALLOWED_ORIGINS
         value: https://jaccotlam.github.io,https://time-tunes.jaccotlam.workers.dev,http://localhost:*,http://127.0.0.1:*

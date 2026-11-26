@@ -145,7 +145,29 @@ function openPrepared(hub) {
   return { ok: true, code: hub.code, id: s.ownerId, token, room: preparedSummary(hub) };
 }
 
-/** One operation of the owning account on its room: 'summary' | 'edit' | 'reset' | 'open' | 'delete'. */
+/**
+ * The account logged out everywhere, changed its password or was recovered: the owner token
+ * nobody should hold any more is replaced by one nobody knows, and an owner connection that is
+ * open now is closed ('token': the host session forgets the room; Mijn kamers > Open makes a
+ * device the spelleider again). Players, game and settings stay.
+ */
+function rotateOwner(hub) {
+  const s = hub.state;
+  s.members[s.ownerId] = { th: hashToken(randomToken()) };
+  for (const [connId, c] of [...hub.conns]) {
+    if (c.mid !== s.ownerId) continue;
+    hub.sendTo(connId, { t: 'error', code: 'token', message: 'Je account is op een ander toestel uitgelogd of het wachtwoord is gewijzigd. Open de kamer opnieuw via Mijn kamers.' });
+    hub.conns.delete(connId);
+    hub.deps.drop?.(connId, 4000, 'token');
+    hub.markAway?.(s.ownerId);
+  }
+  if (s.leaderId === s.ownerId) s.leaderAwaySince = hub.now();
+  hub.backupKey = '';
+  hub.changed();
+  return { ok: true };
+}
+
+/** One operation of the owning account on its room: 'summary' | 'edit' | 'reset' | 'open' | 'rotate' | 'delete'. */
 export function preparedOp(hub, name, args = {}) {
   const s = hub.state;
   // not there, or somebody else's (also a normal room that got this code later): "gone"
@@ -156,6 +178,7 @@ export function preparedOp(hub, name, args = {}) {
       case 'edit': return editPrepared(hub, args.patch || {});
       case 'reset': resetPrepared(hub); return { ok: true, room: preparedSummary(hub) };
       case 'open': return openPrepared(hub);
+      case 'rotate': return rotateOwner(hub);
       case 'delete': hub.shutdown('closed', 'Deze kamer is opgeheven door de spelleider.'); return { ok: true };
       default: return { ok: false, error: 'bad' };
     }

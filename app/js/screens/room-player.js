@@ -198,7 +198,7 @@ export function render(root, { params, navigate }) {
     const now = serverNow();
     const mainKey = vn === 'answering' && quiz
       ? JSON.stringify(['q', v.game.round, v.game.quiz.options, v.game.quiz.choice, !!v.game.quiz.deadline, quizLeft(v.game.quiz, now) > 0, !!session.pending, v.game.quiz.answered, !!v.game.mine])
-      : vn === 'answering' ? `a|${ctl.key()}|${!!session.pending}` : JSON.stringify([vn, joinError, v?.game, v?.settings, v?.you, session?.error, st === 'notfound', vn === 'connecting' && session?.diag ? [st, diagKey(session.diag)] : '']);
+      : vn === 'answering' ? `a|${ctl.key()}|${!!session.pending}` : JSON.stringify([vn, joinError, v?.game, v?.settings, v?.you, session?.error, st === 'notfound', vn === 'connecting' && session?.diag ? [st, diagKey(session.diag)] : '', session?.meta?.roomName]);
     region('main', mainKey, build);
     if (vn === 'join') afterJoinDraw();
     const inRoom = v && ['lobby', 'answering', 'revealed', 'won'].includes(vn);
@@ -369,7 +369,7 @@ export function render(root, { params, navigate }) {
   }
 
   function lobbyHtml() {
-    return lobbyWaitHtml(session.view);
+    return `${session.meta?.roomName ? `<p class="lobby-room-name" data-testid="lobby-room-name">${esc(session.meta.roomName)}</p>` : ''}${lobbyWaitHtml(session.view)}`; // a prepared room's public name
   }
 
   function roundTitle(v) {

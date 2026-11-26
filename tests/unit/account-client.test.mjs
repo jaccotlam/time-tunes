@@ -222,13 +222,14 @@ test('accountmodule: opslaan op de achtergrond met vertraging, opnieuw proberen 
   useServer(base);
   const seen = [];
   const off = account.subscribe((e) => seen.push(e.type));
-  // the server can not be reached for a moment
-  storage.set(SERVER_OVERRIDE_KEY, JSON.stringify('http://127.0.0.1:9'));
+  // the server can not be reached for a moment (the network fails)
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new TypeError('Failed to fetch'); };
   playlists.create('Onderweg', { tracks: pl('x', 1).tracks });
   account.scheduleSave(10);
   await until(() => seen.includes('error'), 5000, 'fout bij opslaan');
   assert.equal(account.status().pending, true, 'kept for later');
-  useServer(base);
+  globalThis.fetch = realFetch;
   const r = await account.flush();
   assert.equal(r.ok, true);
   assert.equal(account.status().pending, false);

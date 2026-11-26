@@ -139,9 +139,15 @@ const listeners = new Set();
 export function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 function emit(ev) { for (const fn of listeners) { try { fn(ev); } catch (e) { console.error(e); } } }
 
+/**
+ * The stored session, but only for the server it was made on: with another server configured
+ * now (the per-browser override) this device counts as logged out there, and the token is never
+ * sent to it. The stored session stays (switching back logs in again).
+ */
 const readSession = () => {
   const s = store.get(ACCOUNT_KEY, null);
-  return s && typeof s.username === 'string' && typeof s.token === 'string' ? s : null;
+  if (!s || typeof s.username !== 'string' || typeof s.token !== 'string') return null;
+  return typeof s.server === 'string' && s.server === serverBase()?.http ? s : null;
 };
 const writeSession = (s) => store.set(ACCOUNT_KEY, s);
 
@@ -177,6 +183,8 @@ async function request(method, path, { body, token, timeout = TIMEOUT_MS } = {})
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeout);
   try {
+    // the token only ever goes to the server it came from (readSession checks it too)
+    if (token && store.get(ACCOUNT_KEY, null)?.server !== base.http) return { ok: false, status: 0, code: 'loggedout', data: null };
     const headers = {};
     if (body !== undefined) headers['content-type'] = token ? 'application/json' : 'text/plain;charset=UTF-8'; // no preflight without a token
     if (token) headers.authorization = `Bearer ${token}`;

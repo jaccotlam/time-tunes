@@ -149,3 +149,6 @@ export function hostLobbyAccountHtml({ roomName = '' } = {}) {
   }
   return marker ? `<p class="acct-marker-row">${marker}</p>` : '';
 }
+
+/** The logged-in username or '' (a cheap key for screens that show the marker). */
+export const accountName = () => account.current()?.username || '';

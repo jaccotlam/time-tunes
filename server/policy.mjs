@@ -95,7 +95,9 @@ export const LIMITS = {
   requestsPerIp: { limit: 300, windowMs: 60 * 1000 },
   socketsPerIp: { limit: 60, windowMs: 60 * 1000 },
   maxBody: MAX_CLIENT_MESSAGE * 4, // a restore holds the whole room including its songs
-  maxRooms: 1000, // Node: rooms in memory at the same time
+  maxRooms: 1000, // Node: normal rooms in memory at the same time (prepared rooms not counted)
+  maxPreparedRooms: 500, // Node: rooms prepared by accounts (live 30 days), a cap of their own
+  maxAccounts: 1000, // Node: accounts in memory / in the accounts file
 };
 
 /** Which endpoint is this? -> { kind: 'health'|'create'|'restore'|'seat'|'info'|'ws'|'none', code? } */

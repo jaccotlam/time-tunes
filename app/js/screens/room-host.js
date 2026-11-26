@@ -26,6 +26,7 @@ import {
   discoMyResultHtml, regieHtml, discoProgressHtml, nextButtonHtml, discoLobbyHtml,
 } from './room-disco.js';
 import { createFloatLayer, awardsListHtml, avatarSheetHtml, avatarHtml } from './party-ui.js';
+import { hostLobbyAccountHtml, hostSetupAccountHtml, accountName } from './account-bits.js';
 
 export const name = 'room-host';
 const HOST_NAME_KEY = 'timetunesr.multiName.v1';
@@ -133,11 +134,12 @@ export function render(root, { deck, navigate }) {
     for (const k of Object.keys(regions)) delete regions[k];
     const r = session.room;
     const code = r?.code || session.code || '';
-    const quit = r ? '<button class="btn btn-small btn-ghost" type="button" data-action="close-room" data-testid="host-close">Sluiten</button>' : '<span class="topbar-spacer"></span>';
+    // a prepared room (account) is emptied, not ended: the button says so
+    const quit = r ? `<button class="btn btn-small btn-ghost" type="button" data-action="close-room" data-testid="host-close">${session.meta?.roomName ? 'Leegmaken' : 'Sluiten'}</button>` : '<span class="topbar-spacer"></span>';
     let body = {
       setup: '<div data-region="main"></div>',
       connecting: '<div data-region="main"></div>',
-      lobby: `<div data-region="status"></div><div data-region="join"></div><div data-region="players"></div><div data-region="main"></div><div data-region="mix"></div><div data-region="cta"></div>`,
+      lobby: `<div data-region="status"></div><div data-region="prep"></div><div data-region="join"></div><div data-region="players"></div><div data-region="main"></div><div data-region="mix"></div><div data-region="cta"></div>`,
       answering: `<div data-region="status"></div><div data-region="quiz"></div>
         <div class="place-player" data-region="pv">${playerViewHtml({ compact: true })}</div>
         <div data-region="players"></div><div data-region="own"></div><div data-region="mix"></div><div data-region="cta"></div>`,
@@ -248,6 +250,7 @@ export function render(root, { deck, navigate }) {
     const serverKey = viaServer ? JSON.stringify([m?.leader, m?.leaderName, m?.owner, diagVisible(session.diag, session.status) ? diagKey(session.diag) : '']) : '';
     region('status', JSON.stringify([session.status, r.code, r.phase, r.game?.round, r.game?.kind, serverKey]), () => statusHtml(sv));
     region('join', JSON.stringify([r.code, m?.screens || 0]), () => joinBoxHtml(r.code) + screenBoxHtml(r.code));
+    region('prep', JSON.stringify([m?.roomName || '', accountName()]), () => hostLobbyAccountHtml({ roomName: m?.roomName || '' }));
     region('players', JSON.stringify([sv.players, r.phase, avatarOpen, canPickAvatar(), session.hostView?.()?.you?.avatar]), () => playersBlock(sv));
     region('sheet', JSON.stringify([sheetOpen, r.code, m?.screens || 0]), () => (sheetOpen ? sheetHtml(r.code) : ''));
     // a spelleider screen that does not lead (somebody took over) does not play the music;
@@ -432,6 +435,7 @@ export function render(root, { deck, navigate }) {
     const err = viaServer && session.error ? `<p class="warn" data-testid="host-error" data-code="${esc(session.error.code)}">${esc(session.error.message || 'Dat lukte niet.')}</p>` : '';
     return `<form class="setup host-setup" data-testid="host-setup-form" autocomplete="off">${err}
       <p class="lead">Iedereen speelt op zijn eigen telefoon. Dit toestel is de spelleider: het speelt de muziek (zet het op een speaker) en houdt de stand bij.</p>
+      ${hostSetupAccountHtml()}
       <fieldset>
         <legend>Speel je zelf mee?</legend>
         <label class="check-row"><input type="checkbox" name="plays" data-testid="host-plays"><span>Ja, ik speel mee op dit toestel</span></label>
@@ -704,7 +708,10 @@ export function render(root, { deck, navigate }) {
       case 'mix-share': ms?.share(); break;
       case 'mix-withdraw': ms?.withdraw(); break;
       case 'close-room':
-        if (window.confirm('Kamer sluiten? Het spel stopt voor iedereen.')) { player.stop(); loadedFor = null; forgetMixShare(session.code); session.close(); }
+        if (session.meta?.roomName) {
+          // a prepared room: the server empties it and keeps it (code, name, settings) for the account
+          if (window.confirm('Kamer leegmaken? Iedereen gaat eruit en het spel stopt. De kamer blijft klaarstaan in Mijn kamers, met dezelfde code.')) { player.stop(); loadedFor = null; forgetMixShare(session.code); session.close(); toast('Kamer leeggemaakt. Hij staat nog klaar in Mijn kamers.', { ms: 4000 }); }
+        } else if (window.confirm('Kamer sluiten? Het spel stopt voor iedereen.')) { player.stop(); loadedFor = null; forgetMixShare(session.code); session.close(); }
         break;
       default:
     }
