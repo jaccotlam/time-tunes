@@ -552,22 +552,23 @@ async function mainGame(browser, rooms, server) {
     await pg.locator(`[data-testid="screen-display"][data-code="${code}"][data-status="online"]`).waitFor({ timeout: 15000 });
     more.push(pg);
   }
-  await H.waitForFunction(() => document.querySelector('[data-testid="host-screen-connected"]')?.dataset.count === '4', null, { timeout: 10000 });
-  assert(true, 'four displays: the host tab says "Groot scherm verbonden (4)"');
+  // (after the game the host tab no longer shows the screen box: ask the session's meta, which is what it shows)
+  await H.waitForFunction(() => window.__ttHost.session.meta?.screens === 4, null, { timeout: 10000 });
+  assert(true, 'four displays: the room server counts 4 screens (meta.screens)');
   const fifth = await plain.context.newPage();
   await fifth.goto(`${server.url}#/scherm/${code}`);
   await fifth.locator('[data-testid="screen-error"][data-code="screens"]').waitFor({ timeout: 15000 });
   assert(/grote schermen/.test(await fifth.getByTestId('screen-error').textContent()), 'the 5th display gets the "screens" error screen (4 per room)');
   assert(await attr(D, 'screen-display', 'data-status') === 'online', 'the other displays are not disturbed');
   await plain.context.close();
-  await H.waitForFunction(() => document.querySelector('[data-testid="host-screen-connected"]')?.dataset.count === '1', null, { timeout: 10000 });
+  await H.waitForFunction(() => window.__ttHost.session.meta?.screens === 1, null, { timeout: 10000 });
   assert(true, 'the extra displays closed: back to 1');
 
   // ----- the display's whole life: no localStorage writes, the host's identity untouched -----
   await takeWrites(o, D);
   assert(o.lsWrites.length === 0, `the display tabs made zero localStorage writes (${JSON.stringify(o.lsWrites)})`);
   await D.close();
-  await H.getByTestId('host-screen-connected').waitFor({ state: 'detached', timeout: 10000 });
+  await H.waitForFunction(() => window.__ttHost.session.meta?.screens === 0, null, { timeout: 10000 });
   const idAfter = await identity(H);
   assert(JSON.stringify(idAfter) === JSON.stringify(idBefore), 'the host\'s stored identity keys are byte-identical before and after the display\'s life');
   for (const nm of ['Anouk', 'Bram']) {

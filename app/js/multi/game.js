@@ -100,8 +100,9 @@ export const own = (obj, key) => (obj && typeof obj === 'object' && Object.hasOw
 /**
  * Somebody joins (or comes back). A known id keeps its place and stand; a new player who
  * arrives during a game gets a fair start (lateStart). Throws GameError 'removed' / 'full'.
+ * `online` ({id: true}, optional): who is connected now, for the fair start (see lateStart).
  */
-export function addPlayer(room, { id, name }) {
+export function addPlayer(room, { id, name }, { online = null } = {}) {
   const pid = String(id || '');
   if (!pid || !isSafeId(pid)) throw new GameError('bad', 'Speler zonder id.');
   if (room.removed.includes(pid)) throw new GameError('removed', 'Je bent door de spelleider uit deze kamer gehaald.');
@@ -113,7 +114,7 @@ export function addPlayer(room, { id, name }) {
   if (room.players.length >= MAX_ROOM_PLAYERS) throw new GameError('full', `Deze kamer is vol (${MAX_ROOM_PLAYERS} spelers).`);
   const player = { id: pid, name: uniqueName(room, cleanName(name, `Speler ${room.players.length + 1}`)) };
   let next = { ...room, players: [...room.players, player] };
-  if (next.game) next = lateStart(next, pid);
+  if (next.game) next = lateStart(next, pid, online);
   return next;
 }
 
@@ -234,7 +235,7 @@ function spinBall(g, now) {
  * behind (never close to winning). Bingo: a new card with that many squares stamped for
  * free, never more than size-2 in one line. Tijdlijn: that many cards from the pile.
  */
-export function lateStart(room, pid) {
+export function lateStart(room, pid, online = null) {
   const g = room.game;
   if (g.kind === 'quiz') { // a late player starts at 0 points
     const per = { ...g.per, [pid]: { score: 0, streak: 0, right: 0 } };
@@ -242,6 +243,10 @@ export function lateStart(room, pid) {
     return { ...room, game: { ...g, per, prev } };
   }
   const others = room.players.filter((p) => p.id !== pid && g.per[p.id]);
+  // "furthest behind" among who is there now: a seat kept by somebody who left early does not
+  // hold every late joiner back at nothing (nobody online: everybody counts)
+  const here = online ? others.filter((p) => own(online, p.id)) : [];
+  const ref = here.length ? here : others;
   const per = { ...g.per };
   const joins = (g.joins || 0) + 1;
   const rand = seededRandom((g.seed + joins * 7919) >>> 0);
@@ -249,7 +254,7 @@ export function lateStart(room, pid) {
   if (g.kind === 'disco') {
     // a fresh card with as many free stamps as the one furthest behind (centre not counted)
     const card = uniqueDiscoCard(rand, new Set(others.map((p) => discoSignature(g.per[p.id].card))));
-    const behind = others.length ? Math.min(...others.map((p) => stampedCount(g.per[p.id].marks))) : 0;
+    const behind = ref.length ? Math.min(...ref.map((p) => stampedCount(g.per[p.id].marks))) : 0;
     per[pid] = { card, marks: lateMarks(behind, rand) };
   } else if (g.kind === 'bingo') {
     const sigs = new Set(others.map((p) => cardSignature(g.per[p.id].card)));
@@ -259,7 +264,7 @@ export function lateStart(room, pid) {
       if (!sigs.has(cardSignature(card))) break;
     }
     const marks = Array(g.size * g.size).fill(null);
-    const behind = others.length ? Math.min(...others.map((p) => markCount(g.per[p.id].marks))) : 0;
+    const behind = ref.length ? Math.min(...ref.map((p) => markCount(g.per[p.id].marks))) : 0;
     const cells = shuffle(marks.map((_, i) => i), rand);
     let given = 0;
     for (const i of cells) {
@@ -270,7 +275,7 @@ export function lateStart(room, pid) {
     }
     per[pid] = { card, marks };
   } else {
-    const behind = others.length ? Math.min(...others.map((p) => g.per[p.id].timeline.length)) : 1;
+    const behind = ref.length ? Math.min(...ref.map((p) => g.per[p.id].timeline.length)) : 1;
     const n = Math.max(1, Math.min(behind, g.goal - 2, pile.length));
     pile = pile.slice();
     const timeline = pile.splice(0, n).sort((a, b) => g.songs[a].year - g.songs[b].year);
