@@ -12,6 +12,8 @@ const KEYS = ['host', 'tv', 'a', 'b'];
 // 0,9x (telefoon) gemaakt: in beeld nooit groter dan dat, dus altijd scherp. `copy` is de plek van de ondertitel.
 const SMALL_HOST = { sf: 0.28, x: 1128, y: 136 };
 const LAYOUTS = {
+  // alleen de tab van de spelleider, in het midden (de tv is er nog niet)
+  solo: { host: { sf: 0.68, x: 525, y: 130 }, tv: { hide: 1, sf: 0.68, x: 990, y: 130 }, a: { hide: 1, sf: 0.9, x: 1521, y: 100 }, b: { hide: 1, sf: 0.4, x: 1230, y: 440 }, copy: { w: 1800 } },
   // twee tabs naast elkaar (de telefoons zijn er nog niet)
   tabs: { host: { sf: 0.68, x: 60, y: 130 }, tv: { sf: 0.68, x: 990, y: 130 }, a: { hide: 1, sf: 0.9, x: 1521, y: 100 }, b: { hide: 1, sf: 0.4, x: 1230, y: 440 }, copy: { w: 1800 } },
   // het grote scherm groot, een telefoon groot; de tab van de spelleider en de andere telefoon klein ertussen

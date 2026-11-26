@@ -65,7 +65,7 @@ img { display: block; }
   font-family: "Inter Display", Inter, var(--font-display); font-size: 200px; line-height: 1.05; letter-spacing: -.035em; font-weight: 900; margin: 30px 0 0;
   padding-bottom: .12em; background: linear-gradient(90deg, #4fb3ff, #ff5fa8 38%, #ffc649 68%, #2ed3c0); -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-.tagline { font-size: 54px; color: var(--muted); margin: 18px 0 0; font-weight: 500; }
+.tagline { font-size: 54px; color: var(--muted); margin: 18px 0 0; font-weight: 500; max-width: 1500px; text-wrap: balance; }
 .pill { display: inline-block; margin: 46px 0 0; padding: 12px 34px; border-radius: 999px; font-size: 32px; font-weight: 700; background: rgba(255, 255, 255, .07); border: 2px solid var(--line); color: var(--text); }
 .endline { font-size: 52px; font-weight: 800; margin: 34px 0 0; color: var(--text); }
 .tip { margin: 30px 0 0; font-size: 38px; font-weight: 700; color: var(--teal); }

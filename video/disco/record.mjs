@@ -81,7 +81,7 @@ async function recordOnce() {
     await sleep(200);
 
     const ev = { edit: [], taps: [], highlights: [], marks: {}, players: PLAYERS, code: null };
-    let layout = 'tabs';
+    let layout = 'solo';
     /** Een nieuw stuk van de montagelijst: scène-id, opstelling van de schermen en eventueel een snelheid. */
     const seg = (id, opts = {}) => {
       layout = opts.layout || layout;
@@ -192,7 +192,7 @@ async function recordOnce() {
     ev.edit.push({ id: 'title', dur: TITLE_SECONDS, layout });
 
     // --- 1. kamer maken (tab 1) ---
-    seg('room', { layout: 'tabs' });
+    seg('room', { layout: 'solo' });
     await hold(0.6);
     await tap(host, 'start-host', { lead: 0.5 });
     await host.page.getByTestId('host-setup-form').waitFor();
@@ -207,7 +207,7 @@ async function recordOnce() {
     await hold(1.2);
 
     // --- 2. het grote scherm in een tweede tab ---
-    seg('tabs', { layout: 'tabs' });
+    seg('tabs', { layout: 'solo' });
     const openBtn = host.page.getByTestId('host-open-screen');
     await reach(host, openBtn);
     await highlight(host, openBtn, 0.1, 2.6, 8);
@@ -226,6 +226,7 @@ async function recordOnce() {
     tv.cap = await capturePage(tvPage, join(phoneDir, 'tv'), 'f', rel, { castFormat: 'jpeg' });
     captures.push(tv.cap);
     mark('tvOpen');
+    seg('tabs', { layout: 'tabs' }); // de tv schuift erbij: de twee tabs naast elkaar
     await hold(0.5);
     await host.page.locator('[data-testid="host-screen-connected"]').waitFor({ timeout: 10000 });
     if (!(await tvPage.getByTestId('screen-code').getAttribute('aria-label')).replace(/\s/g, '').endsWith(code) || !(await tvPage.getByTestId('screen-qr').isVisible())) problems.push('de tv toont de code of de QR-code niet');
