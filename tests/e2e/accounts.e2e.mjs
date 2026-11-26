@@ -232,7 +232,7 @@ async function sync(rooms, S) {
   );
 
   // B changes the playlist; A sees it after reopening the account screen
-  await onDevice(pb, async (id) => { const pl = await import('/js/playlists.js'); const r = pl.rename(id, 'Feestje van B'); const a = await import('/js/account.js'); console.log('DBG2', r, JSON.stringify(a.status()), Date.now()); }, S.plId);
+  await onDevice(pb, async (id) => { const pl = await import('/js/playlists.js'); const r = pl.rename(id, 'Feestje van B'); const a = await import('/js/account.js'); return [r, a.status()]; }, S.plId).then((x) => console.log('DBG2', JSON.stringify(x)));
   await saved(pb); console.log('DBG3', Date.now());
   await go(pa, '#/');
   await go(pa, '#/account');
