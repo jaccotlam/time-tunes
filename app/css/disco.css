@@ -1,0 +1,308 @@
+/* TimeTunesr "Samen spelen": Discobingo (the disco ball, the 5×5 card, the answer forms, the regie). */
+:root {
+  /* mirror of CATEGORIES in js/multi/disco.js (room-disco.js sets them from there at start-up) */
+  --cat-decade: #4fb3ff;
+  --cat-artist: #ff5fa8;
+  --cat-year: #ffc649;
+  --cat-title: #2ed3c0;
+  /* dark ink on every category colour: contrast 6.7:1 (pink) up to 11:1 (yellow) */
+  --cat-ink: #170b24;
+}
+.cat-decade { --c: var(--cat-decade); }
+.cat-artist { --c: var(--cat-artist); }
+.cat-year { --c: var(--cat-year); }
+.cat-title { --c: var(--cat-title); }
+.cat-free { --c: var(--mustard); }
+
+.cat-ico { width: 1.25em; height: 1.25em; flex: none; display: block; }
+.cat-chip {
+  display: inline-flex; align-items: center; gap: .3em; padding: .1em .65em .1em .4em; border-radius: 999px;
+  background: var(--c); color: var(--cat-ink); font-weight: 800; white-space: nowrap; line-height: 1.45; vertical-align: middle;
+}
+.cat-chip .cat-ico { width: 1.15em; height: 1.15em; }
+
+/* ---------- lobby ---------- */
+.room-disco-opt { grid-column: 1 / -1; }
+.room-disco-opt .size-box { min-height: 76px; }
+.room-disco-opt .size-box b {
+  font-size: 1.55rem; color: var(--mustard);
+  background: linear-gradient(90deg, var(--cat-decade), var(--cat-artist) 38%, var(--cat-year) 66%, var(--cat-title));
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+.room-disco-opt input:disabled + .size-box { opacity: .5; }
+.room-disco-settings { display: flex; flex-direction: column; gap: 8px; }
+.disco-explain { margin: 0; text-align: center; font-weight: 600; }
+.disco-legend { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.disco-legend li {
+  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 8px 5px 5px;
+  border-radius: 12px; background: rgba(0, 0, 0, .22); border: 1px solid var(--line); font-weight: 700; font-size: .9rem; line-height: 1.15;
+}
+.disco-legend-tile { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; flex: none; background: var(--c); color: var(--cat-ink); }
+.disco-legend-tile .cat-ico { width: 22px; height: 22px; }
+.room-disco-settings .room-seg { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-flow: row; }
+.room-disco-settings .muted.small { margin: 0; }
+.room-disco-settings .warn { margin: 0; }
+
+/* ---------- the disco ball and the category banner ---------- */
+.disco-stage-host[data-region] { display: block; }
+.disco-stage { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+/* the canvas is square and as wide as its box; the ball fills ~2/3 of it, the rest is glow */
+.disco-ball-box { width: min(260px, 72vw); flex: none; }
+.disco-ball-box canvas { margin: 0 auto; }
+.disco-banner { width: 100%; }
+.disco-banner-in {
+  display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 18px;
+  background: var(--c); color: var(--cat-ink); box-shadow: 0 10px 30px rgba(0, 0, 0, .3), 0 0 32px -6px var(--c);
+}
+.disco-banner-in.is-spinning {
+  flex-direction: column; gap: 0; background: rgba(255, 255, 255, .05); color: var(--text);
+  border: 1px solid var(--line); box-shadow: none; text-align: center;
+}
+.disco-banner-in.is-spinning .disco-banner-name { font-size: 1.2rem; }
+.disco-banner-kicker { margin: 0; color: var(--muted); font-size: .9rem; font-weight: 700; }
+.disco-banner-ico { width: 54px; height: 54px; flex: none; display: grid; place-items: center; border-radius: 14px; background: rgba(23, 11, 36, .13); }
+.disco-banner-ico .cat-ico { width: 40px; height: 40px; }
+.disco-banner-text { display: flex; flex-direction: column; min-width: 0; }
+.disco-banner-name { display: block; margin: 0; font-family: var(--font-display); font-weight: 900; font-size: 1.65rem; line-height: 1.05; }
+.disco-banner-how { display: block; font-weight: 700; font-size: .98rem; line-height: 1.25; margin-top: 2px; }
+.just-landed .disco-banner-in { animation: disco-banner-in .55s cubic-bezier(.2, 1.5, .4, 1); }
+@keyframes disco-banner-in { from { transform: scale(.7); opacity: 0; } to { transform: none; opacity: 1; } }
+/* a phone, once landed: small ball next to the category, the question gets the room */
+.disco-stage[data-state="landed"]:not(.is-big) { flex-direction: row; gap: 8px; }
+.disco-stage[data-state="landed"]:not(.is-big) .disco-ball-box { width: 96px; margin: -8px -6px -8px -10px; }
+.disco-stage[data-state="landed"]:not(.is-big) .disco-banner { flex: 1; min-width: 0; }
+.disco-stage[data-state="landed"]:not(.is-big) .disco-banner-in { padding: 8px 12px; gap: 10px; }
+.disco-stage[data-state="landed"]:not(.is-big) .disco-banner-ico { width: 44px; height: 44px; }
+.disco-stage[data-state="landed"]:not(.is-big) .disco-banner-ico .cat-ico { width: 32px; height: 32px; }
+.disco-stage[data-state="landed"]:not(.is-big) .disco-banner-name { font-size: 1.35rem; }
+.disco-stage[data-state="landed"]:not(.is-big) .disco-banner-how { font-size: .9rem; }
+.disco-stage[data-phase="revealed"] .disco-banner-how { display: none; }
+.disco-wait { justify-content: center; text-align: left; }
+
+/* ---------- the 5×5 card ---------- */
+.disco-card {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; padding: 6px;
+  border-radius: 20px; background: var(--surface); border: 1px solid var(--line);
+}
+.dq {
+  position: relative; aspect-ratio: 1; min-width: 0; display: grid; place-items: center; padding: 0; margin: 0;
+  border: 0; border-radius: 12px; background: var(--c); color: var(--cat-ink); font: inherit;
+  box-shadow: inset 0 -4px 0 rgba(23, 11, 36, .2), inset 0 2px 0 rgba(255, 255, 255, .25);
+  transition: filter .2s, transform .2s;
+}
+.dq-ico { display: grid; place-items: center; width: 100%; height: 100%; }
+.dq .cat-ico { width: 54%; height: 54%; }
+.dq.is-free { background: radial-gradient(circle at 50% 38%, #fff0b8, var(--mustard) 55%, #e09a1a); }
+.dq.is-free .cat-ico { width: 62%; height: 62%; color: #fff8e6; filter: drop-shadow(0 1px 1px rgba(120, 60, 0, .5)); }
+.dq.is-stamped:not(.is-free) .dq-ico { opacity: .3; }
+/* the stamp: a round ink stamp with a double ring, slightly askew, with the year of the song */
+.dq-stamp {
+  position: absolute; inset: 9%; display: grid; place-items: center; border-radius: 50%;
+  background: rgba(23, 11, 36, .86); color: #fff4e6; transform: rotate(-14deg);
+  border: 2px solid rgba(255, 244, 230, .92);
+  box-shadow: inset 0 0 0 2px rgba(23, 11, 36, .86), inset 0 0 0 3.5px rgba(255, 244, 230, .5), 0 2px 6px rgba(0, 0, 0, .35);
+}
+.dq-stamp-in { display: grid; place-items: center; }
+.dq-stamp-in b { font-family: var(--font-display); font-weight: 900; font-size: clamp(.66rem, 3.4vw, .95rem); letter-spacing: .01em; font-variant-numeric: tabular-nums; line-height: 1; }
+.dq-stamp .ico { width: 1.1rem; height: 1.1rem; }
+/* lines that are complete (goalCells): lit up, the stamps turn gold */
+.dq.is-goal { box-shadow: 0 0 0 2px #fff, 0 0 16px 2px rgba(255, 244, 230, .55); z-index: 1; }
+.dq.is-goal .dq-stamp { background: linear-gradient(135deg, #ffe7a0, var(--mustard)); color: var(--cat-ink); border-color: var(--cat-ink); box-shadow: inset 0 0 0 2px #ffe7a0, inset 0 0 0 3.5px rgba(23, 11, 36, .55); }
+.disco-card.is-bingo { border-color: var(--mustard); box-shadow: 0 0 0 2px rgba(255, 198, 73, .4), 0 12px 40px rgba(255, 198, 73, .25); }
+/* while answering: the open squares of the round's category */
+.dq.is-now { box-shadow: inset 0 0 0 3px rgba(255, 255, 255, .9), inset 0 -4px 0 rgba(23, 11, 36, .2); }
+/* after a right answer: the squares you may stamp pulse, the rest steps back */
+.disco-card.is-choosing .dq.is-dim { filter: saturate(.2) brightness(.5); }
+button.dq { cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+button.dq:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.dq.is-choosable:not(.is-chosen) { animation: dq-pulse 1.15s ease-in-out infinite; z-index: 1; }
+@keyframes dq-pulse {
+  /* glow only, no movement: the square stays put under a finger (and for test robots) */
+  0%, 100% { box-shadow: 0 0 0 2px rgba(255, 255, 255, .75), inset 0 -4px 0 rgba(23, 11, 36, .2); filter: brightness(1); }
+  50% { box-shadow: 0 0 0 3px #fff, 0 0 22px 5px var(--c), inset 0 -4px 0 rgba(23, 11, 36, .2); filter: brightness(1.12); }
+}
+.dq.is-chosen { box-shadow: 0 0 0 3px #fff, 0 0 18px 3px var(--c); z-index: 2; }
+.dq.is-chosen .dq-stamp { animation: dq-stamp-in .42s cubic-bezier(.2, 1.6, .5, 1); }
+@keyframes dq-stamp-in { from { transform: rotate(-14deg) scale(2.3); opacity: 0; } to { transform: rotate(-14deg) scale(1); opacity: 1; } }
+.disco-card-stats { margin: -4px 0 0; text-align: center; }
+
+/* ---------- answer forms ---------- */
+.disco-answer .ra-state { border-left: 5px solid var(--c); }
+.disco-decades { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.disco-dec {
+  min-height: 64px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0;
+  border-radius: 16px; border: 2px solid var(--line); background: rgba(0, 0, 0, .22); color: var(--text);
+  font: inherit; cursor: pointer; touch-action: manipulation;
+}
+.disco-dec b { font-family: var(--font-display); font-size: 1.3rem; line-height: 1.1; }
+.disco-dec small { color: var(--muted); font-size: .8rem; }
+.disco-dec:hover { border-color: rgba(79, 179, 255, .6); }
+.disco-dec:focus-visible { outline: 3px solid var(--cat-decade); outline-offset: 2px; }
+.disco-dec.is-on { border-color: var(--cat-decade); background: var(--cat-decade); color: var(--cat-ink); }
+.disco-dec.is-on small { color: var(--cat-ink); }
+.disco-dec:disabled { opacity: .6; cursor: default; }
+.disco-field { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); }
+.disco-field label { font-weight: 700; }
+.disco-field input {
+  min-height: 56px; width: 100%; border-radius: 14px; border: 2px solid var(--c); background: rgba(0, 0, 0, .28);
+  padding: 10px 14px; font-size: 1.2rem;
+}
+.disco-field input:focus { outline: 3px solid var(--c); outline-offset: 1px; }
+.disco-field .disco-year-input { font-size: 1.9rem; font-weight: 800; text-align: center; letter-spacing: .14em; font-variant-numeric: tabular-nums; }
+.disco-field small { font-size: .84rem; }
+.disco-answer .ra-actions .btn-small { min-height: 48px; }
+
+/* ---------- after the reveal ---------- */
+.disco-verdict.is-doubt { background: rgba(255, 198, 73, .12); color: #ffe3a3; border: 2px dashed var(--mustard); font-size: 1.15rem; }
+.disco-doubt-ico { color: var(--cat-ink); background: var(--mustard) !important; font-size: 1.6rem; font-family: var(--font-display); }
+.disco-choose {
+  margin: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; text-align: center;
+  padding: 10px 12px; border-radius: 14px; background: rgba(255, 255, 255, .05); border: 1px solid var(--line); font-weight: 700;
+}
+.disco-choose .ico { width: 1.2em; height: 1.2em; color: var(--good); }
+.disco-choose.is-todo { border: 2px solid #fff; font-size: 1.1rem; animation: disco-call 1.6s ease-in-out infinite; }
+.disco-choose.is-done { flex-wrap: nowrap; text-align: left; border-color: rgba(61, 220, 143, .5); background: rgba(61, 220, 143, .1); }
+@keyframes disco-call { 50% { box-shadow: 0 0 0 6px rgba(255, 255, 255, .12); } }
+.disco-bingo {
+  margin: 0; text-align: center; font-family: var(--font-display); font-weight: 900; line-height: 1; letter-spacing: .04em;
+  font-size: clamp(3.4rem, 19vw, 5.5rem);
+  background: linear-gradient(90deg, var(--cat-decade), var(--cat-artist), var(--cat-year), var(--cat-title));
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: var(--mustard);
+  animation: disco-bingo .7s cubic-bezier(.2, 1.6, .4, 1);
+}
+@keyframes disco-bingo { from { transform: scale(.3) rotate(-8deg); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* what everybody answered */
+.disco-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.dr {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; grid-template-areas: "icon name verdict" "icon answer verdict";
+  align-items: center; column-gap: 10px; padding: 8px 12px 8px 10px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); min-height: 52px;
+}
+.dr.is-you { border-color: rgba(185, 140, 255, .6); }
+.dr-icon { grid-area: icon; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .1); color: var(--muted); font-weight: 900; }
+.dr-icon .ico { width: 18px; height: 18px; }
+.dr.is-right .dr-icon { background: var(--good); color: var(--ink); }
+.dr.is-wrong .dr-icon { background: var(--bad); color: var(--ink); }
+.dr.is-doubt .dr-icon { background: var(--mustard); color: var(--ink); }
+.dr-name { grid-area: name; font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dr-name small { font-weight: 400; color: var(--muted); }
+.dr-answer { grid-area: answer; min-width: 0; overflow-wrap: anywhere; color: var(--text); font-size: .95rem; }
+.dr.is-none .dr-answer, .dr.is-pass .dr-answer { color: var(--muted); font-style: italic; }
+.dr-verdict { grid-area: verdict; display: flex; flex-direction: column; align-items: flex-end; font-weight: 800; font-size: .9rem; text-align: right; }
+.dr-verdict small { font-weight: 400; color: var(--muted); font-size: .76rem; }
+.dr.is-right .dr-verdict { color: var(--good); }
+.dr.is-wrong .dr-verdict { color: #ff9a9a; }
+.dr.is-doubt .dr-verdict { color: var(--mustard); }
+
+/* the spelleider's regie */
+.regie { display: flex; flex-direction: column; gap: 10px; }
+.regie-h { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.regie-h .cat-chip { font-size: .85rem; }
+.regie p { margin: 0; }
+.regie-doubts { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 18px; border: 2px solid var(--mustard); background: rgba(255, 198, 73, .1); scroll-margin: 90px 0 120px; }
+.regie-doubts:focus { outline: none; }
+.regie-doubts.is-called { animation: regie-call .5s ease-in-out 3; }
+@keyframes regie-call { 50% { box-shadow: 0 0 0 8px rgba(255, 198, 73, .35); } }
+.regie-doubt-head { color: #ffe3a3; }
+.regie-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.rg { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 10px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); min-height: 56px; }
+.rg.is-doubt { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px; background: rgba(0, 0, 0, .25); border-color: rgba(255, 198, 73, .5); }
+.rg-icon { width: 28px; height: 28px; flex: none; border-radius: 50%; display: grid; place-items: center; }
+.rg-icon .ico { width: 18px; height: 18px; }
+.rg.is-right .rg-icon { background: var(--good); color: var(--ink); }
+.rg.is-wrong .rg-icon { background: var(--bad); color: var(--ink); }
+.rg-who { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.rg-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rg-answer { font-weight: 700; overflow-wrap: anywhere; }
+.rg.is-doubt .rg-answer { font-size: 1.3rem; font-family: var(--font-display); }
+.rg-note { color: var(--muted); font-size: .8rem; }
+.rg-judge { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.rg-judge .btn { min-height: 56px; font-size: 1.15rem; }
+.rg-flip { flex: none; min-height: 44px; padding: 6px 12px; font-size: .9rem; }
+.regie-pending { color: var(--muted); }
+.regie-pending b { color: var(--text); }
+.regie-empty { margin: 0; }
+.btn.is-doubts { background: linear-gradient(135deg, #ffd56e, var(--mustard)); color: var(--ink); }
+
+/* everybody's progress */
+.disco-progress { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.disco-progress li {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name nums" "bar bar"; gap: 4px 10px; align-items: center;
+  padding: 8px 12px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line);
+}
+.disco-progress li.is-you { border-color: rgba(185, 140, 255, .6); }
+.disco-progress li.is-bingo { border-color: var(--mustard); background: rgba(255, 198, 73, .12); }
+.dp-name { grid-area: name; font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dp-name small { font-weight: 400; color: var(--muted); }
+.dp-nums { grid-area: nums; font-size: .88rem; color: var(--muted); white-space: nowrap; }
+.dp-nums b { color: var(--text); font-family: var(--font-display); font-size: 1.05rem; }
+.dp-bingo { color: var(--cat-ink) !important; background: var(--mustard); border-radius: 999px; padding: 0 8px; font-size: .85rem !important; margin-right: 4px; }
+.dp-almost { color: var(--mustard); font-style: normal; font-weight: 800; }
+.dp-bar { grid-area: bar; height: 6px; border-radius: 999px; background: rgba(0, 0, 0, .35); overflow: hidden; }
+.dp-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--cat-decade), var(--cat-artist), var(--cat-year), var(--cat-title)); }
+
+/* ---------- the spelleider's screen ---------- */
+.disco-host, .disco-host-show, .disco-host-ctl { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.is-disco .disco-host-show .answer-card { padding: 14px 16px; }
+
+/* a phone or tablet: one column; the controls come before everybody's progress */
+@media (max-width: 899.98px) {
+  .is-disco .disco-host-show, .is-disco .disco-host-ctl { display: contents; }
+  .is-disco .disco-host [data-region="stage"] { order: 1; }
+  .is-disco .disco-host [data-region="song"] { order: 2; }
+  .is-disco .disco-host [data-region="main"] { order: 3; }
+  .is-disco .disco-host [data-region="pv"] { order: 4; }
+  .is-disco .disco-host [data-region="players"] { order: 5; }
+  .is-disco .disco-host [data-region="own"] { order: 6; }
+  .is-disco .disco-host [data-region="progress"] { order: 7; }
+  .is-disco.view-revealed .disco-host [data-region="players"] { order: 8; }
+  .is-disco .disco-host [data-region="mix"] { order: 9; }
+  .is-disco .disco-host [data-region="cta"] { order: 10; }
+}
+
+/* a laptop or tv: the ball and the category big on the left, readable from across the room */
+@media (min-width: 900px) {
+  body.tt-disco .app { max-width: 1280px; }
+  .screen-room-host.is-disco { font-size: 1.12rem; }
+  .is-disco .disco-host { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); gap: 32px; align-items: start; }
+  .is-disco .disco-host-show { position: sticky; top: 12px; }
+  .is-disco .disco-stage.is-big .disco-ball-box { width: min(440px, 32vw, 62vh); }
+  .is-disco .disco-stage.is-big .disco-banner-in { padding: 16px 22px; gap: 18px; border-radius: 24px; }
+  .is-disco .disco-stage.is-big .disco-banner-ico { width: 92px; height: 92px; border-radius: 22px; }
+  .is-disco .disco-stage.is-big .disco-banner-ico .cat-ico { width: 68px; height: 68px; }
+  .is-disco .disco-stage.is-big .disco-banner-name { font-size: 3.1rem; }
+  .is-disco .disco-stage.is-big .disco-banner-how { font-size: 1.45rem; }
+  .is-disco .disco-stage.is-big .disco-banner-in.is-spinning .disco-banner-name { font-size: 2.2rem; }
+  .is-disco .disco-stage.is-big .disco-banner-kicker { font-size: 1.3rem; }
+  /* after the reveal the song card needs the room: small ball next to the category */
+  .is-disco.view-revealed .disco-stage.is-big { flex-direction: row; gap: 12px; }
+  .is-disco.view-revealed .disco-stage.is-big .disco-ball-box { width: 170px; margin: -14px -8px -14px -12px; }
+  .is-disco.view-revealed .disco-stage.is-big .disco-banner { flex: 1; min-width: 0; }
+  .is-disco.view-revealed .disco-stage.is-big .disco-banner-name { font-size: 2.4rem; }
+  .is-disco.view-revealed .disco-stage.is-big .disco-banner-ico { width: 72px; height: 72px; }
+  .is-disco.view-revealed .disco-stage.is-big .disco-banner-ico .cat-ico { width: 54px; height: 54px; }
+  .is-disco .room-h { font-size: 1.35rem; }
+  .is-disco [data-testid="room-answered"] { font-size: 1.8rem; color: var(--text); }
+  .is-disco .rp { min-height: 56px; font-size: 1.2rem; }
+  .is-disco .disco-progress li { font-size: 1.2rem; padding: 10px 16px; }
+  .is-disco .dp-nums { font-size: 1.05rem; }
+  .is-disco .dp-nums b { font-size: 1.35rem; }
+  .is-disco .dp-bar { height: 9px; }
+  .is-disco .rg-answer { font-size: 1.25rem; }
+  .is-disco .rg.is-doubt .rg-answer { font-size: 1.7rem; }
+  .is-disco .disco-host-show .answer-year { font-size: 5rem; }
+  .is-disco .disco-host-show .answer-artist { font-size: 1.8rem; }
+  .is-disco .disco-host-show .answer-title { font-size: 1.5rem; }
+  .is-disco .sticky-cta { margin: 6px 0 0; padding-left: 0; padding-right: 0; }
+  .is-disco .host-own .disco-card { max-width: 440px; width: 100%; margin: 0 auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dq.is-choosable:not(.is-chosen), .disco-choose.is-todo, .regie-doubts.is-called { animation: none !important; }
+  .dq.is-choosable:not(.is-chosen) { box-shadow: 0 0 0 3px #fff; }
+  .dq.is-chosen .dq-stamp, .just-landed .disco-banner-in, .disco-bingo { animation: none; }
+}
+
+/* rules screen */
+.rule .disco-legend { display: grid; padding: 0; margin: 2px 0 12px; }
+.rule-disco ol + p { margin-top: 10px; }

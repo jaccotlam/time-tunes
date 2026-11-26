@@ -71,8 +71,7 @@ export const MULTI = {
   seed: 7, //     timetunesr.multiSeed.v1: vaste kaarten en nummers
   size: 3,
   firstSong: '075', // het eerste nummer met deze zaaiwaarde (2017); alleen om het fragment vooraf te laden
-  // De kamercode is in de app willekeurig. De opname kiest er een met smalle letters: bij brede
-  // letters (M, W) duwt de code in de lobby de QR-code buiten beeld (bug in de app, zie README).
+  // De kamercode is in de app willekeurig; de opname gebruikt altijd deze.
   code: 'KJRT',
 };
 

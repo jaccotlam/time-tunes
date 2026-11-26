@@ -21,8 +21,8 @@ export function storedRoom() {
   return G.isValidRoom(r) && isValidCode(r.code) ? r : null;
 }
 
-/** The Quiz needs the room server (its clock): without one it is Bingo. */
-const noQuiz = (s) => (s?.game === 'quiz' ? { ...s, game: 'bingo' } : s);
+/** The Quiz and Discobingo need the room server (its clock, its judging): without one it is Bingo. */
+const noQuiz = (s) => (G.SERVER_GAMES.includes(s?.game) ? { ...s, game: 'bingo' } : s);
 
 export function createHostSession() {
   let room = storedRoom();

@@ -15,6 +15,7 @@
 // - shuffled with the game seed (predictable for tests with a fixed seed).
 import { seededRandom, shuffle } from '../logic.js';
 import { normalizeTitle, normalizeArtist, splitArtists } from '../spotify-match.js';
+import { DISCO_MIN_SONGS } from './disco.js';
 
 /** Most songs one phone may add to a room (Spotify gives at most 50 top songs per call). */
 export const MIX_PER_PLAYER = 50;
@@ -161,12 +162,13 @@ export function mixStats(contrib) {
 
 /**
  * How many songs a game from the mix needs at least. Bingo: enough rounds for somebody
- * to complete a line (3×3: 10, 4×4: 16). Tijdlijn: one start card per player plus the
+ * to complete a line (3×3: 10, 4×4: 16); Discobingo 25. Tijdlijn: one start card per player plus the
  * goal. Never less than the game machine itself asks for (players + 2).
  */
 export function mixMinimum(settings = {}, players = 1) {
   const n = Math.max(1, Number(players) || 1);
   if (settings.game === 'quiz') return Math.min(Number(settings.questions) || 10, 10); // Quiz: ten questions
+  if (settings.game === 'disco') return Math.max(n + 2, DISCO_MIN_SONGS); // Discobingo: one song per square
   if (settings.game === 'timeline') return Math.max(n + 2, (Number(settings.goal) || 10) + n);
   return Math.max(n + 2, Number(settings.size) === 3 ? 10 : 16);
 }

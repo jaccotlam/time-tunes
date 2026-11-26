@@ -1,4 +1,5 @@
 import { icons } from '../ui.js';
+import { legendHtml } from './room-disco.js';
 
 export const name = 'rules';
 
@@ -55,7 +56,7 @@ export function render(root) {
 
       <section class="rule rule-multi" data-testid="rules-multi">
         <h2><span class="rule-num">3</span>Ieder een eigen telefoon</h2>
-        <p>Speel Bingo of Tijdlijn samen, terwijl iedereen op zijn eigen telefoon antwoordt.</p>
+        <p>Speel Discobingo, Bingo of Tijdlijn samen, terwijl iedereen op zijn eigen telefoon antwoordt.</p>
         <ol>
           <li>De spelleider kiest <em>Maak een kamer</em>. Zijn toestel speelt de muziek: zet het op een speaker. De spelleider mag zelf ook meespelen.</li>
           <li>De rest kiest <em>Doe mee</em> en vult de kamercode van 4 letters in, of scant de QR-code op het scherm van de spelleider.</li>
@@ -65,9 +66,23 @@ export function render(root) {
         </ol>
       </section>
 
+      <section class="rule rule-multi rule-disco" data-testid="rules-disco">
+        <h2><span class="rule-num">4</span>Discobingo</h2>
+        <p>Bingo met een discobal. Ieder speelt op een eigen telefoon. Iedereen heeft een eigen 5×5-kaart met vier soorten vakjes en een ster in het midden.</p>
+        ${legendHtml('rules-disco-legend')}
+        <ol>
+          <li>Per nummer draait de discobal en kiest de vraag: <em>decennium</em>, <em>artiest of band</em>, <em>jaartal</em> (2 jaar ernaast mag) of <em>titel</em>. Alle vier komen even vaak aan de beurt.</li>
+          <li>Pas als de bal stilstaat, begint de muziek. Iedereen antwoordt op zijn eigen telefoon; wijzigen mag tot de onthulling. Weet je het niet? Tik op <em>Weet ik niet</em>.</li>
+          <li>Een kleine typefout is gewoon goed. Twijfelgeval? Dan beslist de spelleider met <em>Goed</em> of <em>Fout</em>. Elk oordeel draait hij met één tik om.</li>
+          <li>Goed? Dan kies je zelf een open vakje van die kleur en stempel je het af. Verplaatsen mag tot de bal weer draait; wie niets kiest, krijgt het beste vakje.</li>
+          <li>Je wint met 1 lijn, 2 lijnen of een volle kaart; de spelleider kiest dat. Een lijn is een rij, kolom of diagonaal; de ster telt mee. Halen meerdere spelers het tegelijk, dan delen ze de winst.</li>
+        </ol>
+        <p>Discobingo werkt alleen met de kamerserver en heeft minstens 25 nummers nodig. Wie later instapt, krijgt een nieuwe kaart met evenveel gratis vakjes als de speler die er het minst heeft.</p>
+      </section>
+
       <section class="rule rule-multi" data-testid="rules-quiz">
-        <h2><span class="rule-num">4</span>Quiz</h2>
-        <p>Een muziekquiz voor een verjaardag of feestje, met ieder een eigen telefoon. De spelleider kiest de muziek (het ingebouwde deck of een eigen playlist), het aantal vragen, de soort vragen en de bedenktijd.</p>
+        <h2><span class="rule-num">5</span>Quiz</h2>
+        <p>Een muziekquiz voor een feest of een avond met vrienden, met ieder een eigen telefoon. De spelleider kiest de muziek (het ingebouwde deck of een eigen playlist), het aantal vragen, de soort vragen en de bedenktijd.</p>
         <ol>
           <li>Het nummer speelt bij de spelleider. Op elke telefoon staat dezelfde vraag met vier antwoorden: <em>uit welk jaar</em>, <em>wie is de artiest</em> of <em>hoe heet dit nummer</em>.</li>
           <li>De klok start zodra de muziek speelt. Je kiest één antwoord; wijzigen kan niet.</li>

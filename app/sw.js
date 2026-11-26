@@ -5,7 +5,7 @@
 // cross-origin and are never cached here; the same goes for Spotify
 // (api.spotify.com, accounts.spotify.com).
 // Bump VERSION when the list below changes; old caches are removed on activate.
-const VERSION = 'v3-5';
+const VERSION = 'v3-6';
 const CACHE = `timetunesr-shell-${VERSION}`;
 const SHELL = [
   './',
@@ -73,6 +73,10 @@ const SHELL = [
   'js/screens/room-mix.js',
   'js/spotify-setup.js',
   'js/screens/spotify-share.js',
+  'js/multi/disco.js',
+  'js/discoball.js',
+  'js/screens/room-disco.js',
+  'css/disco.css',
 ];
 const NETWORK_TIMEOUT_MS = 4000;
 

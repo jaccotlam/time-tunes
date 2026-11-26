@@ -63,9 +63,11 @@
 .rp.is-you { border-color: rgba(185, 140, 255, .6); }
 
 /* join box with code + QR */
-.joinbox { display: grid; grid-template-columns: 1fr 132px; gap: 6px 14px; align-items: center; padding: 14px; border-radius: var(--radius-lg); background: var(--surface); border: 2px solid rgba(185, 140, 255, .55); }
+/* the code shrinks with its column (container units), so wide letters (MMWM) never push the QR out */
+.joinbox { display: grid; grid-template-columns: minmax(0, 1fr) clamp(112px, 31vw, 132px); gap: 6px 14px; align-items: center; padding: 14px; border-radius: var(--radius-lg); background: var(--surface); border: 2px solid rgba(185, 140, 255, .55); }
 .joinbox-kicker { margin: 0; color: var(--muted); text-transform: uppercase; letter-spacing: .12em; font-size: .78rem; }
-.joinbox-code { margin: 0; font-family: var(--font-display); font-weight: 900; font-size: clamp(2.8rem, 15vw, 3.6rem); letter-spacing: .14em; line-height: 1.05; color: var(--mustard); }
+.joinbox-text { min-width: 0; container-type: inline-size; }
+.joinbox-code { margin: 0; font-family: var(--font-display); font-weight: 900; font-size: clamp(2.4rem, 12vw, 3.6rem); font-size: clamp(1.9rem, 20cqi, 3.6rem); letter-spacing: .12em; line-height: 1.05; color: var(--mustard); white-space: nowrap; }
 .joinbox-help { margin: 4px 0 0; font-size: .85rem; color: var(--muted); }
 .joinbox-help b { color: var(--text); }
 .joinbox-qr { display: block; border-radius: 12px; overflow: hidden; background: #fff; padding: 4px; }
