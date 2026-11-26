@@ -337,6 +337,13 @@ export function render(root, { params, navigate }) {
   let seenPlayers = null; // ids seen in the lobby: who is new gets a burst
   let reveal = { key: '', at: 0, loaded: false }; // when this screen saw the reveal of a round
   let loadedKey = null; // the round that was already revealed when this screen came in ('' = none)
+  let sawLive = false; // this display saw the game running (came in at the end, or reloaded: the ceremony goes to its overview)
+  let cer = { k: null, start: 0, timer: 0, stepKey: '' }; // the prize ceremony of the won game
+  // reactions float up from the bottom, never across the song or a QR code
+  const floats = createFloatLayer(document.body, {
+    avoid: () => [...root.querySelectorAll('[data-testid="screen-qr"], .s-badge, [data-testid="screen-song"], .quiz-song, .quiz-correct, [data-testid="room-winner-name"], .aw-spot-title')].map((e) => e.getBoundingClientRect()),
+  });
+  const offReact = session.onReaction?.((r) => { if (mode && mode !== 'error' && mode !== 'boot') floats.push(r); });
 
   function modeFor() {
     if (session.error) return 'error';
@@ -417,9 +424,10 @@ export function render(root, { params, navigate }) {
   }
 
   function region(nm, key, build) {
-    if (!regions[nm] || keys[nm] === key) return;
+    if (!regions[nm] || keys[nm] === key) return false;
     keys[nm] = key;
     patch(regions[nm], build());
+    return true;
   }
 
   /** Discobingo after the reveal: the answers first, now and then the ranking as its own moment. */
@@ -441,6 +449,7 @@ export function render(root, { params, navigate }) {
     const m = modeFor();
     if (m !== mode) { mode = m; skeleton(m); }
     const v = session.view;
+    if (v?.game && v.phase !== 'won' && v.phase !== 'lobby') sawLive = true;
     if (v && loadedKey == null) loadedKey = v.phase === 'revealed' && v.game?.disco ? `${v.game.round}:${v.game.disco.cat}` : '';
     const el = root.querySelector('[data-testid="screen-display"]');
     if (!el) return;
@@ -586,19 +595,58 @@ export function render(root, { params, navigate }) {
       <div class="sg-res">${plainAnswersHtml(v)}<section class="sa-stand" data-testid="screen-standings"><h2 class="sa-h">Tussenstand</h2>${standingsHtml(v)}</section></div>`);
   }
 
+  /**
+   * The prize ceremony of a won Discobingo with awards: { step: winner | award | overview, idx,
+   * awards }, or null. Timed from when this display saw the game being won; a display that came
+   * in at the end (a reload) goes straight to the overview, never a replay.
+   */
+  function ceremony(v) {
+    const awards = v.game.kind === 'disco' ? v.game.disco?.awards || [] : [];
+    if (!awards.length) return null;
+    const k = JSON.stringify([v.game.winnerIds, v.game.round, awards.map((a) => a.kind)]);
+    if (cer.k !== k) { clearTimeout(cer.timer); cer = { k, start: sawLive ? Date.now() : -Infinity, timer: 0, stepKey: '' }; }
+    const t = Date.now() - cer.start;
+    const n = awards.length;
+    let step = 'overview';
+    let idx = -1;
+    let next = null;
+    if (t < CEREMONY_WINNER_MS) { step = 'winner'; next = CEREMONY_WINNER_MS - t; } else if (t < CEREMONY_WINNER_MS + n * CEREMONY_AWARD_MS) {
+      step = 'award';
+      idx = Math.floor((t - CEREMONY_WINNER_MS) / CEREMONY_AWARD_MS);
+      next = CEREMONY_WINNER_MS + (idx + 1) * CEREMONY_AWARD_MS - t;
+    }
+    if (next != null && !cer.timer) cer.timer = setTimeout(() => { cer.timer = 0; draw(); }, next + 20);
+    return { step, idx, awards };
+  }
+
   function drawWon(v) {
     const g = v.game;
+    const c = ceremony(v);
     // the confetti lives inside the winner block (behind it); a redraw restarts it only when the result changes
-    region('main', JSON.stringify([g.winners, g.quiz?.ranking, g.disco?.progress, v.players]), () => confettiHtml() + (() => {
+    const fresh = region('main', JSON.stringify([g.winners, g.quiz?.ranking, g.disco?.progress, g.disco?.awards, v.players]), () => confettiHtml() + (() => {
       const names = g.winners || [];
       if (g.kind === 'quiz') return `<div class="sw-quiz" data-testid="screen-winner" data-names="${esc(names.join('|'))}">${quizPodiumHtml(v)}</div>`;
       const win = names.length ? winnerHtml(v) : '<div class="winner" data-testid="room-winner"><h2 class="winner-name" data-testid="room-winner-name">Het spel is afgelopen</h2></div>';
       const rank = g.kind === 'disco' ? rankingHtml(v, { reason: 'won', limit: 10 }) : `<section class="sa-stand" data-testid="screen-standings"><h2 class="sa-h">Eindstand</h2>${standingsHtml(v)}</section>`;
-      return `<div class="sw-in" data-testid="screen-winner" data-names="${esc(names.join('|'))}">
+      return `<div class="sw-in${c ? ' has-cer' : ''}" data-testid="screen-winner" data-names="${esc(names.join('|'))}"${c ? ` data-step="${c.step}"` : ''}>
         <div class="sw-hero">${g.kind === 'disco' && names.length && g.endedBy !== 'pile' ? '<p class="sw-bingo" aria-hidden="true">BINGO!</p>' : ''}${win}<p class="sw-next">Nog een potje? De spelleider start zo.</p></div>
         <div class="sw-rank">${rank}</div>
+        ${c ? `<div class="sw-cer" data-testid="screen-ceremony" data-step="${c.step}" data-award="${c.idx}" data-n="${c.awards.length}"><div class="sw-cer-in"></div></div>` : ''}
       </div>`;
     })());
+    if (!c) return;
+    // the steps only change the side of the stage: the winner (and its confetti) stays as it is
+    const key = `${c.step}|${c.idx}|${JSON.stringify(c.awards)}`;
+    if (!fresh && cer.stepKey === key) return;
+    cer.stepKey = key;
+    const inEl = root.querySelector('.sw-in');
+    const stage = root.querySelector('[data-testid="screen-ceremony"]');
+    if (!inEl || !stage) return;
+    inEl.dataset.step = c.step;
+    stage.dataset.step = c.step;
+    stage.dataset.award = String(c.idx);
+    patch(stage.firstElementChild, c.step === 'award' ? awardSpotHtml(c.awards[c.idx], c.idx, c.awards.length)
+      : c.step === 'overview' ? `<section class="sw-prizes" data-testid="screen-awards-box"><h2 class="sa-h sw-prizes-h"><span aria-hidden="true">🏅</span> Prijzen</h2>${awardsListHtml(c.awards, { testid: 'screen-awards', itemTestid: 'screen-award-item', cls: 'is-tv' })}</section>` : '');
   }
 
   // ---------- fullscreen, the idle cursor ----------
@@ -654,6 +702,9 @@ export function render(root, { params, navigate }) {
     clearTimeout(idleTimer);
     clearInterval(ticker);
     clearInterval(quizTicker);
+    clearTimeout(cer.timer);
+    offReact?.();
+    floats.destroy();
     releaseAwake();
     unsub();
     stage?.destroy();
