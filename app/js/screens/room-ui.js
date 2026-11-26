@@ -88,7 +88,7 @@ export function playersHtml(view, { host = false, removable = false } = {}) {
 export function standingsHtml(view) {
   const g = view.game;
   const list = view.players.filter((p) => p.playing).slice().sort((a, b) => b.score - a.score);
-  const unit = g.kind === 'bingo' ? 'vakjes' : g.kind === 'quiz' ? 'punten' : `van ${g.goal}`;
+  const unit = g.kind === 'bingo' || g.kind === 'disco' ? 'vakjes' : g.kind === 'quiz' ? 'punten' : `van ${g.goal}`;
   const winners = new Set(g.winnerIds || []);
   const roundWinners = new Set(g.reveal?.roundWinners || []);
   return `<ol class="ranking room-standings" data-testid="room-standings" aria-label="Tussenstand">
@@ -377,7 +377,9 @@ export function winnerHtml(view) {
   const title = names.length === 1 ? `${esc(names[0])} wint!` : `Gedeelde winst: ${names.map(esc).join(' & ')}`;
   const why = g.endedBy === 'pile'
     ? 'De nummers zijn op: de hoogste score wint.'
-    : g.kind === 'bingo' ? 'Als eerste een volle rij, kolom of diagonaal.' : `Als eerste ${g.goal} kaarten op de juiste plek.`;
+    : g.kind === 'bingo' ? 'Als eerste een volle rij, kolom of diagonaal.'
+      : g.kind === 'disco' ? `Als eerste ${g.disco?.win === 'full' ? 'een volle kaart' : g.disco?.win === 'line2' ? '2 lijnen' : '1 lijn'} vol.`
+        : `Als eerste ${g.goal} kaarten op de juiste plek.`;
   return `<div class="winner" data-testid="room-winner">
     <span class="winner-trophy">${icons.trophy}</span>
     <h2 class="winner-name" data-testid="room-winner-name">${title}</h2>
@@ -414,7 +416,7 @@ export function keepAwake() {
 }
 
 /** Name of the game for titles. */
-export const gameName = (kind) => (kind === 'timeline' ? 'Tijdlijn' : kind === 'quiz' ? 'Quiz' : 'Bingo');
+export const gameName = (kind) => (kind === 'timeline' ? 'Tijdlijn' : kind === 'quiz' ? 'Quiz' : kind === 'disco' ? 'Discobingo' : 'Bingo');
 
 /* ---------- room server: step-by-step diagnosis, leader away ---------- */
 

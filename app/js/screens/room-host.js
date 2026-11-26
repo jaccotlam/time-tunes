@@ -2,7 +2,8 @@
 // hidden song on this device (on a speaker), reveal, judge, next song. The host may play
 // along on the same device; that panel is built from the same player view as a phone.
 import * as player from '../player.js';
-import { playableCards } from '../multi/game.js';
+import { playableCards, PREFERRED_GAME } from '../multi/game.js';
+import { DISCO_MIN_SONGS } from '../multi/disco.js';
 import { createHostSession, storedRoom } from '../multi/host-session.js';
 import { usesServer, createServerHostSession, storedServerHost } from '../multi/server-session.js';
 import { DEFAULT_GOAL } from '../logic.js';
@@ -20,9 +21,16 @@ import {
   keepAwake, diagHtml, diagKey, diagVisible,
   quizQuestionHtml, quizRevealHtml, quizPodiumHtml, quizLeft, tickQuizClocks,
 } from './room-ui.js';
+import {
+  createDiscoStage, discoLandedAt, discoController, discoAnswerHtml, discoCardHtml, cardStatsHtml, spinWaitHtml,
+  discoMyResultHtml, regieHtml, discoProgressHtml, nextButtonHtml, discoLobbyHtml,
+} from './room-disco.js';
 
 export const name = 'room-host';
 const HOST_NAME_KEY = 'timetunesr.multiName.v1';
+const SETTINGS_KEY = 'timetunesr.multiSettings.v1';
+/** A laptop or tv: the big ball keeps turning while the song plays. */
+const wide = () => typeof matchMedia === 'function' && matchMedia('(min-width: 900px)').matches;
 
 export function render(root, { deck, navigate }) {
   const cards = playableCards(deck.cards.filter((c) => c.previewUrl || c.itunesId || c.spotifyId));
@@ -71,6 +79,18 @@ export function render(root, { deck, navigate }) {
     },
     refresh: () => draw(),
   });
+  // Discobingo: the spelleider's own answer form (playing along), the disco ball, the delayed music start
+  const dctl = discoController({
+    getView: () => session.hostView(),
+    send: (ans) => {
+      try { session.answer(ans); vibrate(20); } catch (e) { toast(e.message, { kind: 'warn' }); }
+    },
+    refresh: () => draw(),
+  });
+  let stage = null;
+  let discoPlayFor = null; // "round:songId" that starts playing once the ball has landed
+  /** Discobingo is running (not the lobby). */
+  const inDisco = () => session?.room?.game?.kind === 'disco' && session.room.phase !== 'lobby';
 
   const spectator = () => session.spectatorView();
   /** A quiz is running (not the lobby). */
@@ -97,11 +117,13 @@ export function render(root, { deck, navigate }) {
 
   function skeleton(vn) {
     if (unmountPv) { unmountPv(); unmountPv = null; }
+    stage?.destroy();
+    stage = null;
     for (const k of Object.keys(regions)) delete regions[k];
     const r = session.room;
     const code = r?.code || session.code || '';
     const quit = r ? '<button class="btn btn-small btn-ghost" type="button" data-action="close-room" data-testid="host-close">Sluiten</button>' : '<span class="topbar-spacer"></span>';
-    const body = {
+    let body = {
       setup: '<div data-region="main"></div>',
       connecting: '<div data-region="main"></div>',
       lobby: `<div data-region="status"></div><div data-region="join"></div><div data-region="players"></div><div data-region="main"></div><div data-region="mix"></div><div data-region="cta"></div>`,
@@ -114,8 +136,25 @@ export function render(root, { deck, navigate }) {
       won: '<div data-region="status"></div><div data-region="main"></div><div data-region="players"></div><div data-region="mix"></div>',
     }[vn];
     const quiz = r?.game?.kind === 'quiz' && vn !== 'lobby';
+    const disco = r?.game?.kind === 'disco' && vn !== 'lobby';
+    // Discobingo: on a laptop / tv the ball (and the song after the reveal) on the left, the controls on the right
+    const pv = `<div class="place-player" data-region="pv">${playerViewHtml({ compact: true })}</div>`;
+    const discoBody = {
+      answering: `<div data-region="status"></div>
+        <div class="disco-host">
+          <div class="disco-host-show"><div class="disco-stage-host" data-region="stage"></div><div data-region="song"></div><div data-region="progress"></div></div>
+          <div class="disco-host-ctl">${pv}<div data-region="players"></div><div data-region="own"></div><div data-region="mix"></div><div data-region="cta"></div></div>
+        </div>`,
+      revealed: `<div data-region="status"></div>
+        <div class="disco-host">
+          <div class="disco-host-show"><div class="disco-stage-host" data-region="stage"></div><div data-region="song"></div><div data-region="progress"></div></div>
+          <div class="disco-host-ctl"><div data-region="main"></div>${pv}<div data-region="own"></div><div data-region="players"></div><div data-region="mix"></div><div data-region="cta"></div></div>
+        </div>`,
+    }[vn];
+    if (disco && discoBody) body = discoBody;
     document.body.classList.toggle('tt-quiz', quiz); // wide screens: the quiz big enough to read from the couch
-    root.innerHTML = `<section class="screen screen-room screen-room-host view-${vn}${quiz ? ' is-quiz' : ''}" data-testid="screen-room-host" data-view="${vn}" data-code="${esc(code)}">
+    document.body.classList.toggle('tt-disco', disco);
+    root.innerHTML = `<section class="screen screen-room screen-room-host view-${vn}${quiz ? ' is-quiz' : ''}${disco ? ' is-disco' : ''}" data-testid="screen-room-host" data-view="${vn}" data-code="${esc(code)}">
       <header class="topbar">
         <a class="icon-btn" href="#/" aria-label="Naar start" data-testid="back-home">${icons.home}</a>
         <h1 class="topbar-title">${r || vn === 'connecting' ? `Kamer <span class="room-code-inline" data-testid="room-code">${esc(code)}</span>` : 'Maak een kamer'}</h1>
@@ -136,6 +175,16 @@ export function render(root, { deck, navigate }) {
     patch(regions[nm], build());
   }
 
+  /** Discobingo: the ball spins once per round on this screen too. Returns: has it landed? */
+  function syncStage(vn) {
+    const sv = spectator();
+    if (!regions.stage || !inDisco() || !sv?.game?.disco || (vn !== 'answering' && vn !== 'revealed')) return true;
+    if (!stage) stage = createDiscoStage(regions.stage, { big: wide(), onLand: () => draw() });
+    stage.sync(sv.game.disco, { now: serverNow(), phase: session.room.phase, round: sv.game.round });
+    return stage.landed;
+  }
+  const discoLanded = () => (stage ? stage.landed : serverNow() >= discoLandedAt(spectator()?.game?.disco));
+
   /** Keep the hidden player on the running song. */
   function syncAudio() {
     const r = session.room;
@@ -143,11 +192,25 @@ export function render(root, { deck, navigate }) {
     const song = g && r.phase !== 'won' && r.phase !== 'lobby' ? session.currentSong() : null;
     if (!song) {
       if (loadedFor) { player.stop(); loadedFor = null; }
+      discoPlayFor = null;
       return;
     }
     const k = `${g.round}:${song.id}`;
-    if (k === loadedFor) return;
+    if (k === loadedFor) {
+      // Discobingo: the music starts when the ball has landed (the round was started by a tap here)
+      if (discoPlayFor === k && discoLanded()) { discoPlayFor = null; player.play(); }
+      return;
+    }
     loadedFor = k;
+    if (g.kind === 'disco' && r.phase === 'answering') {
+      // load now (so it is ready), play once the ball lands; the tap that started the round unlocked the audio
+      player.load(song, { autoplay: false });
+      discoPlayFor = startedHere ? k : null;
+      startedHere = false;
+      if (discoPlayFor && discoLanded()) { discoPlayFor = null; player.play(); }
+      return;
+    }
+    discoPlayFor = null;
     player.load(song, { autoplay: startedHere });
     if (startedHere) player.play(); // inside the tap where possible (iOS)
     startedHere = false;
@@ -157,8 +220,10 @@ export function render(root, { deck, navigate }) {
     const vn = currentView();
     const kind = session.room?.game?.kind || '';
     if (vn !== viewName || kind !== drawnKind) { viewName = vn; drawnKind = kind; skeleton(vn); window.scrollTo(0, 0); }
+    const landed = syncStage(vn);
     syncAudio();
     ctl.sync();
+    dctl.sync();
     const r = session.room;
     root.querySelector('[data-testid="screen-room-host"]').dataset.code = r?.code || session.code || '';
     const codeEl = root.querySelector('[data-testid="room-code"]');
@@ -172,8 +237,9 @@ export function render(root, { deck, navigate }) {
     region('join', JSON.stringify([r.code]), () => joinBoxHtml(r.code));
     region('players', JSON.stringify([sv.players, r.phase]), () => playersBlock(sv));
     region('sheet', JSON.stringify([sheetOpen, r.code]), () => (sheetOpen ? sheetHtml(r.code) : ''));
-    // a spelleider screen that does not lead (somebody took over) does not play the music
-    if (regions.pv) regions.pv.hidden = !leads();
+    // a spelleider screen that does not lead (somebody took over) does not play the music;
+    // Discobingo: the player appears when the ball has landed (that is when the music starts)
+    if (regions.pv) regions.pv.hidden = !leads() || (inDisco() && vn === 'answering' && !landed);
     ensureMix();
     const mixMeta = viaServer ? JSON.stringify([m?.mix, playSource()]) : '';
     region('mix', `${vn}|${r.settings.music}|${viaServer ? mixKey(ms, m) : 'p2p'}`, () => {
@@ -183,6 +249,11 @@ export function render(root, { deck, navigate }) {
     if (vn === 'lobby') {
       region('main', JSON.stringify([r.settings, r.players.length, mixMeta, leads()]), lobbyHtml);
       region('cta', JSON.stringify([r.players.length, r.settings, leads(), mixMeta]), () => (leads() ? lobbyCta() : ''));
+    } else if (vn === 'answering' && kind === 'disco') {
+      region('progress', JSON.stringify([sv.game.disco.progress]), () => `<h2 class="room-h">Voortgang</h2>${discoProgressHtml(sv)}`);
+      const hv = session.hostView();
+      region('own', `${dctl.key()}|${landed}`, () => (hv ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw antwoord, ${esc(hv.you.name)}</h2>${landed ? discoAnswerHtml(hv, dctl.local) : spinWaitHtml()}${hv.game?.mine ? discoCardHtml(hv.game.mine, { cat: landed ? hv.game.disco.cat : null, testid: 'host-disco-card', name: hv.you.name }) : ''}</section>` : ''));
+      region('cta', JSON.stringify([sv.players, leads()]), () => (leads() ? revealCta(sv) : ''));
     } else if (vn === 'answering' && kind === 'quiz') {
       const now = serverNow();
       const q = sv.game.quiz;
@@ -202,13 +273,20 @@ export function render(root, { deck, navigate }) {
       const hv = session.hostView();
       region('own', JSON.stringify([hv?.game?.quiz?.reveal, hv?.game?.mine]), () => (hv?.game?.quiz?.reveal?.mine ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw antwoord</h2>${quizRevealHtml(hv, { onlyMine: true })}</section>` : ''));
       region('cta', JSON.stringify([sv.game.quiz.reveal?.last, leads()]), () => (leads() ? nextCta() : ''));
+    } else if (vn === 'revealed' && kind === 'disco') {
+      region('song', JSON.stringify([sv.game.reveal?.song]), () => songHtml(sv));
+      region('progress', JSON.stringify([sv.game.disco.progress]), () => `<h2 class="room-h">Voortgang</h2>${discoProgressHtml(sv)}`);
+      region('main', JSON.stringify([sv.game.reveal, sv.game.disco]), () => regieHtml(sv));
+      const hv = session.hostView();
+      region('own', JSON.stringify([hv?.game?.reveal?.mine, hv?.game?.disco, hv?.game?.mine]), () => (hv?.game?.mine ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw ronde, ${esc(hv.you.name)}</h2>${discoMyResultHtml(hv)}${ownCard(hv)}</section>` : ''));
+      region('cta', JSON.stringify([sv.game.disco, sv.game.reveal?.roundWinners, left(r.game), leads()]), () => (leads() ? nextButtonHtml(sv, { left: left(r.game) }) : ''));
     } else if (vn === 'revealed') {
       region('main', JSON.stringify([r.game.results, r.game.round, sv.players]), () => revealedHtml(sv));
       const hv = session.hostView();
       region('own', JSON.stringify([hv?.game]), () => (hv?.game?.mine ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw ronde</h2>${myResultHtml(hv)}${ownCard(hv)}</section>` : ''));
       region('cta', JSON.stringify([r.game.roundWinners, left(r.game), leads()]), () => (leads() ? nextCta() : ''));
     } else if (vn === 'won') {
-      region('main', JSON.stringify([r.game.winners, sv.players, leads(), sv.game.quiz?.ranking]), () => wonHtml(sv));
+      region('main', JSON.stringify([r.game.winners, sv.players, leads(), sv.game.quiz?.ranking, sv.game.disco?.progress, session.hostView()?.game?.mine]), () => wonHtml(sv));
     }
   }
 
@@ -325,13 +403,15 @@ export function render(root, { deck, navigate }) {
       <fieldset>
         <legend>Welk spel?</legend>
         <div class="size-pick">
+          <label class="size-opt room-disco-opt"><input type="radio" name="game" value="disco" ${s.game === 'disco' ? 'checked' : ''} ${viaServer ? '' : 'disabled'} data-testid="room-game-disco">
+            <span class="size-box"><b>Discobingo</b><small>de discobal kiest de vraag, jij kiest je vakje op een 5×5-kaart</small></span></label>
           ${opt('bingo', 'Bingo', 'eigen bingokaart, eerst een volle rij')}
           ${opt('timeline', 'Tijdlijn', 'eigen tijdlijn, eerst het doel')}
           <label class="size-opt room-quiz-opt"><input type="radio" name="game" value="quiz" ${s.game === 'quiz' ? 'checked' : ''} ${viaServer ? '' : 'disabled'} data-testid="room-game-quiz">
             <span class="size-box"><b>Quiz</b><small>vier antwoorden per nummer, snelheid telt</small></span></label>
         </div>
-        ${!viaServer ? '<p class="muted small" data-testid="room-quiz-server-only">De quiz werkt alleen via de kamerserver (die houdt de klok bij), niet bij rechtstreeks verbinden.</p>' : ''}
-        ${s.game === 'quiz' ? quizSettingsHtml(s) : s.game === 'bingo' ? `<div class="size-pick room-sub">
+        ${!viaServer ? '<p class="muted small" data-testid="room-quiz-server-only"><span data-testid="room-disco-server-only">Discobingo</span> en de quiz werken alleen via de kamerserver (die beoordeelt de antwoorden en houdt de klok bij), niet bij rechtstreeks verbinden.</p>' : ''}
+        ${s.game === 'disco' ? discoLobbyHtml(s, { have: cards.length, mix: viaServer && s.music === 'mix' }) : s.game === 'quiz' ? quizSettingsHtml(s) : s.game === 'bingo' ? `<div class="size-pick room-sub">
           ${[[3, '3×3', 'snel potje'], [4, '4×4', 'standaard']].map(([n, t, sub]) => `<label class="size-opt"><input type="radio" name="size" value="${n}" ${s.size === n ? 'checked' : ''} data-testid="room-size-${n}"><span class="size-box"><b>${t}</b><small>${sub}</small></span></label>`).join('')}
         </div>` : `<div class="stepper room-sub">
           <button class="icon-btn" type="button" data-action="goal-minus" aria-label="Minder kaarten" data-testid="room-goal-minus">${icons.minus}</button>
@@ -377,7 +457,7 @@ export function render(root, { deck, navigate }) {
             <span class="size-box"><b>Mix van de groep</b><small data-testid="room-mix-have" data-have="${short.have}">${short.have} nummers van ${mix?.contributors || 0} ${mix?.contributors === 1 ? 'speler' : 'spelers'}</small></span></label>
         </div>
         ${can ? (isMix ? `<p class="muted small" data-testid="room-mix-ok">Genoeg nummers: de server stelt de lijst eerlijk samen uit ieders favorieten (dubbele één keer, zekere jaartallen eerst).${esc(extra)}</p>` : '')
-    : `<p class="${isMix ? 'warn' : 'muted'} small mix-need" data-testid="room-mix-need" data-missing="${short.missing}">${isMix ? 'Te weinig nummers in de mix. ' : ''}Voor ${esc(gameName(s.game))}${s.game === 'bingo' ? ` ${s.size}×${s.size}` : s.game === 'quiz' ? ` (${s.questions} vragen)` : ` (doel ${s.goal})`} zijn er minstens ${short.need} nodig: nog ${short.missing}. Laat spelers op hun eigen telefoon <b>Doe mijn favorieten erbij</b> kiezen.${esc(extra)}</p>`}
+    : `<p class="${isMix ? 'warn' : 'muted'} small mix-need" data-testid="room-mix-need" data-missing="${short.missing}">${isMix ? 'Te weinig nummers in de mix. ' : ''}Voor ${esc(gameName(s.game))}${s.game === 'bingo' ? ` ${s.size}×${s.size}` : s.game === 'quiz' ? ` (${s.questions} vragen)` : s.game === 'disco' ? '' : ` (doel ${s.goal})`} zijn er minstens ${short.need} nodig: nog ${short.missing}. Laat spelers op hun eigen telefoon <b>Doe mijn favorieten erbij</b> kiezen.${esc(extra)}</p>`}
       </fieldset>`;
   }
 
@@ -385,9 +465,11 @@ export function render(root, { deck, navigate }) {
     const r = session.room;
     const n = r.players.length;
     const isMix = viaServer && r.settings.music === 'mix';
-    const ok = n >= 1 && (r.settings.game === 'quiz' && !viaServer ? false
+    const serverOnly = r.settings.game === 'quiz' || r.settings.game === 'disco';
+    const ok = n >= 1 && (serverOnly && !viaServer ? false
       : isMix ? mixShortage(session.meta?.mix, r.settings, n, playSource()).missing === 0
-        : r.settings.game === 'quiz' ? cards.length >= QUIZ_MIN_SONGS : cards.length >= n + 2);
+        : r.settings.game === 'quiz' ? cards.length >= QUIZ_MIN_SONGS
+          : r.settings.game === 'disco' ? cards.length >= Math.max(DISCO_MIN_SONGS, n + 2) : cards.length >= n + 2);
     return `<div class="sticky-cta">
       <button class="btn btn-primary btn-xl" type="button" data-action="start" data-testid="room-start" ${ok ? '' : 'disabled'}>${icons.play}<span>${n ? `Start ${esc(gameName(r.settings.game))} (${n} ${n === 1 ? 'speler' : 'spelers'})` : 'Wacht op spelers'}</span></button>
     </div>`;
@@ -433,6 +515,11 @@ export function render(root, { deck, navigate }) {
 
   function ownCard(hv) {
     const g = hv.game;
+    if (g.kind === 'disco') {
+      const d = g.disco;
+      const choosing = hv.phase === 'revealed' && g.reveal?.mine?.correct && !d.waitingForHost && d.choosable.length > 0;
+      return `${discoCardHtml(g.mine, { mode: choosing ? 'choose' : 'show', choosable: d.choosable, choice: d.choice, cat: d.cat, testid: 'host-disco-card', name: hv.you?.name })}${cardStatsHtml(g.mine, d.win)}`;
+    }
     if (g.kind === 'bingo') return viewBingoCard(hv, { highlight: g.reveal?.mine && !g.reveal.mine.none && !g.reveal.mine.pass ? g.reveal.mine.index : null });
     return `<details class="final-tl"><summary>Jouw tijdlijn · ${g.mine.timeline.length} van ${g.goal}</summary>${viewTimeline(g.mine.timeline)}</details>`;
   }
@@ -453,8 +540,11 @@ export function render(root, { deck, navigate }) {
 
   function wonHtml(sv) {
     const quiz = sv.game.kind === 'quiz';
+    const hv = session.hostView();
     return `${confettiHtml()}
-      ${quiz ? quizPodiumHtml(sv) : `${winnerHtml(sv)}
+      ${quiz ? quizPodiumHtml(sv) : sv.game.kind === 'disco' ? `${winnerHtml(sv)}
+      ${discoProgressHtml(sv)}
+      ${hv?.game?.mine ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw kaart, ${esc(hv.you.name)}</h2>${ownCard(hv)}</section>` : ''}` : `${winnerHtml(sv)}
       ${standingsHtml(sv)}`}
       ${leads() ? `<div class="stack">
         <button class="btn btn-primary btn-xl" type="button" data-action="again" data-testid="room-again">${icons.restart}<span>${quiz ? 'Nog een quiz' : 'Nog een potje'}</span></button>
@@ -479,7 +569,13 @@ export function render(root, { deck, navigate }) {
       }
       return;
     }
-    if (session.room?.phase === 'answering' && session.room.game?.kind !== 'quiz' && e.target.closest('[data-testid="host-own"]') && ctl.onClick(e)) return;
+    const sq = e.target.closest('[data-action="disco-stamp"]');
+    if (sq && root.contains(sq)) {
+      const hv = session.hostView();
+      if (session.room?.phase === 'revealed' && hv?.game?.disco && Number(sq.dataset.index) !== hv.game.disco.choice) { guard(() => session.stamp(Number(sq.dataset.index))); vibrate(25); }
+      return;
+    }
+    if (session.room?.phase === 'answering' && inDisco() && e.target.closest('[data-testid="host-own"]')) { if (dctl.onClick(e)) return; } else if (session.room?.phase === 'answering' && session.room.game?.kind !== 'quiz' && e.target.closest('[data-testid="host-own"]') && ctl.onClick(e)) return;
     const a = e.target.closest('[data-action]');
     if (!a || !root.contains(a)) return;
     const act = a.dataset.action;
@@ -506,6 +602,12 @@ export function render(root, { deck, navigate }) {
         window.scrollTo(0, 0);
         break;
       case 'override': guard(() => session.override(a.dataset.id)); break;
+      case 'disco-judge': guard(() => session.judge(a.dataset.id, a.dataset.ok === '1')); vibrate(20); break;
+      case 'disco-doubts': {
+        const el = root.querySelector('#disco-doubts');
+        if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus({ preventScroll: true }); el.classList.remove('is-called'); void el.offsetWidth; el.classList.add('is-called'); }
+        break;
+      }
       case 'next':
         startedHere = true;
         guard(() => session.next());
@@ -538,6 +640,7 @@ export function render(root, { deck, navigate }) {
     else if (t.name === 'qcount') guard(() => session.setSettings({ questions: Number(t.value) }));
     else if (t.name === 'qtype') guard(() => session.setSettings({ qtype: t.value }));
     else if (t.name === 'qtime') guard(() => session.setSettings({ think: Number(t.value) }));
+    else if (t.name === 'win') guard(() => session.setSettings({ win: t.value }));
   }
 
   function onSubmit(e) {
@@ -548,19 +651,25 @@ export function render(root, { deck, navigate }) {
     const nm = f.name.value.trim();
     if (plays && !nm) { toast('Vul je naam in, of speel niet mee.', { kind: 'warn' }); f.name.focus(); return; }
     if (nm) store.set(HOST_NAME_KEY, nm);
+    // via the server a new room starts with Discobingo unless a game was chosen before
+    if (viaServer) {
+      const st = store.get(SETTINGS_KEY, {}) || {};
+      if (!st.game) store.set(SETTINGS_KEY, { ...st, game: PREFERRED_GAME });
+    }
     player.unlock();
     session.create({ hostPlays: plays, hostName: nm });
   }
 
   function onKey(e) {
     if (e.key === 'Escape' && sheetOpen) { sheetOpen = false; draw(); }
-    ctl.onKeyDown(e);
+    if (inDisco()) dctl.onKeyDown(e); else ctl.onKeyDown(e);
   }
 
   root.addEventListener('click', onClick);
   root.addEventListener('change', onChange);
   root.addEventListener('submit', onSubmit);
-  root.addEventListener('input', ctl.onInput);
+  const onInput = (e) => (inDisco() ? dctl.onInput(e) : ctl.onInput(e));
+  root.addEventListener('input', onInput);
   root.addEventListener('keydown', onKey);
 
   const releaseAwake = keepAwake(); // the host plays the music: keep the screen (and the connection) alive
@@ -582,13 +691,14 @@ export function render(root, { deck, navigate }) {
     root.removeEventListener('click', onClick);
     root.removeEventListener('change', onChange);
     root.removeEventListener('submit', onSubmit);
-    root.removeEventListener('input', ctl.onInput);
+    root.removeEventListener('input', onInput);
     root.removeEventListener('keydown', onKey);
     releaseAwake();
     clearInterval(ticker);
     clearInterval(quizTicker);
     offPlayer();
-    document.body.classList.remove('tt-quiz');
+    document.body.classList.remove('tt-quiz', 'tt-disco');
+    stage?.destroy();
     if (unmountPv) unmountPv();
     unsub?.();
     ms?.destroy();

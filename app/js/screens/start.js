@@ -65,7 +65,7 @@ export function render(root, { install }) {
         ${entry({ href: '#/bingo', testid: 'start-bingo', icon: gridIcon, title: 'Bingo', text: 'Claim vakjes op je eigen bingokaart. Eerst een volle rij wint.', cls: 'entry-app' })}
       </section>
       <section class="mode mode-multi" data-testid="mode-multi" aria-labelledby="mode-multi-title">
-        <h2 class="mode-title" id="mode-multi-title">${phonesIcon}<span>Ieder een eigen telefoon</span><small>samen één potje of een quiz, iedereen tegelijk</small></h2>
+        <h2 class="mode-title" id="mode-multi-title">${phonesIcon}<span>Ieder een eigen telefoon</span><small>Discobingo, een quiz of samen één potje</small></h2>
         <div class="entry-pair">
           ${entry({ href: '#/spelleider', testid: 'start-host', icon: icons.music, title: 'Maak een kamer', text: 'Jouw toestel speelt de muziek.', cls: 'entry-multi' })}
           ${entry({ href: '#/kamer', testid: 'start-join', icon: icons.users, title: 'Doe mee', text: 'Met de code van de spelleider.', cls: 'entry-multi' })}
