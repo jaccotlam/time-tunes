@@ -532,7 +532,7 @@ export function render(root, { params, navigate }) {
     if (v.phase === 'answering') {
       region('song', '', () => '');
       region('after', '', () => '');
-      region('listen', JSON.stringify([moment, g.round, v.players.map((p) => [p.answered, p.playing])]), () => (moment === 'spin'
+      region('listen', JSON.stringify([moment, g.round, v.players.map((p) => [p.answered, p.playing, p.online])]), () => (moment === 'spin'
         ? '' : `${listenHtml()}${answeredHtml(v)}`));
       syncTiles(tiles, v.players, { game: true, burst: true });
       return;
@@ -563,7 +563,7 @@ export function render(root, { params, navigate }) {
     el.dataset.phase = v.phase;
     if (v.phase === 'answering') {
       region('after', '', () => '');
-      region('listen', JSON.stringify([g.round, v.players.map((p) => [p.answered, p.playing])]), () => `${listenHtml(g.kind === 'bingo' ? 'Luister… en kies een vakje op je kaart' : 'Luister… waar hoort dit nummer in je tijdlijn?')}${answeredHtml(v)}`);
+      region('listen', JSON.stringify([g.round, v.players.map((p) => [p.answered, p.playing, p.online])]), () => `${listenHtml(g.kind === 'bingo' ? 'Luister… en kies een vakje op je kaart' : 'Luister… waar hoort dit nummer in je tijdlijn?')}${answeredHtml(v)}`);
       syncTiles(tiles, v.players, { game: true, burst: true });
       return;
     }

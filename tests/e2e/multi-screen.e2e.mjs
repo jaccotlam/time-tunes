@@ -55,7 +55,6 @@ for (const t of TRACKS) {
 
 // ---------- small helpers ----------
 /** Failures of assertions that are kept but must not stop the run (real app bugs): the run fails at the end. */
-const SOFT = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const TV = { width: 1920, height: 1080 };
 const HOST_TV = { viewport: { width: 1280, height: 720 }, isMobile: false, hasTouch: false, userAgent: undefined };
@@ -412,10 +411,9 @@ async function mainGame(browser, rooms, server) {
       S.left = true;
       await tile(D, 'Cas', 'online', 'false');
       total0 = 2;
-      // BUG (found by this test, kept on purpose): the display's "x van y" is not redrawn when a player
-      // goes offline (room-screen.js drawDisco: the key of region 'listen' has answered/playing but not
-      // online), so it keeps saying "1 van 3" until somebody else answers. Reported, the run goes on.
-      try { await waitCount(D, 1, 2, 4000); assert(true, 'Cas left: offline on the display and "1 van 2" (only online players count)'); } catch (e) { SOFT.push(`round ${round}: ${e.message}`); console.log(`  NOT OK (bug) - ${e.message}`); }
+      // the count follows presence at once: an away player is never somebody the room waits for
+      await waitCount(D, 1, 2, 4000);
+      assert(true, 'Cas left: offline on the display and "1 van 2" (only online players count)');
     } else if (casOnline && round !== 2) {
       await give(C, 'Cas');
       await waitCount(D, 2, total0);
@@ -745,7 +743,6 @@ export default async function run() {
     await quizOnDisplay(browser, rooms, server);
     await peerRoute(browser, server);
     await bingoOnDisplay(browser, rooms, server);
-    if (SOFT.length) throw new Error(`ASSERT: ${SOFT.length} known app bug(s):\n - ${SOFT.join('\n - ')}`);
   } finally {
     await browser.close();
     server.stop();

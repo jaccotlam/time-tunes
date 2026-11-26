@@ -474,9 +474,12 @@ async function recordOnce() {
     writeFileSync(join(TMP, 'events.json'), JSON.stringify(ev));
     console.log(`opname klaar: ${ev.duration.toFixed(1)} s, frames: ${Object.entries(ev.frames).map(([k, f]) => `${k} ${f.length}`).join(', ')}`);
     return ev;
+  } catch (e) {
+    console.error('FOUT:', e.message);
+    throw e;
   } finally {
-    for (const c of captures) await c.stop().catch(() => {});
-    await browser.close();
+    for (const c of captures) await Promise.race([c.stop().catch(() => {}), sleep(5000)]);
+    await Promise.race([browser.close().catch(() => {}), sleep(10000)]);
     server.stop();
     await rooms.stop();
   }
