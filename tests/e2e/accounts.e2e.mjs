@@ -76,7 +76,9 @@ async function signUpUi(page, user, pw) {
   await tid(page, 'account-signup-submit').click();
 }
 async function logInUi(page, user, pw) {
+  await go(page, '#/');
   await go(page, '#/account');
+  if (await tid(page, 'account-tab-login').count()) await tid(page, 'account-tab-login').click();
   await tid(page, 'account-login-form').waitFor();
   await tid(page, 'account-login-username').fill(user);
   await tid(page, 'account-login-password').fill(pw);
