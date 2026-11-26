@@ -87,14 +87,14 @@ export async function aliasPublic(context, server) {
  * pixel, het decor rekt ze op). Dat is voor het scanscherm: daar is de pagina zo druk met de camera
  * dat een screenshot 0,1 s kost (9 beelden per seconde), terwijl de screencast de 30 wel haalt.
  */
-export async function capturePage(page, dir, prefix, now) {
+export async function capturePage(page, dir, prefix, now, { castFormat = 'png' } = {}) {
   ensureDir(dir);
   const cdp = await page.context().newCDPSession(page);
   const frames = []; const writes = [];
   let busy = false; let dirty = false; let active = true; let stopped = false; let lastData = ''; let lastT = -1; let error = null;
   let mode = 'shot'; let pending = null; let timer = null;
   const keep = (t, data) => {
-    const name = `${prefix}${String(frames.length).padStart(6, '0')}.png`;
+    const name = `${prefix}${String(frames.length).padStart(6, '0')}.${mode === 'cast' && castFormat === 'jpeg' ? 'jpg' : 'png'}`;
     frames.push([Number(t.toFixed(4)), name]);
     writes.push(writeFile(join(dir, name), Buffer.from(data, 'base64')));
     lastT = t;
@@ -129,7 +129,7 @@ export async function capturePage(page, dir, prefix, now) {
       timer = setTimeout(() => { if (pending && mode === 'cast' && !stopped) keep(...pending); pending = null; }, 45);
     }
   });
-  const cast = (m) => cdp.send('Page.startScreencast', m === 'cast' ? { format: 'png', everyNthFrame: 1 } : { format: 'jpeg', quality: 10, everyNthFrame: 1 });
+  const cast = (m) => cdp.send('Page.startScreencast', m === 'cast' ? { format: castFormat, ...(castFormat === 'jpeg' ? { quality: 92 } : {}), everyNthFrame: 1 } : { format: 'jpeg', quality: 10, everyNthFrame: 1 });
   await cast(mode);
   await grab();
   return {
