@@ -178,8 +178,6 @@ async function recordOnce() {
     const code = (await host.page.getByTestId('room-code-big').textContent()).trim();
     ev.code = code;
     console.log('kamercode:', code);
-    // de kamerserver kiest de code; met brede letters (M, W) past de lobby niet op een telefoon (zie README): opnieuw
-    if (/[MW]/.test(code)) throw Object.assign(new Error(`kamercode ${code} heeft brede letters`), { retry: true });
     if ((await host.page.getByTestId('room-link').textContent()).trim() !== `${PUBLIC_URL}#/kamer/${code}`) problems.push('de link in de lobby is niet het publieke adres');
     await hold(1.3);
     await Promise.all(players.map(async (p, i) => {
@@ -388,7 +386,7 @@ async function recordOnce() {
   }
 }
 
-/** De kamerserver kiest de code zelf; bij brede letters (M, W) wordt opnieuw opgenomen. */
+/** Een opname die met `retry` afbreekt, wordt opnieuw geprobeerd (hoogstens acht keer). */
 export async function record() {
   for (let attempt = 1; ; attempt++) {
     try { return await recordOnce(); } catch (e) {

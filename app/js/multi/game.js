@@ -499,7 +499,7 @@ export function stampSquare(room, pid, index) {
   if (index == null) delete choices[pid];
   else {
     const at = Number(index);
-    if (!choosableSquares(g, pid).includes(at)) throw new GameError('answer', `Kies een open ${categoryOf(g.disco.cat).short.toLowerCase()}-vakje.`);
+    if (!choosableSquares(g, pid).includes(at)) throw new GameError('answer', `Kies een open vakje: ${categoryOf(g.disco.cat).short.toLowerCase()}.`);
     choices[pid] = at;
   }
   return applyResults({ ...room, game: { ...g, disco: { ...g.disco, choices } } });
