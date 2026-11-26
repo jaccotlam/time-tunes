@@ -367,3 +367,6 @@
 .ph-eq.is-small { height: 22px; gap: 4px; margin: 0; }
 .ph-eq.is-small i { width: 5px; height: 6px; }
 @media (max-height: 600px) { .ph-m-question .ph-foot { display: none; } }
+
+/* Verlaat confirmed: the room screen fades out on the way to the join page */
+.screen.is-leaving { opacity: 0; transition: opacity .2s ease-out; pointer-events: none; }

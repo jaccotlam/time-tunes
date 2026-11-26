@@ -31,6 +31,8 @@ export function render(root, { params, navigate }) {
   const join = storedJoin();
   let session = null;
   let unsub = null;
+  let leaving = false; // Verlaat confirmed: only the way out is left
+  let troubleSince = null; // when the connection last stopped being "online" (Discobingo banner)
   let viewName = null;
   let joinError = '';
   let lastPhaseKey = '';
@@ -157,6 +159,7 @@ export function render(root, { params, navigate }) {
   }
 
   function draw() {
+    if (leaving) return;
     const vn = currentView();
     const skel = discoPlay(vn) ? 'disco' : vn;
     if (skel !== viewName) { viewName = skel; skeleton(skel); window.scrollTo(0, 0); }
@@ -198,7 +201,16 @@ export function render(root, { params, navigate }) {
   function drawDisco(vn) {
     const st = session.status;
     const away = leaderAway();
-    const showDiag = viaServer && diagVisible(session.diag, st);
+    // diagVisible() counts from the start of the session, so after a minute of play any short
+    // reconnect would show the full panel at once: count from when the trouble began instead
+    if (st === 'online') troubleSince = null;
+    else if (troubleSince == null) troubleSince = Date.now();
+    const d = session.diag;
+    const failing = !!d && (!!d.waking || Object.values(d.steps || {}).some((x) => x.state === 'fail'));
+    // a step that really fails shows the panel after a short grace (a phone waking up often fails one
+    // attempt and is back within a second); otherwise only after the usual 4 s
+    const since = Date.now() - troubleSince;
+    const showDiag = viaServer && diagVisible(d, st) && (since > 4000 || (failing && since > 1500));
     region('status', JSON.stringify([st, vn, away == null ? null : Math.min(Math.floor(away / 1000), 999), showDiag ? diagKey(session.diag) : '']),
       () => dp.statusHtml(st, away, showDiag, session.meta, session.diag, session.code));
     dp.draw();
@@ -207,6 +219,12 @@ export function render(root, { params, navigate }) {
   /** Verlaat: during a game the seat stays (come back with "Terug naar kamer"); in the lobby you are gone. */
   function leaveRoom() {
     const code = session.code;
+    // a deliberate leave is not a connection problem: from here on this screen no longer
+    // listens to the session, so the socket it closes itself never shows a banner or the diagnosis
+    leaving = true;
+    unsub?.();
+    unsub = null;
+    root.firstElementChild?.classList.add('is-leaving');
     forgetMixShare(code);
     ms?.destroy();
     ms = null;
