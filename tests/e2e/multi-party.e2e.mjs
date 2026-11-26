@@ -129,7 +129,7 @@ function tvProbe() {
     const avoid = [...document.querySelectorAll('[data-testid="screen-qr"], .s-badge, [data-testid="screen-song"], .quiz-song, .quiz-correct')]
       .map((e) => ({ what: e.dataset.testid || e.className, ...box(e) })).filter((a) => a.w > 0 && a.h > 0);
     for (const f of document.querySelectorAll('[data-testid="screen-reaction"]')) {
-      const fr = box(f);
+      const fr = box(f.querySelector('.rx-in') || f);
       if (!(fr.w > 0)) continue;
       rx.samples++;
       rx.ids.add(f.dataset.id + f.dataset.emoji);
