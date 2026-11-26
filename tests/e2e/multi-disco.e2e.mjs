@@ -124,7 +124,16 @@ async function waitRound(page, round, isHost = false) {
     return v?.phase === 'answering' && v.game.round === r;
   }, [round, isHost], { timeout: 30000 });
 }
-const landed = (page) => page.locator('[data-testid="disco-stage"][data-state="landed"]').waitFor({ timeout: 15000 });
+// on a phone the ball is only on screen while it spins (moment "spin"); the stage element stays in the page
+const landed = (page) => page.locator('[data-testid="disco-stage"][data-state="landed"]').waitFor({ state: 'attached', timeout: 15000 });
+/** A phone's current full-screen moment (spin | splash | question | submitted | verdict | choose | card | bingo | winner). */
+const momentOf = (page) => page.getByTestId('disco-moment').getAttribute('data-moment');
+/** Phone: open the menu sheet on one of its pages, run fn, close it again. */
+async function inSheet(page, item, fn) {
+  await page.getByTestId('disco-menu').click();
+  await page.getByTestId(item).click();
+  try { return await fn(); } finally { await page.getByTestId('disco-sheet-close').click(); await page.locator('.ph-sheet-wrap:not(.is-open)').waitFor({ state: 'attached' }); }
+}
 const stageCat = (page) => page.getByTestId('disco-stage').getAttribute('data-cat');
 
 /** Fill in and send an answer on `page` (scope: '' for a phone, '[data-testid="host-own"] ' for the spelleider's own panel). */
@@ -135,6 +144,8 @@ async function answer(page, scope, cat, song, how, round) {
   if (cat === 'decade') {
     const d = how === 'wrong' ? (decadeOf(song.year) === 1980 ? 1990 : 1980) : decadeOf(song.year);
     await q(`disco-decade-${d}`).click();
+    // the phone's decade grid is the input; Indienen sends it (the host's own form sends on the tap)
+    if (!scope) await q('disco-lock').click();
     await locked('locked');
     return null;
   }
@@ -289,8 +300,14 @@ async function wholeGame(browser, rooms, server) {
       const t0 = Date.now();
       await B.reload();
       await B.locator('[data-testid="screen-room-player"][data-view="answering"]').waitFor({ timeout: 20000 });
-      await B.locator('[data-testid="disco-stage"][data-state="landed"]').waitFor({ timeout: 4000 });
-      assert(Date.now() - t0 < 6000 && await B.getByTestId('disco-answer').isVisible(), 'reload while answering: no new spin, the answer form is back at once');
+      await B.locator('[data-testid="disco-stage"][data-state="landed"]').waitFor({ state: 'attached', timeout: 4000 });
+      await B.locator('[data-testid="disco-moment"][data-moment="submitted"]').waitFor({ timeout: 4000 });
+      assert(Date.now() - t0 < 6000 && await B.getByTestId('disco-answer-state').isVisible(), 'reload while answering: no new spin, no splash: straight back to "antwoord binnen"');
+      await B.getByTestId('disco-edit').click();
+      assert(await B.getByTestId('disco-answer').isVisible() && await momentOf(B) === 'question', 'reload while answering: "Wijzig" brings the answer form back');
+      // the form comes back filled in with what was sent: send the same again (or "Weet ik niet" again)
+      await B.getByTestId(bHow === 'pass' ? 'disco-pass' : 'disco-lock').click();
+      await B.locator('[data-testid="disco-moment"][data-moment="submitted"]').waitFor();
       const st = await attr(B, 'disco-answer-state', 'data-state');
       assert(st === (bHow === 'pass' ? 'pass' : 'locked'), `reload while answering: the answer is still there (${st})`);
       assert((await pview(B)).game.round === round, 'reload while answering: same round');
@@ -310,8 +327,8 @@ async function wholeGame(browser, rooms, server) {
     await Promise.all([H.locator('[data-testid="screen-room-host"][data-view="revealed"]').waitFor(), ...phones().map((p) => p.page.locator('[data-testid="screen-room-player"][data-view="revealed"]').waitFor())]);
     await A.getByTestId('disco-verdict').waitFor();
     if (typed) {
-      const results = await A.getByTestId('disco-results').textContent();
-      assert(results.includes(bText) && results.includes(aText), `round ${round}: after the reveal everybody sees what everybody typed`);
+      const results = await inSheet(A, 'disco-menu-answers', () => A.getByTestId('disco-results').textContent());
+      assert(results.includes(bText) && results.includes(aText), `round ${round}: after the reveal everybody sees what everybody typed (menu: Wat iedereen antwoordde)`);
     }
     const aV = await attr(A, 'disco-verdict', 'data-verdict');
     assert(aV === 'right', `round ${round}: Anouk's ${aHow} answer ${aText ?? ''} is right (${aV})`);
@@ -341,7 +358,8 @@ async function wholeGame(browser, rooms, server) {
       await sleep(700);
       const after = await hroom(H);
       assert(after.phase === 'revealed' && after.game.round === before && await H.getByTestId('room-next').getAttribute('data-state') === 'doubts', 'tapping it does not move on: the spelleider must decide first');
-      assert(await attr(A, 'disco-results', 'data-testid') === 'disco-results' && await A.locator('[data-testid^="disco-result-"][data-name="Bram"]').getAttribute('data-verdict') === 'doubt', 'the other phones see "twijfel" for Bram');
+      const seenOnA = await inSheet(A, 'disco-menu-answers', async () => (await attr(A, 'disco-results', 'data-testid')) === 'disco-results' && await A.locator('[data-testid^="disco-result-"][data-name="Bram"]').getAttribute('data-verdict'));
+      assert(seenOnA === 'doubt', 'the other phones see "twijfel" for Bram');
       await H.getByTestId(good ? `disco-judge-good-${rowB}` : `disco-judge-bad-${rowB}`).click();
       await verdictOnPhone(B, good ? 'right' : 'wrong');
       assert(/spelleider/.test(await B.getByTestId('disco-verdict-explain').textContent()), `Bram is told the spelleider ruled it ${good ? 'right' : 'wrong'}`);
@@ -589,6 +607,8 @@ async function twoLines(browser, rooms, server, firstCats) {
     cats.push(cat);
     if (v.game.disco.win !== 'line2') throw new Error('ASSERT: the goal of the game is not 2 lijnen');
     if (round === 1) assert(true, 'the goal of the game is 2 lijnen');
+    // the phone can hear of the new round before the spelleider's screen does: read this round's song, not the last one
+    await H.waitForFunction((r) => window.__ttHost?.session?.room?.game?.round === r && !!window.__ttHost.session.currentSong(), round);
     const { song } = await serverHost(H);
     const ans = cat === 'decade' ? { decade: decadeOf(song.year) } : cat === 'year' ? { guess: String(song.year) } : { text: cat === 'artist' ? song.artist : song.title };
     // fast path: no waiting for the ball, the answer goes through the phone's own session

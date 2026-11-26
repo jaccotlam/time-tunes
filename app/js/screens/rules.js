@@ -60,6 +60,7 @@ export function render(root) {
         <ol>
           <li>De spelleider kiest <em>Maak een kamer</em>. Zijn toestel speelt de muziek: zet het op een speaker. De spelleider mag zelf ook meespelen.</li>
           <li>De rest kiest <em>Doe mee</em> en vult de kamercode van 4 letters in, of scant de QR-code op het scherm van de spelleider.</li>
+          <li>Is er een tv of laptop? Tik in de kamer op <em>Open het grote scherm</em>: daar ziet iedereen de QR-code, de discobal, wie er geantwoord heeft, het nummer en de winnaar. Het grote scherm speelt zelf geen muziek.</li>
           <li>Per nummer antwoordt iedereen tegelijk op zijn eigen kaart of tijdlijn en zet zijn antwoord vast. Wijzigen mag tot de onthulling.</li>
           <li>De spelleider onthult. De app controleert alle antwoorden; bij een getypte artiest of titel tellen kleine typefouten niet, en bij twijfel draait de spelleider het oordeel met één tik om.</li>
           <li>Halen meerdere spelers in dezelfde ronde een volle rij of het doel, dan delen ze de winst. Wie later instapt, begint zo ver als wie het verst achter ligt.</li>

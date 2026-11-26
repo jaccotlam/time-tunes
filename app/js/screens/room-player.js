@@ -4,10 +4,10 @@
 import { normalizeCode } from '../multi/code.js';
 import { createClientSession, storedJoin, forgetJoin } from '../multi/client-session.js';
 import { cleanName } from '../multi/game.js';
-import { usesServer, createServerClientSession, wakeServer, SERVER_HOST_KEY } from '../multi/server-session.js';
+import { usesServer, createServerClientSession, wakeServer, SERVER_HOST_KEY, storedSeat, checkSeat, forgetSeat } from '../multi/server-session.js';
 import { ERROR_TITLES } from '../multi/server-protocol.js';
 import { createMixShare, forgetMixShare } from '../multi/mix-share.js';
-import { mixBlockHtml, mixServerOnlyHtml, mixKey, onMixChange } from './room-mix.js';
+import { mixBlockHtml, mixServerOnlyHtml, mixKey, onMixChange, mixCountsHtml, mixPanelHtml } from './room-mix.js';
 import { icons, esc, toast, vibrate, store } from '../ui.js';
 import {
   patch, connBadge, playersHtml, standingsHtml, answerPanelHtml, answerController, myResultHtml, songHtml,
@@ -15,14 +15,13 @@ import {
   keepAwake, diagHtml, diagKey, diagVisible, leaderAwayHtml,
   quizQuestionHtml, quizRevealHtml, quizPodiumHtml, quizLeft, tickQuizClocks,
 } from './room-ui.js';
-import {
-  createDiscoStage, discoController, discoAnswerHtml, discoCardHtml, cardStatsHtml, spinWaitHtml, discoMyResultHtml,
-  discoResultsHtml, discoProgressHtml, discoRoundTitle,
-} from './room-disco.js';
+import { createDiscoPhone } from './disco-phone.js';
 import { codeFieldHtml, onCodeInput, caretToEnd, createJoinHero, lobbyWaitHtml, lobbyPlayersHtml } from './room-join.js';
 
 export const name = 'room-player';
 const NAME_KEY = 'timetunesr.multiName.v1';
+/** Room code this phone left on purpose (with its seat kept): no automatic way back in on load. */
+const LEFT_KEY = 'timetunesr.multiLeft.v1';
 
 export function render(root, { params, navigate }) {
   const urlCode = normalizeCode(params?.[0] || '');
@@ -44,15 +43,20 @@ export function render(root, { params, navigate }) {
     send: (ans) => { session.answer(ans); vibrate(20); },
     refresh: () => draw(),
   });
-  // Discobingo: the answer form of the round's category, and the disco ball (lives outside the patched regions)
-  const dctl = discoController({
-    getView: () => session?.view,
-    send: (ans) => { session.answer(ans); vibrate(20); },
-    refresh: () => draw(),
-    sending: () => !!session?.pending,
+  // Discobingo during a game: the phone shows one full-screen moment at a time (disco-phone.js)
+  const dp = createDiscoPhone({
+    getSession: () => session,
+    send: (ans) => session.answer(ans),
+    stamp: (i) => session.stamp(i),
+    leave: () => leaveRoom(),
+    serverNow: () => serverNow(),
+    mixHtml: () => (viaServer && ms && session?.meta ? `<div class="mix-block" data-testid="mix-block"><div class="mix-head">${mixCountsHtml(session.meta.mix)}${session.view?.settings?.music === 'mix' ? '<span class="pill pill-on" data-testid="mix-chosen">speelt nu</span>' : ''}</div>${mixPanelHtml(ms, session.meta, { inGame: true })}</div>` : null),
   });
-  let stage = null;
   const isDisco = () => session?.view?.game?.kind === 'disco';
+  const discoPlay = (vn) => isDisco() && ['answering', 'revealed', 'won'].includes(vn);
+  // "Terug naar kamer ABCD": the seat this phone still has (checked with the server once)
+  let seat = viaServer ? storedSeat() : null;
+  let seatChecked = false;
   // the idle disco ball over the join form, "verbinden" and the lobby (one ball, moved between views)
   let hero = null;
   const heroViews = ['join', 'connecting', 'lobby'];
@@ -113,11 +117,17 @@ export function render(root, { params, navigate }) {
   }
 
   function skeleton(vn) {
-    stage?.destroy();
-    stage = null;
+    if (vn !== 'disco') dp.destroy();
     const withHero = heroViews.includes(vn);
     if (hero && !withHero) { hero.destroy(); hero = null; } // the game screens bring their own ball
     const code = session?.code || urlCode || '';
+    if (vn === 'disco') {
+      root.innerHTML = dp.html(code);
+      dp.mount(root.firstElementChild);
+      regions.status = root.querySelector('[data-region="status"]');
+      keys.status = null;
+      return;
+    }
     root.innerHTML = `<section class="screen screen-room view-${vn}${withHero ? ' has-hero' : ''}" data-testid="screen-room-player" data-view="${vn}" data-code="${esc(code)}">
       <header class="topbar">
         <a class="icon-btn" href="#/" aria-label="Naar start" data-testid="back-home">${icons.home}</a>
@@ -127,12 +137,10 @@ export function render(root, { params, navigate }) {
       <div class="room-status" data-region="status"></div>
       ${withHero ? '<div class="join-hero" data-slot="hero"></div>' : ''}
       <div data-region="round"></div>
-      <div class="disco-stage-host" data-region="stage"></div>
       <div class="room-main" data-region="main"></div>
       <div class="room-side" data-region="players"></div>
       <div class="room-mix" data-region="mix"></div>
     </section>`;
-    regions.stage = root.querySelector('[data-region="stage"]');
     for (const k of ['status', 'round', 'main', 'players', 'mix']) { regions[k] = root.querySelector(`[data-region="${k}"]`); keys[k] = null; }
     if (withHero) {
       if (!hero) hero = createJoinHero();
@@ -150,9 +158,10 @@ export function render(root, { params, navigate }) {
 
   function draw() {
     const vn = currentView();
-    if (vn !== viewName) { viewName = vn; skeleton(vn); window.scrollTo(0, 0); }
+    const skel = discoPlay(vn) ? 'disco' : vn;
+    if (skel !== viewName) { viewName = skel; skeleton(skel); window.scrollTo(0, 0); }
+    if (skel === 'disco') { drawDisco(vn); return; }
     ctl.sync();
-    dctl.sync();
     const v = session?.view;
     const phaseKey = v ? `${v.phase}:${v.game?.round}` : '';
     if (phaseKey !== lastPhaseKey) {
@@ -167,14 +176,10 @@ export function render(root, { params, navigate }) {
     region('status', JSON.stringify([st, vn, session?.error?.code, extraKey]), () => (session && !session.error ? statusHtml(st, away, showDiag) : ''));
     region('players', JSON.stringify([vn, v?.players, v?.you?.id]), () => (v && !['join', 'error', 'connecting'].includes(vn)
       ? vn === 'lobby' ? lobbyPlayersHtml(v, seenPlayers) : `<h2 class="room-h">Spelers</h2>${playersHtml(v)}` : ''));
-    const landed = syncStage(v, vn);
-    // Discobingo: the round line sits above the ball
-    region('round', isDisco() && (vn === 'answering' || vn === 'revealed') ? `${v.game.round}|${v.game.disco.win}` : '', () => (isDisco() && (vn === 'answering' || vn === 'revealed') ? discoRoundTitle(v) : ''));
     const build = { join: joinHtml, connecting: connectingHtml, error: errorHtml, lobby: lobbyHtml, answering: answeringHtml, revealed: revealedHtml, won: wonHtml }[vn];
     const quiz = v?.game?.kind === 'quiz';
     const now = serverNow();
-    const mainKey = vn === 'answering' && isDisco() ? `d|${dctl.key()}|${landed}|${!!session.pending}`
-      : vn === 'answering' && quiz
+    const mainKey = vn === 'answering' && quiz
       ? JSON.stringify(['q', v.game.round, v.game.quiz.options, v.game.quiz.choice, !!v.game.quiz.deadline, quizLeft(v.game.quiz, now) > 0, !!session.pending, v.game.quiz.answered, !!v.game.mine])
       : vn === 'answering' ? `a|${ctl.key()}|${!!session.pending}` : JSON.stringify([vn, joinError, v?.game, v?.settings, v?.you, session?.error, st === 'notfound', vn === 'connecting' && session?.diag ? [st, diagKey(session.diag)] : '']);
     region('main', mainKey, build);
@@ -189,17 +194,29 @@ export function render(root, { params, navigate }) {
 
   function serverNow() { return session?.serverNow ? session.serverNow() : Date.now(); }
 
-  /** Discobingo: the ball spins once per round, then the question appears. Returns: has it landed? */
-  function syncStage(v, vn) {
-    const el = regions.stage;
-    if (!el) return true;
-    if (!(isDisco() && (vn === 'answering' || vn === 'revealed'))) {
-      if (stage) { stage.destroy(); stage = null; }
-      return true;
+  /** Discobingo during a game: the banner over the moment (only when something is off), then the moment. */
+  function drawDisco(vn) {
+    const st = session.status;
+    const away = leaderAway();
+    const showDiag = viaServer && diagVisible(session.diag, st);
+    region('status', JSON.stringify([st, vn, away == null ? null : Math.min(Math.floor(away / 1000), 999), showDiag ? diagKey(session.diag) : '']),
+      () => dp.statusHtml(st, away, showDiag, session.meta, session.diag, session.code));
+    dp.draw();
+  }
+
+  /** Verlaat: during a game the seat stays (come back with "Terug naar kamer"); in the lobby you are gone. */
+  function leaveRoom() {
+    const code = session.code;
+    forgetMixShare(code);
+    ms?.destroy();
+    ms = null;
+    const res = session.leave() || {};
+    if (res.seat) {
+      store.set(LEFT_KEY, code); // no automatic way back in: the guest chose to leave
+      seat = storedSeat();
+      seatChecked = true;
     }
-    if (!stage) stage = createDiscoStage(el, { onLand: () => { if (session?.view?.phase === 'answering') vibrate(30); draw(); } });
-    stage.sync(v.game.disco, { now: serverNow(), phase: v.phase, round: v.game.round });
-    return stage.landed;
+    setTimeout(() => navigate(res.seat ? '#/kamer' : '#/'), 250); // let the goodbye reach the server first
   }
 
   function statusHtml(st, away, showDiag) {
@@ -212,7 +229,10 @@ export function render(root, { params, navigate }) {
   // ---------- views ----------
   function joinHtml() {
     const fromLink = !!urlCode && draft.code === urlCode;
-    return `<form class="join-form" data-testid="join-form" autocomplete="off" novalidate>
+    return `${seat ? `<div class="join-back" data-testid="room-back">
+        <button class="btn btn-primary btn-xl join-back-btn" type="button" data-action="seat-back" data-testid="room-back-to-seat" data-code="${esc(seat.code)}">${icons.restart}<span>Terug naar kamer ${esc(seat.code)}</span></button>
+        <p class="muted small center">Je plek als <b>${esc(seat.name)}</b> is bewaard: je kaart en je fiches. Of doe hieronder mee in een andere kamer.</p>
+      </div>` : ''}<form class="join-form" data-testid="join-form" autocomplete="off" novalidate>
       ${codeFieldHtml(draft.code, { fromLink })}
       <div class="join-field">
         <label class="join-label" for="join-name">Jouw naam</label>
@@ -314,12 +334,6 @@ export function render(root, { params, navigate }) {
 
   function answeringHtml() {
     const v = session.view;
-    if (v.game.kind === 'disco') {
-      const landed = stage ? stage.landed : true;
-      return `${landed ? `<div class="listen-hint" data-testid="listen-hint">${icons.music}<span>Luister naar de muziek bij de spelleider.</span></div>
-      ${discoAnswerHtml(v, dctl.local, { sending: !!session.pending })}` : spinWaitHtml()}
-      ${v.game.mine ? `<h2 class="room-h">Jouw kaart</h2>${discoCardHtml(v.game.mine, { cat: landed ? v.game.disco.cat : null, name: v.you?.name })}${cardStatsHtml(v.game.mine, v.game.disco.win)}` : ''}`;
-    }
     if (v.game.kind === 'quiz') {
       return `${roundTitle(v)}
       <div class="listen-hint" data-testid="listen-hint">${icons.music}<span>Luister naar de muziek bij de spelleider.</span></div>
@@ -333,11 +347,6 @@ export function render(root, { params, navigate }) {
   function ownAfter(v) {
     const g = v.game;
     if (!g.mine) return '';
-    if (g.kind === 'disco') {
-      const d = g.disco;
-      const choosing = v.phase === 'revealed' && g.reveal?.mine?.correct && !d.waitingForHost && d.choosable.length > 0;
-      return `${discoCardHtml(g.mine, { mode: choosing ? 'choose' : 'show', choosable: d.choosable, choice: d.choice, cat: d.cat, name: v.you?.name })}${cardStatsHtml(g.mine, d.win)}`;
-    }
     if (g.kind === 'bingo') {
       const r = g.reveal?.mine;
       return viewBingoCard(v, { highlight: r && !r.none && !r.pass ? r.index : null });
@@ -349,16 +358,6 @@ export function render(root, { params, navigate }) {
 
   function revealedHtml() {
     const v = session.view;
-    if (v.game.kind === 'disco') {
-      return `${discoMyResultHtml(v)}
-      ${ownAfter(v)}
-      ${songHtml(v)}
-      <h2 class="room-h">Wat zei iedereen?</h2>
-      ${discoResultsHtml(v)}
-      <h2 class="room-h">Voortgang</h2>
-      ${discoProgressHtml(v)}
-      <p class="muted center" data-testid="room-next-wait">Wacht tot de spelleider de discobal weer laat draaien…</p>`;
-    }
     if (v.game.kind === 'quiz') {
       return `${roundTitle(v)}${quizRevealHtml(v)}
       <p class="muted center" data-testid="room-next-wait">${v.game.quiz.reveal?.last ? 'Dat was de laatste vraag. Zo komt het podium…' : 'Wacht op de volgende vraag…'}</p>`;
@@ -383,7 +382,7 @@ export function render(root, { params, navigate }) {
     return `${confettiHtml()}
       ${winnerHtml(v)}
       ${me ? '<p class="room-you-won" data-testid="room-you-won">Gefeliciteerd, jij hebt gewonnen!</p>' : ''}
-      ${v.game.kind === 'disco' ? discoProgressHtml(v) : standingsHtml(v)}
+      ${standingsHtml(v)}
       ${ownAfter(v)}
       <p class="muted center">Wacht tot de spelleider een nieuw potje start.</p>`;
   }
@@ -400,6 +399,7 @@ export function render(root, { params, navigate }) {
     if (!code) { joinError = 'Vul de kamercode in: 4 letters, bijvoorbeeld KMRT.'; shake = true; keys.main = null; draw(); root.querySelector('[data-testid="join-code"]')?.focus(); return; }
     if (!nm) { joinError = 'Vul je naam in.'; keys.main = null; draw(); root.querySelector('[data-testid="join-name"]')?.focus(); return; }
     joinError = '';
+    store.remove(LEFT_KEY); // joining again by hand: no longer "left on purpose"
     store.set(NAME_KEY, nm);
     store.set('timetunesr.multiJoin.v1', { code, name: nm });
     if (urlCode !== code) { navigate(`#/kamer/${code}`); return; }
@@ -412,24 +412,17 @@ export function render(root, { params, navigate }) {
       if (!pick.disabled && session?.view?.game?.kind === 'quiz') { session.answer({ choice: Number(pick.dataset.choice) }); vibrate(20); }
       return;
     }
-    const sq = e.target.closest('[data-action="disco-stamp"]');
-    if (sq && root.contains(sq)) {
-      const v = session?.view;
-      if (v?.phase === 'revealed' && v.game?.kind === 'disco' && Number(sq.dataset.index) !== v.game.disco.choice) { session.stamp(Number(sq.dataset.index)); vibrate(25); }
-      return;
-    }
-    if (isDisco()) { if (dctl.onClick(e)) return; } else if (session?.view && session.view.game?.kind !== 'quiz' && ctl.onClick(e)) return;
+    if (viewName === 'disco') { if (dp.onClick(e)) return; } else if (session?.view && !isDisco() && session.view.game?.kind !== 'quiz' && ctl.onClick(e)) return;
     const a = e.target.closest('[data-action]');
     if (!a || !root.contains(a)) return;
     switch (a.dataset.action) {
       case 'leave':
-        if (!window.confirm('Wil je de kamer verlaten? Je kunt later opnieuw meedoen, maar met een nieuwe kaart.')) return;
-        forgetMixShare(session.code);
-        ms?.destroy();
-        ms = null;
-        session.leave();
-        setTimeout(() => navigate('#/'), 250); // let the goodbye reach the host first
+        if (!window.confirm(session.keepsSeat
+          ? 'Wil je de kamer verlaten? Het spel gaat door en je plek blijft bewaard: je kunt op deze telefoon terugkomen.'
+          : 'Wil je de kamer verlaten? Je kunt later opnieuw meedoen, maar met een nieuwe kaart.')) return;
+        leaveRoom();
         break;
+      case 'seat-back': backToSeat(); break;
       case 'retry': session?.retry(); break;
       case 'mix-share': ms?.share(); break;
       case 'mix-withdraw': ms?.withdraw(); break;
@@ -464,22 +457,44 @@ export function render(root, { params, navigate }) {
       return;
     }
     if (!session && e.target.matches?.('[data-testid="join-name"]')) { draft.name = e.target.value; return; }
-    return isDisco() ? dctl.onInput(e) : ctl.onInput(e);
+    return viewName === 'disco' ? dp.onInput(e) : isDisco() ? undefined : ctl.onInput(e);
   };
   // the code cells show the text from the start: the (invisible) caret stays at the end
   const onFocusIn = (e) => { if (e.target.matches?.('[data-testid="join-code"]')) caretToEnd(e.target); };
   root.addEventListener('focusin', onFocusIn);
   root.addEventListener('pointerup', onFocusIn);
-  const onKeyDown = (e) => (isDisco() ? dctl.onKeyDown(e) : ctl.onKeyDown(e));
+  const onKeyDown = (e) => (viewName === 'disco' ? dp.onKeyDown(e) : isDisco() ? undefined : ctl.onKeyDown(e));
   root.addEventListener('input', onInput);
   root.addEventListener('keydown', onKeyDown);
   const onChange = (e) => { if (onMixChange(ms, e)) draw(); };
   root.addEventListener('change', onChange);
 
   const releaseAwake = keepAwake();
-  // Back in the same room (reload, phone woke up, link opened again): join without asking.
-  if (join && (urlCode ? join.code === urlCode : false)) start(join.code, join.name);
+  /** "Terug naar kamer ABCD": ask the server whether the room is still there, then take the seat again. */
+  async function backToSeat() {
+    const s = await checkSeat();
+    seat = s;
+    seatChecked = true;
+    if (!s) { toast('Die kamer is er niet meer.', { kind: 'warn' }); keys.main = null; draw(); return; }
+    store.remove(LEFT_KEY);
+    store.set('timetunesr.multiJoin.v1', { code: s.code, name: s.name });
+    if (urlCode !== s.code) { navigate(`#/kamer/${s.code}`); return; }
+    start(s.code, s.name);
+  }
+
+  // Back in the same room (reload, phone woke up, link opened again): join without asking,
+  // unless the guest left this room on purpose (then the join page offers "Terug naar kamer").
+  const leftOnPurpose = urlCode && store.get(LEFT_KEY, null) === urlCode;
+  if (join && (urlCode ? join.code === urlCode : false) && !leftOnPurpose) start(join.code, join.name);
   else draw();
+  if (seat && !seatChecked && !session) {
+    checkSeat().then((s) => {
+      seatChecked = true;
+      if (s?.code === seat?.code || (!s && !seat)) return;
+      seat = s;
+      if (!session) { keys.main = null; draw(); }
+    }).catch(() => {});
+  }
 
   // for tests / debugging: what this phone received from the host
   window.__ttRoom = { get session() { return session; } };
@@ -498,7 +513,7 @@ export function render(root, { params, navigate }) {
     root.removeEventListener('keydown', onKeyDown);
     root.removeEventListener('focusin', onFocusIn);
     root.removeEventListener('pointerup', onFocusIn);
-    stage?.destroy();
+    dp.destroy();
     hero?.destroy();
     hero = null;
     root.removeEventListener('change', onChange);

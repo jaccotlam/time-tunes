@@ -250,7 +250,7 @@ function syncTiles(ul, players, { game = false, burst = false } = {}) {
   // the grid gets denser as the room fills up (12 names must fit)
   const n = players.length;
   ul.dataset.n = String(n);
-  ul.style.setProperty('--cols', String(game ? (n <= 4 ? Math.max(1, n) : n <= 8 ? 4 : n <= 12 ? 4 : n <= 18 ? 6 : 8) : (n <= 4 ? 2 : n <= 9 ? 3 : n <= 16 ? 4 : 5)));
+  ul.style.setProperty('--cols', String(game ? (n <= 3 ? Math.max(1, n) : n <= 4 ? 2 : n <= 9 ? 3 : n <= 16 ? 4 : 5) : (n <= 4 ? 2 : n <= 9 ? 3 : n <= 16 ? 4 : 5)));
 }
 
 /* ---------- #/scherm without a code: a small prompt ---------- */
@@ -297,7 +297,7 @@ function noServerHtml() {
 }
 
 function bgHtml() {
-  return `<div class="scr-bg" aria-hidden="true"><i class="sb-beams"></i><i class="sb-spot s1"></i><i class="sb-spot s2"></i><i class="sb-spot s3"></i><i class="sb-spot s4"></i><i class="sb-spot s5"></i></div>`;
+  return `<div class="scr-bg" aria-hidden="true"><i class="sb-glow"></i><i class="sb-beams"></i></div>`;
 }
 
 /* ---------- the display ---------- */
@@ -382,9 +382,9 @@ export function render(root, { params, navigate }) {
           <div class="sg-play"><div data-region="listen"></div><ul class="st-grid is-game" data-testid="screen-players" data-fixed="tiles"></ul></div>
           <div class="sg-after" data-region="after"></div>
         </div>`,
-      won: '<div data-region="fx"></div><div class="sw" data-region="main"></div>',
+      won: '<div class="sw" data-region="main"></div>',
     }[m];
-    root.innerHTML = `<section class="scr scr-${m}" data-testid="screen-display" data-code="${esc(code)}">
+    root.innerHTML = `<section class="scr is-m-${m}${idle ? ' is-idle' : ''}" data-testid="screen-display" data-code="${esc(code)}">
       ${bgHtml()}
       ${top}
       <main class="s-body">${body}</main>
@@ -574,17 +574,17 @@ export function render(root, { params, navigate }) {
 
   function drawWon(v) {
     const g = v.game;
-    region('fx', `${g.kind}:${g.round}`, () => confettiHtml());
-    region('main', JSON.stringify([g.winners, g.quiz?.ranking, g.disco?.progress, v.players]), () => {
+    // the confetti lives inside the winner block (behind it); a redraw restarts it only when the result changes
+    region('main', JSON.stringify([g.winners, g.quiz?.ranking, g.disco?.progress, v.players]), () => confettiHtml() + (() => {
       const names = g.winners || [];
       if (g.kind === 'quiz') return `<div class="sw-quiz" data-testid="screen-winner" data-names="${esc(names.join('|'))}">${quizPodiumHtml(v)}</div>`;
       const win = names.length ? winnerHtml(v) : '<div class="winner" data-testid="room-winner"><h2 class="winner-name" data-testid="room-winner-name">Het spel is afgelopen</h2></div>';
       const rank = g.kind === 'disco' ? rankingHtml(v, { reason: 'won', limit: 10 }) : `<section class="sa-stand" data-testid="screen-standings"><h2 class="sa-h">Eindstand</h2>${standingsHtml(v)}</section>`;
       return `<div class="sw-in" data-testid="screen-winner" data-names="${esc(names.join('|'))}">
-        <div class="sw-hero">${win}<p class="sw-next">Nog een potje? De spelleider start zo.</p></div>
+        <div class="sw-hero">${g.kind === 'disco' && names.length && g.endedBy !== 'pile' ? '<p class="sw-bingo" aria-hidden="true">BINGO!</p>' : ''}${win}<p class="sw-next">Nog een potje? De spelleider start zo.</p></div>
         <div class="sw-rank">${rank}</div>
       </div>`;
-    });
+    })());
   }
 
   // ---------- fullscreen, the idle cursor ----------
@@ -594,11 +594,12 @@ export function render(root, { params, navigate }) {
     if (b) b.hidden = !fsEnabled() || !!document.fullscreenElement;
   }
   let idleTimer = 0;
+  let idle = false; // no mouse for a while: the cursor and the fullscreen button hide (kept over a rebuild)
   function wake() {
-    const el = root.querySelector('.scr');
-    el?.classList.remove('is-idle');
+    idle = false;
+    root.querySelector('.scr')?.classList.remove('is-idle');
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => root.querySelector('.scr')?.classList.add('is-idle'), IDLE_CURSOR_MS);
+    idleTimer = setTimeout(() => { idle = true; root.querySelector('.scr')?.classList.add('is-idle'); }, IDLE_CURSOR_MS);
   }
 
   function onClick(e) {

@@ -14,6 +14,8 @@
 .mode-multi { border-color: rgba(185, 140, 255, .45); }
 .mode-multi .mode-title { color: var(--multi); }
 .entry-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mode-note { margin: 2px 2px 0; font-size: .8rem; line-height: 1.3; color: var(--muted); }
+.mode-note b { color: var(--text); }
 .entry-pair .entry { flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px 10px; }
 .entry-pair .entry-ico { width: 34px; height: 34px; border-radius: 11px; }
 .entry-pair .entry-ico .ico { width: 22px; height: 22px; }

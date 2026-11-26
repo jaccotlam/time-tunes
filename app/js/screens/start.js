@@ -70,6 +70,7 @@ export function render(root, { install }) {
           ${entry({ href: '#/spelleider', testid: 'start-host', icon: icons.music, title: 'Maak een kamer', text: 'Jouw toestel speelt de muziek.', cls: 'entry-multi' })}
           ${entry({ href: '#/kamer', testid: 'start-join', icon: icons.users, title: 'Doe mee', text: 'Met de code van de spelleider.', cls: 'entry-multi' })}
         </div>
+        <p class="mode-note" data-testid="start-screen-note">Tv of laptop erbij? Zet de kamer daar op het <b>grote scherm</b>: de spelleider opent het vanuit de kamer.</p>
       </section>
     </nav>
     <div class="start-links">

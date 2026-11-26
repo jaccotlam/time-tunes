@@ -26,20 +26,23 @@ html.tt-screen #toast { font-size: 1rem; }
 
 /* ---------- the lively background: soft coloured light spots + slow beams ---------- */
 .scr-bg { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
-.sb-spot {
-  position: absolute; width: 70vmax; height: 70vmax; border-radius: 50%; opacity: .34; will-change: transform;
-  background: radial-gradient(closest-side, var(--sc), transparent 70%);
-  animation: sb-drift var(--sd, 26s) ease-in-out infinite alternate;
+/* one layer holds all the coloured light (cheap to composite: a single drifting texture, no
+   per-frame paint); the spots inside it are static gradients */
+.sb-glow {
+  position: absolute; left: -25vw; top: -25vh; width: 150vw; height: 150vh; will-change: transform; opacity: .9;
+  background:
+    radial-gradient(32vmax 32vmax at 18% 20%, rgba(255, 95, 168, .32), transparent 70%),
+    radial-gradient(30vmax 30vmax at 84% 22%, rgba(79, 179, 255, .28), transparent 70%),
+    radial-gradient(34vmax 30vmax at 40% 92%, rgba(255, 198, 73, .18), transparent 70%),
+    radial-gradient(30vmax 30vmax at 86% 84%, rgba(46, 211, 192, .22), transparent 70%),
+    radial-gradient(26vmax 26vmax at 52% 30%, rgba(185, 140, 255, .14), transparent 70%);
+  animation: sb-drift 36s ease-in-out infinite alternate;
 }
-.sb-spot.s1 { --sc: rgba(255, 95, 168, .9); left: -25vmax; top: -30vmax; --sd: 31s; }
-.sb-spot.s2 { --sc: rgba(79, 179, 255, .85); right: -30vmax; top: -20vmax; --sd: 27s; animation-delay: -9s; }
-.sb-spot.s3 { --sc: rgba(255, 198, 73, .6); left: 15vmax; bottom: -45vmax; --sd: 34s; animation-delay: -4s; }
-.sb-spot.s4 { --sc: rgba(46, 211, 192, .7); right: -20vmax; bottom: -40vmax; --sd: 29s; animation-delay: -15s; }
-.sb-spot.s5 { --sc: rgba(185, 140, 255, .7); left: 30vmax; top: -15vmax; --sd: 37s; animation-delay: -20s; opacity: .22; }
 @keyframes sb-drift {
-  0% { transform: translate3d(0, 0, 0) scale(1); }
-  50% { transform: translate3d(12vmax, 8vmax, 0) scale(1.15); }
-  100% { transform: translate3d(-6vmax, 14vmax, 0) scale(.9); }
+  0% { transform: translate3d(0, 0, 0); }
+  33% { transform: translate3d(-8vw, 5vh, 0); }
+  66% { transform: translate3d(6vw, -6vh, 0); }
+  100% { transform: translate3d(-4vw, -3vh, 0); }
 }
 .sb-beams {
   position: absolute; left: 50%; top: 50%; width: 160vmax; height: 160vmax; margin: -80vmax 0 0 -80vmax; opacity: .5; will-change: transform;
@@ -48,6 +51,10 @@ html.tt-screen #toast { font-size: 1rem; }
   animation: sb-turn 120s linear infinite;
 }
 @keyframes sb-turn { to { transform: rotate(360deg); } }
+/* during a game the ball and the content carry the motion: the background rests, which keeps the
+   laptop (that also plays the music in the host tab) cool; the lobby and the waiting screens keep it */
+.scr:not(.is-m-lobby):not(.is-m-boot):not(.scr-prompt) .sb-glow,
+.scr:not(.is-m-lobby):not(.is-m-boot):not(.scr-prompt) .sb-beams { animation-play-state: paused; }
 
 /* ---------- chrome: fullscreen button, status pill ---------- */
 .scr-fs {
@@ -177,7 +184,7 @@ html.tt-screen #toast { font-size: 1rem; }
   background: var(--tc); color: var(--ink); box-shadow: 0 0 0 .14em rgba(255, 255, 255, .15);
 }
 .st-name { grid-area: name; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.15; }
-.st-tag { grid-area: tag; font-size: .7em; color: var(--muted); line-height: 1.1; min-height: 0; }
+.st-tag { grid-area: tag; font-size: .8em; color: var(--muted); line-height: 1.1; min-height: 0; }
 .st-tag:empty { display: none; }
 .st:has(.st-tag:empty) { grid-template-areas: "av name" "av name"; }
 .st.is-offline { opacity: .45; filter: saturate(.3); }
@@ -279,7 +286,9 @@ html.tt-screen #toast { font-size: 1rem; }
   padding: .55rem 1rem .55rem .65rem; border-radius: 1.1rem; background: rgba(44, 24, 70, .85); border: .1rem solid var(--line); font-size: 1.3rem; min-width: 0;
   animation: s-rise .45s ease-out both;
 }
-.sa.is-two .sr { font-size: 1.1rem; }
+.sa.is-two .sr { font-size: 1.1rem; grid-template-areas: "icon name verdict" "icon answer answer"; }
+.sa.is-two .sr-verdict { flex-direction: row; align-items: baseline; gap: .5em; }
+.sa.is-two .sr-verdict small { font-size: .85em; }
 .sr-icon { grid-area: icon; width: 2.1em; height: 2.1em; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .1); color: var(--muted); font-weight: 900; font-family: var(--font-display); }
 .sr-icon .ico { width: 1.3em; height: 1.3em; }
 .sr.is-right .sr-icon { background: var(--good); color: var(--ink); }
@@ -291,7 +300,7 @@ html.tt-screen #toast { font-size: 1rem; }
 .sr-answer { grid-area: answer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); opacity: .92; }
 .sr.is-none .sr-answer, .sr.is-pass .sr-answer { color: var(--muted); font-style: italic; }
 .sr-verdict { grid-area: verdict; display: flex; flex-direction: column; align-items: flex-end; text-align: right; font-weight: 900; font-family: var(--font-display); }
-.sr-verdict small { font-family: var(--font); font-weight: 600; font-size: .72em; color: var(--muted); white-space: nowrap; }
+.sr-verdict small { font-family: var(--font); font-weight: 600; font-size: .8em; color: var(--muted); white-space: nowrap; }
 .sr.is-right .sr-verdict { color: var(--good); }
 .sr.is-wrong .sr-verdict { color: #ff9a9a; }
 .sr.is-doubt .sr-verdict { color: var(--mustard); }
@@ -346,7 +355,7 @@ html.tt-screen #toast { font-size: 1rem; }
 .scr .ranking { gap: .45rem; }
 .scr .ranking li { padding: .45rem 1rem; border-radius: 1rem; font-size: 1.25rem; gap: .8rem; }
 .scr .ranking li b { font-size: 1.4em; }
-.scr .room-standings li small { font-size: .85rem; }
+.scr .room-standings li small { font-size: .95rem; margin-left: -.2rem; }
 .sa-stand .ranking { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
 
 /* ---------- Quiz (the building blocks of the host's wide quiz layout, bigger) ---------- */
@@ -383,7 +392,14 @@ html.tt-screen #toast { font-size: 1rem; }
 .scr .quiz-rank-place { width: 2.2ch; }
 
 /* ---------- the winner ---------- */
-.sw { min-height: 0; height: 100%; }
+.sw { min-height: 0; height: 100%; position: relative; }
+.sw > :not(.confetti) { position: relative; z-index: 1; }
+.sw-bingo {
+  font-family: var(--font-display); font-weight: 900; font-size: 4.4rem; line-height: 1; letter-spacing: .05em; margin-bottom: -.4rem !important;
+  background: linear-gradient(90deg, var(--cat-decade), var(--cat-artist), var(--cat-year), var(--cat-title));
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: var(--mustard);
+  animation: s-win .8s cubic-bezier(.2, 1.6, .4, 1);
+}
 .sw-in { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2.4rem; align-items: center; height: 100%; min-height: 0; }
 .sw-hero { display: flex; flex-direction: column; align-items: center; gap: 1rem; text-align: center; }
 .scr .winner { padding: 0; animation: s-win .9s cubic-bezier(.2, 1.4, .4, 1); }
@@ -397,7 +413,7 @@ html.tt-screen #toast { font-size: 1rem; }
 .sw-rank { min-height: 0; }
 .scr .confetti { z-index: 0; }
 .scr .confetti i { width: .8rem; height: 1.25rem; }
-.sw-quiz { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); column-gap: 2.4rem; row-gap: 1rem; height: 100%; min-height: 0; align-items: end; }
+.sw-quiz { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto auto auto; column-gap: 2.4rem; row-gap: 1rem; height: 100%; min-height: 0; align-items: end; align-content: center; padding-bottom: 2rem; }
 .sw-quiz > .quiz-end { grid-column: 1; grid-row: 1; }
 .sw-quiz > .podium { grid-column: 1; grid-row: 2 / span 2; align-self: start; gap: 1rem; }
 .sw-quiz > .room-h { grid-column: 2; grid-row: 1; align-self: end; margin: 0; font-size: 2rem; }
@@ -405,9 +421,9 @@ html.tt-screen #toast { font-size: 1rem; }
 .scr .podium-names b { font-size: 1.6rem; }
 .scr .podium-names small { font-size: 1.1rem; }
 .scr .podium-block { font-size: 2.6rem; border-radius: 1rem 1rem .3rem .3rem; }
-.scr .podium-step.is-p1 .podium-block { height: 12rem; }
-.scr .podium-step.is-p2 .podium-block { height: 8.5rem; }
-.scr .podium-step.is-p3 .podium-block { height: 6rem; }
+.scr .podium-step.is-p1 .podium-block { height: 9.5rem; }
+.scr .podium-step.is-p2 .podium-block { height: 7rem; }
+.scr .podium-step.is-p3 .podium-block { height: 5rem; }
 
 /* ---------- a narrow or portrait window: one column, still no scrolling ---------- */
 @media (max-aspect-ratio: 5/4) {
@@ -421,10 +437,11 @@ html.tt-screen #toast { font-size: 1rem; }
   .sq-rev > *, .sw-quiz > * { grid-column: 1 !important; grid-row: auto !important; }
   .s-top { grid-template-columns: minmax(0, 1fr) auto; }
   .s-top-mid { display: none; }
+  .sl-foot { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sb-spot, .sb-beams, .sl-code span, .sl-ghost, .eqz i, .sr.is-doubt .sr-icon, .sk-badge.is-close, .scr .winner-trophy, .s-pill i { animation: none !important; }
+  .sb-glow, .sb-beams, .sl-code span, .sl-ghost, .eqz i, .sr.is-doubt .sr-icon, .sk-badge.is-close, .scr .winner-trophy, .s-pill i { animation: none !important; }
   .eqz i { transform: scaleY(.6); }
   .eqz i:nth-child(2n) { transform: scaleY(.9); }
   .st-burst { display: none; }
