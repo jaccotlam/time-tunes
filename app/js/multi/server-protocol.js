@@ -3,7 +3,8 @@
 // Cloudflare Worker (server/). The game rules stay in game.js; the views in protocol.js.
 //
 //   phone -> server: hello {v, code, id, token, name}
-//                    answer {round, answer}, withdraw {}, leave {}
+//                    answer {round, answer}, withdraw {}, leave {} (in the lobby: off the list; during a game
+//                      (also on the winner screen) the seat stays and the same phone may come back with its token)
 //                    mix-add {tracks} / mix-clear {}: add to / withdraw this phone's part of the
 //                      "Mix van de groep" (see mix.js); every member, also the spelleider
 //                    stamp {round, index} (Discobingo, after the reveal: a right player chooses or moves

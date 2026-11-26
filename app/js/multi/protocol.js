@@ -10,7 +10,7 @@
 import { SQUARES } from '../bingo.js';
 import { describeAnswer, scoreOf, FREE, choosableSquares, undecided, stillChoosing, own } from './game.js';
 import { PROMPTS } from './quiz.js';
-import { decadeLabel, goalCells, completeLines, reachedGoal, stampedCount, bestLineCount, SPIN_MS } from './disco.js';
+import { decadeLabel, goalCells, completeLines, reachedGoal, stampedCount, bestLineCount, squaresToGo, SPIN_MS } from './disco.js';
 
 /** Bump when old and new apps can not understand each other any more. */
 export const PROTOCOL_VERSION = 1;
@@ -228,7 +228,8 @@ function discoView(room, pid, revealed) {
     // everybody's progress (no song data in it)
     progress: ids.map((id) => {
       const m = g.per[id].marks;
-      return { id, name: nameOf(room, id), stamped: stampedCount(m), lines: completeLines(m).length, best: bestLineCount(m), bingo: reachedGoal(m, D.win) };
+      // toGo: squares still to stamp for the goal (0 = reached; 1 = "spannend")
+      return { id, name: nameOf(room, id), stamped: stampedCount(m), lines: completeLines(m).length, best: bestLineCount(m), bingo: reachedGoal(m, D.win), toGo: squaresToGo(m, D.win) };
     }),
   };
 }

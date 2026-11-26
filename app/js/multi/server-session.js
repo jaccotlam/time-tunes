@@ -15,7 +15,7 @@ import { store } from '../ui.js';
 import {
   SERVER_PROTOCOL_VERSION, serverBases, parseServerMessage, cardsForServer, PING_TEXT, PONG_TEXT, CLIENT_PING_MS, STALE_MS,
 } from './server-protocol.js';
-import { playerId, JOIN_KEY } from './client-session.js';
+import { playerId, JOIN_KEY, PLAYER_ID_KEY } from './client-session.js';
 import { HOST_ID_KEY, MULTI_SEED_KEY } from './host-session.js';
 import { getClientId } from '../spotify.js';
 
@@ -63,6 +63,47 @@ function saveToken(code, id, token) {
   // keep the 20 most recent rooms
   const keep = Object.entries(all).sort((a, b) => (b[1].at || 0) - (a[1].at || 0)).slice(0, 20);
   store.set(TOKENS_KEY, Object.fromEntries(keep));
+}
+
+/** The seat this phone has in a room via the server: { code, name, id, at }. */
+export const SEAT_KEY = 'timetunesr.multiSeat.v1';
+/** A seat not seen for this long is forgotten (a room expires after 6 idle hours). */
+export const SEAT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * The room this phone can go back to ("Terug naar kamer ABCD"): { code, name, at } or null.
+ * Only a seat of this phone's player id with a token from the server counts. Synchronous and
+ * local: checkSeat() asks the server whether the room is still there.
+ */
+export function storedSeat() {
+  const s = store.get(SEAT_KEY, null);
+  if (!s || typeof s.code !== 'string' || typeof s.name !== 'string' || typeof s.id !== 'string') return null;
+  if (s.id !== store.get(PLAYER_ID_KEY, null) || !tokenFor(s.code, s.id)) return null;
+  if (!(Date.now() - (Number(s.at) || 0) < SEAT_MAX_AGE_MS)) { store.remove(SEAT_KEY); return null; }
+  return { code: s.code, name: s.name, at: s.at };
+}
+
+/**
+ * Forget the seat (of room `code`, or any). The token stays: joining that room again later
+ * with this phone still lands on the same seat, if the room still has it.
+ */
+export function forgetSeat(code = null) {
+  const s = store.get(SEAT_KEY, null);
+  if (s && (code == null || s.code === code)) store.remove(SEAT_KEY);
+}
+
+/** Like storedSeat(), but asks the server: a room it does not know (404) forgets the seat. Async. */
+export async function checkSeat() {
+  const seat = storedSeat();
+  const base = serverBase();
+  if (!seat || !base) return seat;
+  const r = await request(`${base.http}/rooms/${seat.code}`);
+  if (r.status === 404) { forgetSeat(seat.code); return null; }
+  return seat; // there, or the server is not reachable now: keep it
+}
+
+function saveSeat(code, id, name) {
+  store.set(SEAT_KEY, { code, name, id, at: Date.now() });
 }
 
 export function storedServerHost() {
@@ -397,6 +438,7 @@ export function createServerClientSession({ code, name }) {
   let notice = null;
   let pendingAnswer = null;
   let lastSent = null; // { round, answer }: resent when a restarted server lost it
+  let lastStep = ''; // phase + round of the last state (the seat's "last seen")
   let clock = 0; // server time - this phone's time (Quiz countdown)
   const listeners = new Set();
   const received = [];
@@ -413,7 +455,7 @@ export function createServerClientSession({ code, name }) {
         if (r.status === 404) return { ok: false, code: 'notfound' };
         return { ok: false, code: r.code || (r.status ? `http-${r.status}` : 'network') };
       },
-      onWelcome: (m) => { if (m.token) saveToken(code, id, m.token); emit(); },
+      onWelcome: (m) => { if (m.token) saveToken(code, id, m.token); saveSeat(code, id, name); emit(); },
       onStatus: () => emit(),
       onClose: () => emit(),
       onFatal: (e) => fatal(e),
@@ -428,6 +470,8 @@ export function createServerClientSession({ code, name }) {
           return;
         }
         if (m.t === 'state' && m.view) {
+          const step = `${m.view.phase}:${m.view.game?.round ?? ''}`;
+          if (step !== lastStep && link.online) { lastStep = step; saveSeat(code, id, name); } // still seen
           view = m.view;
           meta = m.meta || null;
           if (Number.isFinite(meta?.now)) clock = meta.now - Date.now();
@@ -449,6 +493,7 @@ export function createServerClientSession({ code, name }) {
   function fatal(e) {
     error = e;
     if (['removed', 'closed', 'room', 'expired'].includes(e.code)) store.remove(JOIN_KEY);
+    if (['removed', 'closed', 'room', 'expired', 'token'].includes(e.code)) forgetSeat(code); // the server says: no seat (any more)
     link.stop('closed');
     emit();
   }
@@ -493,10 +538,20 @@ export function createServerClientSession({ code, name }) {
     mixAdd(tracks) { return link.send({ t: 'mix-add', tracks }); },
     mixClear() { return link.send({ t: 'mix-clear' }); },
     get online() { return link.online; },
+    /**
+     * Does Verlaat keep this phone's seat? True during a game (also on the winner screen):
+     * the server keeps card, stamps and score, and the phone may come back (storedSeat()).
+     * False in the lobby (and before the first state): leaving takes the player off the list.
+     */
+    get keepsSeat() { return !!view?.game && view.phase !== 'lobby'; },
+    /** Verlaat. Returns { seat }: whether this phone can come back to its seat (see keepsSeat). */
     leave() {
+      const seat = api.keepsSeat;
       link.send({ t: 'leave' });
-      store.remove(JOIN_KEY);
+      if (seat) saveSeat(code, id, name);
+      else { store.remove(JOIN_KEY); forgetSeat(code); }
       setTimeout(() => api.destroy(), 200);
+      return { seat };
     },
     retry() { link.retry({ force: true }); },
     copyDiag: async () => copyText(await diagText(link.diag, { status: api.status, code })),

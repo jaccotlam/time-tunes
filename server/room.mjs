@@ -500,13 +500,22 @@ export class RoomHub {
       }
       case 'leave': {
         if (mid === s.ownerId) return; // the owner closes the room instead
-        s.room = G.removePlayer(r, mid);
-        s.room = { ...s.room, removed: s.room.removed.filter((x) => x !== mid) }; // may join again later
-        delete s.members[mid];
-        this.dropContribution(mid);
+        if (r.game) {
+          // during a game (also on the winner screen) the seat stays: card, stamps, score,
+          // this round's result and the member token, so the same phone can come back to
+          // exactly that seat. The player is just away, like after a closed tab; their part
+          // of the "Mix van de groep" stays in this game too (see dropContribution).
+        } else {
+          // in the lobby nothing is lost: off the list (they may join again later)
+          s.room = G.removePlayer(r, mid);
+          s.room = { ...s.room, removed: s.room.removed.filter((x) => x !== mid) };
+          delete s.members[mid];
+          this.dropContribution(mid);
+        }
         if (s.leaderId === mid) { s.leaderId = s.ownerId; s.leaderAwaySince = this.online(s.ownerId) ? null : this.now(); }
         this.conns.delete(connId);
         this.deps.drop?.(connId, 1000, 'leave');
+        this.quizCheck(); // the question does not wait for somebody who left
         break;
       }
       case 'lead': {
