@@ -91,6 +91,10 @@ test('groepsmix: eerlijk verdeeld, ontdubbeld, zekere jaren eerst, geschud en vo
   assert.equal(new Set(cards.map((c) => mixKey(c))).size, cards.length, 'geen dubbele artiest+titel');
   const shared = cards.find((c) => c.spotifyId === contrib.anna.tracks[0].spotifyId);
   if (shared) assert.deepEqual(shared.by, ['Anna', 'Bram'], 'dubbel nummer: van allebei');
+  // the same rule, but with a deck so small that the shared song is always picked (no conditional)
+  const dup = buildMix({ anna: { tracks: list('d', 3) }, bram: { tracks: [...list('d', 1), ...list('e', 2)] } }, { seed: 7, need: 5, names: { anna: 'Anna', bram: 'Bram' } });
+  assert.equal(dup.length, 5);
+  assert.deepEqual(dup.find((c) => c.spotifyId === list('d', 1)[0].spotifyId)?.by, ['Anna', 'Bram'], 'dubbel nummer: van allebei');
   const casCards = cards.filter((c) => c.from[0] === 'cas');
   assert.ok(casCards.filter((c) => !c.unsure).length >= 10, 'Cas: alle zekere jaren zitten erin');
   assert.equal(casCards.length, 27);

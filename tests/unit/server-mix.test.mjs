@@ -209,19 +209,6 @@ test('opgeslagen kamer van vóór de groepsmix werkt verder; herstart zet de bij
   assert.deepEqual(meta.mix, { total: 0, preview: 0, sure: 0, contributors: 0, mine: 0 });
 });
 
-test('protocolversie 3 (of hoger): een oudere app (versie 2, of 1) krijgt een nette melding', async () => {
-  const { core } = setup();
-  assert.ok(V >= 3);
-  assert.equal(http(core, 'GET', '/health').body.v, V);
-  assert.equal(http(core, 'POST', '/rooms', { v: 2, id: 'owner01' }).status, 409);
-  assert.equal(http(core, 'POST', '/rooms', { v: 1, id: 'owner01' }).status, 409);
-  const { code } = await room(core);
-  const old = connect(core, code);
-  old.send({ t: 'hello', v: 2, code, id: 'oldapp12', name: 'Oud' });
-  assert.equal(old.last('error').code, 'version');
-  assert.match(old.last('error').message, /Ververs/);
-});
-
 test('quiz uit de groepsmix: vragen over bijgedragen nummers, foute antwoorden uit de eigen muziek van de spelleider', async () => {
   const { core } = setup();
   const { code, host } = await room(core, { settings: { game: 'quiz', questions: 10, qtype: 'title', think: 20 } });

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const require = createRequire(import.meta.url);
-export const { chromium, devices } = require('playwright');
+export const { chromium } = require('playwright');
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const OUT = process.env.E2E_OUT || join(tmpdir(), 'timetunesr-e2e');
@@ -64,12 +64,7 @@ export function assert(cond, msg) {
 
 export async function shot(page, name) {
   const path = join(OUT, `${name}.png`);
-  await page.waitForTimeout(400); // let the screen fade-in finish
-  await page.screenshot({ path, fullPage: false });
+  // animations: 'disabled' jumps finite CSS animations (the screen fade-in) to their end state: no sleep needed
+  await page.screenshot({ path, fullPage: false, animations: 'disabled' });
   return path;
-}
-
-/** Visible text of the page (what a player could read). */
-export function visibleText(page) {
-  return page.evaluate(() => document.body.innerText);
 }

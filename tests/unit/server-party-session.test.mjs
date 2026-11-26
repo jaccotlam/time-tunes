@@ -9,7 +9,6 @@ import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { startNodeServer } from '../../server/node.mjs';
 import { SERVER_PROTOCOL_VERSION } from '../../app/js/multi/server-protocol.js';
-import { REACT_GAP_MS } from '../../app/js/multi/party.js';
 
 const V = SERVER_PROTOCOL_VERSION;
 const storage = new Map();
@@ -94,7 +93,7 @@ test('sessies: plaatje kiezen, reageren, reacties bij spelleider en groot scherm
     assert.equal(screen.reactions.length, 1);
     assert.equal(host.reactions.at(-1).emoji, '👏');
     assert.ok(!p.received.some((m) => m.t === 'react'), 'de speler krijgt geen reacties');
-    await sleep(REACT_GAP_MS + 50);
+    // (no wait needed: the cool-down is per person, the spelleider has an own one)
     assert.equal(host.react('🎉'), true, 'de meespelende spelleider mag ook');
     await until(() => got.screen.length === 2, 'reactie spelleider');
     assert.equal(got.host.length, 2, 'ook terug bij de spelleider zelf (die is het grote scherm-in-het-klein)');

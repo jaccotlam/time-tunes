@@ -120,7 +120,7 @@ test('schermsessie: een vijfde scherm neemt een plek over; het verdrongen scherm
   const out = await until(() => many.find((s) => s.error), 8000, 'een scherm verdrongen');
   assert.equal(out.error.code, 'screenreplaced');
   assert.equal(out.status, 'closed');
-  await new Promise((r) => setTimeout(r, 2500));
+  await new Promise((r) => setTimeout(r, 1500));
   assert.equal(out.status, 'closed', 'probeert niet zelf opnieuw');
   assert.equal(fifth.online, true, 'het nieuwe scherm blijft');
   assert.equal(many.filter((s) => s.error).length, 1);

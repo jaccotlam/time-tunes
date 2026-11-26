@@ -16,6 +16,8 @@ import {
   quizQuestionHtml, quizRevealHtml, quizPodiumHtml, tickQuizClocks, quizSettingsText, standingsHtml, winnerHtml,
 } from './room-ui.js';
 import { createDiscoStage, catChip, catIcon, resultWords, winText } from './room-disco.js';
+import { avatarOf } from '../multi/party.js';
+import { avatarHtml, resultMarks, streakMark, jokerMark, createFloatLayer, awardsListHtml, awardSpotHtml } from './party-ui.js';
 
 export const name = 'room-screen';
 
@@ -47,7 +49,9 @@ function colorFor(nm) {
   for (const ch of String(nm)) h = (h * 31 + ch.codePointAt(0)) >>> 0;
   return TILE_COLORS[h % TILE_COLORS.length];
 }
-const initialOf = (nm) => ([...String(nm).trim()][0] || '?').toUpperCase();
+/** The prize ceremony after a won Discobingo: the winner on its own, then each award, then the overview that stays. */
+const CEREMONY_WINNER_MS = 6000;
+const CEREMONY_AWARD_MS = 4800;
 
 /** What the settings of a game read like: "winnen met 1 lijn", "4×4", "doel 10 kaarten", "10 vragen, …". */
 function settingsText(s) {
@@ -96,7 +100,7 @@ function rankingHtml(v, { reason, limit = 12 } = {}) {
     const dots = Array.from({ length: 5 }, (_, k) => `<i class="${k < Math.min(5, p.best) ? 'on' : ''}"></i>`).join('');
     return `<li class="sk-row${isBingo ? ' is-bingo' : ''}${isClose ? ' is-close' : ''}" style="--i:${i}" data-testid="screen-progress-row" data-name="${esc(p.name)}" data-stamped="${p.stamped}" data-lines="${p.lines}" data-best="${p.best}" data-togo="${t ?? ''}" data-bingo="${!!isBingo}" data-close="${isClose}">
       <span class="sk-place">${i + 1}</span>
-      <span class="sk-name">${esc(p.name)}</span>
+      <span class="sk-name">${avatarHtml(p, { cls: 'sk-av' })}<span class="sk-name-t">${esc(p.name)}</span>${reason === 'won' ? '' : `${streakMark(p.streak)}${jokerMark(p.jokers)}`}</span>
       <span class="sk-dots" aria-label="Beste lijn: ${p.best} van 5">${dots}</span>
       <span class="sk-nums"><b>${p.stamped}</b> ${p.stamped === 1 ? 'vakje' : 'vakjes'} · <b>${p.lines}</b> ${p.lines === 1 ? 'lijn' : 'lijnen'}</span>
       <span class="sk-end">${badge}</span>
@@ -133,9 +137,9 @@ function discoAnswersHtml(v) {
     }
     const judged = r.overridden || (r.decided && r.auto === 'doubt');
     const icon = vd === 'right' ? icons.check : vd === 'wrong' ? icons.cross : vd === 'doubt' ? '?' : '–';
-    return `<li class="sr is-${vd}" data-testid="screen-result" data-name="${esc(r.name)}" data-verdict="${vd}" data-stamp="${stamp}" data-judged="${!!judged}">
+    return `<li class="sr is-${vd}${r.fastest ? ' is-fast' : ''}" data-testid="screen-result" data-name="${esc(r.name)}" data-verdict="${vd}" data-stamp="${stamp}" data-judged="${!!judged}" data-fastest="${!!r.fastest}">
       <span class="sr-icon" aria-hidden="true">${icon}</span>
-      <span class="sr-name">${esc(r.name)}</span>
+      <span class="sr-name">${avatarHtml(r, { cls: 'sr-av' })}<span class="sr-name-t">${esc(r.name)}</span>${resultMarks(r)}</span>
       <span class="sr-answer">${esc(resultWords(r))}</span>
       <span class="sr-verdict">${VERDICT_WORD[vd]}${judged ? ' <small>door de spelleider</small>' : ''}${note ? `<small class="sr-note">${esc(note)}</small>` : ''}</span>
     </li>`;
@@ -158,7 +162,7 @@ function plainAnswersHtml(v) {
     const icon = vd === 'right' ? icons.check : vd === 'wrong' ? icons.cross : '–';
     return `<li class="sr is-${vd}" data-testid="screen-result" data-name="${esc(r.name)}" data-verdict="${vd}">
       <span class="sr-icon" aria-hidden="true">${icon}</span>
-      <span class="sr-name">${esc(r.name)}</span>
+      <span class="sr-name">${avatarHtml(r, { cls: 'sr-av' })}<span class="sr-name-t">${esc(r.name)}</span></span>
       <span class="sr-answer">${esc(r.none ? 'geen antwoord' : r.pass ? 'gepast' : r.label || '')}</span>
       <span class="sr-verdict">${VERDICT_WORD[vd]}${r.overridden ? ' <small>door de spelleider</small>' : ''}</span>
     </li>`;
@@ -231,8 +235,18 @@ function syncTiles(ul, players, { game = false, burst = false } = {}) {
       li.__name = p.name;
       li.dataset.name = p.name;
       li.style.setProperty('--tc', colorFor(p.name));
-      li.querySelector('.st-av').textContent = initialOf(p.name);
       li.querySelector('.st-name').textContent = p.name;
+    }
+    const av = avatarOf(p);
+    if (li.__av !== av) {
+      // a new avatar (picked in the lobby) gets a little pop
+      if (li.__av) { li.classList.remove('av-swap'); void li.offsetWidth; li.classList.add('av-swap'); }
+      li.__av = av;
+      li.dataset.avatar = av;
+      const el = li.querySelector('.st-av');
+      el.textContent = av;
+      el.dataset.testid = 'player-avatar';
+      el.dataset.avatar = av;
     }
     const tag = !p.online ? 'offline' : game && !p.playing ? 'doet zo mee' : p.host ? 'spelleider' : '';
     if (li.__tag !== tag) { li.__tag = tag; li.querySelector('.st-tag').textContent = tag; }

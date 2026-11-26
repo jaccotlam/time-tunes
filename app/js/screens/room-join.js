@@ -11,6 +11,7 @@ import { createDiscoBall } from '../discoball.js';
 import { esc, icons } from '../ui.js';
 import { gameName, quizSettingsText } from './room-ui.js';
 import { winText } from './room-disco.js';
+import { avatarOf } from '../multi/party.js';
 
 /**
  * What is in the code field -> { value, bad, dropped }: upper case, letters only, at most
@@ -127,13 +128,13 @@ export function lobbyWaitHtml(v) {
 
 const AVATAR_COLORS = ['#ff5d73', '#ffc649', '#2ed3c0', '#4fb3ff', '#ff5fa8', '#b98cff', '#ff8a5c', '#3ddc8f'];
 const avatarColor = (i) => AVATAR_COLORS[i % AVATAR_COLORS.length]; // join order: neighbours differ
-const initial = (name) => esc(([...String(name || '?').trim()][0] || '?').toUpperCase());
 
 /**
- * The players in the lobby as tiles (same testids and data as playersHtml). Tiles of players
- * not in `seen` yet pop in; `seen` (a Set of ids) is updated.
+ * The players in the lobby as tiles (same testids and data as playersHtml), each with its
+ * avatar. Tiles of players not in `seen` yet pop in; `seen` (a Set of ids) is updated.
+ * `canPick`: the own tile is a button that opens the avatar picker.
  */
-export function lobbyPlayersHtml(view, seen) {
+export function lobbyPlayersHtml(view, seen, { canPick = false } = {}) {
   const first = seen.size === 0;
   let k = 0;
   const tiles = view.players.map((p, i) => {
@@ -141,13 +142,16 @@ export function lobbyPlayersHtml(view, seen) {
     const fresh = !seen.has(p.id);
     seen.add(p.id);
     const delay = fresh && first ? ` style="--delay:${Math.min(k++, 8) * 70}ms"` : '';
-    return `<li class="lp${p.online ? '' : ' is-offline'}${you ? ' is-you' : ''}${fresh ? ' is-new' : ''}"${delay} data-testid="room-player-${i}" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-online="${p.online}" data-answered="${p.answered}">
-      <span class="lp-avatar" style="--av:${avatarColor(i)}" aria-hidden="true">${initial(p.name)}</span>
+    const a = avatarOf(p);
+    const pick = you && canPick;
+    const av = `<span class="lp-avatar" style="--av:${avatarColor(i)}" data-testid="player-avatar" data-avatar="${esc(a)}" aria-hidden="true">${esc(a)}</span>`;
+    return `<li class="lp${p.online ? '' : ' is-offline'}${you ? ' is-you' : ''}${pick ? ' can-pick' : ''}${fresh ? ' is-new' : ''}"${delay} data-testid="room-player-${i}" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-avatar="${esc(a)}" data-online="${p.online}" data-answered="${p.answered}"${pick ? ' data-action="avatar-open"' : ''}>
+      ${pick ? `<button type="button" class="lp-pick" data-action="avatar-open" data-testid="lobby-avatar-edit" aria-label="Kies een andere avatar">${av}<span class="lp-pick-pen" aria-hidden="true">✎</span></button>` : av}
       <span class="lp-name">${esc(p.name)}${p.host ? ' <small>(spelleider)</small>' : ''}${you ? ' <small>(jij)</small>' : ''}${p.online ? '' : ' <small class="lp-off">offline</small>'}</span>
     </li>`;
   }).join('');
   const n = view.players.length;
-  return `<h2 class="room-h lobby-players-h">Spelers <span class="lobby-count" data-testid="lobby-count">${n}</span></h2>
+  return `<h2 class="room-h lobby-players-h">Spelers <span class="lobby-count" data-testid="lobby-count">${n}</span>${canPick ? '<small class="lobby-pick-hint">tik op jezelf voor een andere avatar</small>' : ''}</h2>
     <ul class="lobby-players" data-testid="room-players" aria-label="Spelers">${tiles}
       <li class="lp lp-next" aria-hidden="true"><span class="lp-avatar">${icons.plus}</span><span class="lp-name">Wie volgt?</span></li>
     </ul>`;

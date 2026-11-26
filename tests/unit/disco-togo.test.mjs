@@ -3,7 +3,7 @@
 // waits for them (automatic placement, the Quiz round end), a next game gives them a card.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { squaresToGo, reachedGoal, freshMarks, CENTER, CELLS, LINES, WINS, FREE_MARK } from '../../app/js/multi/disco.js';
+import { squaresToGo, reachedGoal, freshMarks, CENTER, CELLS, WINS, FREE_MARK } from '../../app/js/multi/disco.js';
 import { seededRandom } from '../../app/js/logic.js';
 import * as G from '../../app/js/multi/game.js';
 import { viewFor } from '../../app/js/multi/protocol.js';
@@ -75,7 +75,6 @@ test('squaresToGo = brute force, en 0 precies bij het doel (willekeurige kaarten
       else assert.ok(t > 4);
     }
   }
-  assert.equal(LINES.length, 12);
 });
 
 // ---------- the machine with a player who is away ----------

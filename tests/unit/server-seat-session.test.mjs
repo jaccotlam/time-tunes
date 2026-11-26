@@ -141,7 +141,6 @@ test('stoel: verwijderd = vergeten; een kamer die de server niet kent = vergeten
   assert.equal(storedSeat(), null);
   storage.set(SEAT_KEY, JSON.stringify({ code: 'BCDF', name: 'Cas', id, at: Date.now() - 7 * 3600e3 }));
   assert.equal(storedSeat(), null, 'te oud');
-  await sleep(50);
   close();
 });
 
@@ -155,7 +154,7 @@ test('stoel: checkSeat vraagt de server naar dit id + token: een vreemde kamer m
   await host.send({ t: 'start', cards: cardsForServer(cards), seed: 8 });
   await until(() => s.view?.phase === 'answering', 5000, 'spel');
   assert.deepEqual(s.leave(), { seat: true });
-  await sleep(300);
+  await until(() => host.last('state')?.view.players.find((p) => p.name === 'Dirk')?.online === false, 3000, 'Dirk weg');
   assert.equal((await checkSeat())?.code, code, 'de server kent deze plek');
   // the room goes, a stranger's new room gets the same code
   srv.core.rooms.get(code).shutdown('closed', 'dicht');
@@ -177,7 +176,8 @@ test('stoel: na Verlaat in de lobby zet een laat binnenkomend bericht de plek ni
   // new phase arrives after leave()
   await host.send({ t: 'start', cards: cardsForServer(cards), seed: 4 });
   assert.deepEqual(s.leave(), { seat: false });
-  await sleep(400);
+  await until(() => host.last('state')?.view.phase === 'answering', 3000, 'spel gestart'); // the late state is on its way ...
+  await sleep(150); // ... and had time to arrive at the session
   assert.equal(storedSeat(), null, 'Verlaat blijft Verlaat');
   close();
 });

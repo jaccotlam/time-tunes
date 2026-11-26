@@ -8,6 +8,7 @@ import { joinUrl } from '../multi/code.js';
 import { icons, esc } from '../ui.js';
 import { bingoCardHtml } from './bingo.js';
 import { answerHtml } from './answer.js';
+import { avatarHtml } from './party-ui.js';
 
 /** Base URL of the app (without hash), for the join link. */
 export function appBase() {
@@ -75,6 +76,7 @@ export function playersHtml(view, { host = false, removable = false } = {}) {
     const label = !p.online ? 'offline' : answering && p.playing ? (p.answered ? 'heeft geantwoord' : 'denkt na') : 'online';
     return `<li class="rp is-${state}${view.you && p.id === view.you.id ? ' is-you' : ''}" data-testid="room-player-${i}" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-online="${p.online}" data-answered="${p.answered}">
       <span class="rp-dot" aria-hidden="true">${state === 'answered' ? icons.check : ''}</span>
+      ${avatarHtml(p, { cls: 'rp-av' })}
       <span class="rp-name">${esc(p.name)}${p.host ? ' <small>(spelleider)</small>' : ''}${view.you && p.id === view.you.id && !host ? ' <small>(jij)</small>' : ''}</span>
       <span class="rp-state">${label}</span>
       ${view.game && p.playing ? `<b class="rp-score" title="score">${p.score}</b>` : ''}
@@ -92,7 +94,7 @@ export function standingsHtml(view) {
   const winners = new Set(g.winnerIds || []);
   const roundWinners = new Set(g.reveal?.roundWinners || []);
   return `<ol class="ranking room-standings" data-testid="room-standings" aria-label="Tussenstand">
-    ${list.map((p) => `<li class="${winners.has(p.id) || roundWinners.has(p.name) ? 'is-winner' : ''}" data-name="${esc(p.name)}"><span>${esc(p.name)}</span><b>${p.score}</b><small>${unit}</small></li>`).join('')}
+    ${list.map((p) => `<li class="${winners.has(p.id) || roundWinners.has(p.name) ? 'is-winner' : ''}" data-name="${esc(p.name)}">${avatarHtml(p, { cls: 'rk-av' })}<span>${esc(p.name)}</span><b>${p.score}</b><small>${unit}</small></li>`).join('')}
   </ol>`;
 }
 
@@ -362,7 +364,7 @@ export function roundResultsHtml(view, { host = false } = {}) {
     const state = r.none ? 'none' : r.pass ? 'pass' : r.correct ? 'good' : 'bad';
     return `<li class="rr is-${state}" data-testid="room-result-${i}" data-name="${esc(r.name)}" data-correct="${r.none || r.pass ? 'none' : r.correct}">
       <span class="rr-icon" aria-hidden="true">${state === 'good' ? icons.check : state === 'bad' ? icons.cross : '–'}</span>
-      <span class="rr-name">${esc(r.name)}</span>
+      <span class="rr-name">${avatarHtml(r, { cls: 'rr-av' })}${esc(r.name)}</span>
       <span class="rr-label">${esc(r.label)}</span>
       ${host && r.canOverride ? `<button type="button" class="btn btn-small btn-ghost rr-flip${r.doubt ? ' is-doubt' : ''}" data-action="override" data-id="${esc(r.id)}" data-testid="room-override-${i}" aria-label="Oordeel omdraaien voor ${esc(r.name)}">${r.correct ? 'Toch fout' : 'Toch goed'}</button>` : ''}
     </li>`;
@@ -380,8 +382,12 @@ export function winnerHtml(view) {
     : g.kind === 'bingo' ? 'Als eerste een volle rij, kolom of diagonaal.'
       : g.kind === 'disco' ? (g.disco?.win === 'full' ? 'Als eerste de hele kaart vol.' : `Als eerste ${g.disco?.win === 'line2' ? '2 lijnen' : '1 lijn'} vol.`)
         : `Als eerste ${g.goal} kaarten op de juiste plek.`;
+  // the winners' avatars (from the players list: the names alone do not say who is who)
+  const ids = g.winnerIds || [];
+  const avs = ids.map((id) => view.players?.find((p) => p.id === id)).filter(Boolean);
   return `<div class="winner" data-testid="room-winner">
     <span class="winner-trophy">${icons.trophy}</span>
+    ${avs.length ? `<span class="winner-avs" data-testid="winner-avatars">${avs.map((p) => avatarHtml(p, { cls: 'winner-av' })).join('')}</span>` : ''}
     <h2 class="winner-name" data-testid="room-winner-name">${title}</h2>
     <p class="muted">${why}</p>
   </div>`;
@@ -604,7 +610,7 @@ export function quizRankingHtml(view, { limit = Infinity, testid = 'quiz-ranking
   const me = view.you?.id;
   return `<ol class="quiz-rank" data-testid="${testid}">
     ${list.map((r) => `<li class="${r.id === me ? 'is-you' : ''}" data-name="${esc(r.name)}" data-rank="${r.rank}" data-score="${r.score}">
-      <span class="quiz-rank-place">${r.rank}.</span><span class="quiz-rank-name">${esc(r.name)}${r.id === me ? ' <small>(jij)</small>' : ''}</span>
+      <span class="quiz-rank-place">${r.rank}.</span>${avatarHtml(r, { cls: 'qr-av' })}<span class="quiz-rank-name">${esc(r.name)}${r.id === me ? ' <small>(jij)</small>' : ''}</span>
       ${riseHtml(r)}${points && r.points ? `<small class="quiz-rank-plus">+${r.points}</small>` : ''}<b>${r.score}</b></li>`).join('')}
   </ol>`;
 }
@@ -649,7 +655,7 @@ export function quizPodiumHtml(view) {
   const steps = [2, 1, 3].map((place) => {
     const who = list.filter((r) => r.rank === place);
     return `<div class="podium-step is-p${place}" data-testid="quiz-podium-${place}" data-names="${esc(who.map((r) => r.name).join('|'))}">
-      <span class="podium-names">${who.length ? who.map((r) => `<b>${esc(r.name)}</b><small>${r.score}</small>`).join('') : '<small>—</small>'}</span>
+      <span class="podium-names">${who.length ? who.map((r) => `${avatarHtml(r, { cls: 'podium-av' })}<b>${esc(r.name)}</b><small>${r.score}</small>`).join('') : '<small>—</small>'}</span>
       <span class="podium-block">${place}</span></div>`;
   }).join('');
   const w = view.game.winners;

@@ -6,6 +6,7 @@ import { CATEGORIES, categoryOf, CENTER, WIN_LABELS, DISCO_MIN_SONGS, decadeLabe
 import { parseYearGuess } from '../bingo.js';
 import { createDiscoBall } from '../discoball.js';
 import { icons, esc } from '../ui.js';
+import { avatarHtml, resultMarks, streakMark, jokerMark } from './party-ui.js';
 
 // disco.js is the single source of truth for the colours: mirror them as CSS variables
 // (disco.css carries the same values as a fallback for the first paint).
@@ -158,24 +159,29 @@ export function discoLandedAt(d) {
  * A card from `mine` (view.game.mine). mode 'choose': the `choosable` squares are buttons
  * (tap = stamp, tap another = move), the rest is dimmed; `choice` = this round's stamp.
  */
-export function discoCardHtml(mine, { mode = 'show', choosable = [], choice = null, cat = null, testid = 'disco-card', name = '' } = {}) {
+export function discoCardHtml(mine, { mode = 'show', choosable = [], choice = null, cat = null, testid = 'disco-card', name = '', joker = [], jokerChips = [] } = {}) {
   const goal = new Set(mine.goalCells || []);
   const can = new Set(choosable);
+  // with the joker switched on: open squares of another colour are buttons too (a distinct look)
+  const jok = new Set(mode === 'choose' ? joker : []);
+  const starred = new Set(jokerChips);
   const cells = mine.card.map((key, i) => {
     const mark = mine.marks[i];
     const stamped = mark != null;
     const free = i === CENTER;
     const year = stamped && mark !== '*' ? String(mark) : '';
     const chosen = choice === i;
-    const isBtn = mode === 'choose' && (can.has(i) || chosen);
+    const isJoker = jok.has(i) && !can.has(i);
+    const isBtn = mode === 'choose' && (can.has(i) || isJoker || chosen);
     const dim = mode === 'choose' && !isBtn && !free && (stamped ? false : key !== cat || !can.size);
+    const star = stamped && !free && starred.has(i);
     // while answering: the open squares the round's category could stamp
     const now = mode === 'show' && cat && key === cat && !stamped;
-    const cls = ['dq', `cat-${key}`, stamped ? 'is-stamped' : 'is-open', goal.has(i) ? 'is-goal' : '', can.has(i) ? 'is-choosable' : '', chosen ? 'is-chosen' : '', dim ? 'is-dim' : '', free ? 'is-free' : '', now ? 'is-now' : ''].filter(Boolean).join(' ');
-    const label = free ? 'Vrij vakje (ster)' : `${catName(key)}${stamped ? ', afgestempeld' : can.has(i) ? ', tik om af te stempelen' : ''}`;
+    const cls = ['dq', `cat-${key}`, stamped ? 'is-stamped' : 'is-open', goal.has(i) ? 'is-goal' : '', can.has(i) ? 'is-choosable' : '', chosen ? 'is-chosen' : '', dim ? 'is-dim' : '', free ? 'is-free' : '', now ? 'is-now' : '', isJoker ? 'is-joker' : '', star ? 'is-joker-chip' : ''].filter(Boolean).join(' ');
+    const label = free ? 'Vrij vakje (ster)' : `${catName(key)}${stamped ? `, afgestempeld${star ? ' met je joker' : ''}` : can.has(i) ? ', tik om af te stempelen' : isJoker ? ', tik om hier je joker in te zetten' : ''}`;
     // a stamped square carries a plain round game chip: no year, no number (data-year stays for tests)
-    const inner = `<span class="dq-ico">${catIcon(key)}</span>${stamped && !free ? '<span class="dq-stamp dq-chip" aria-hidden="true"></span>' : ''}`;
-    const attrs = `class="${cls}" data-testid="disco-sq-${i}" data-index="${i}" data-cat="${esc(key)}" data-stamped="${stamped}" data-year="${esc(year)}" data-choosable="${can.has(i)}" data-chosen="${chosen}" data-goal="${goal.has(i)}"`;
+    const inner = `<span class="dq-ico">${catIcon(key)}</span>${stamped && !free ? `<span class="dq-stamp dq-chip${star ? ' is-joker' : ''}" aria-hidden="true"${star ? ' data-testid="disco-joker-chip"' : ''}></span>` : ''}${isJoker ? '<span class="dq-joker" aria-hidden="true">★</span>' : ''}`;
+    const attrs = `class="${cls}" data-testid="disco-sq-${i}" data-index="${i}" data-cat="${esc(key)}" data-stamped="${stamped}" data-year="${esc(year)}" data-choosable="${can.has(i)}" data-chosen="${chosen}" data-goal="${goal.has(i)}" data-joker="${isJoker}"${star ? ' data-joker-chip="true"' : ''}`;
     return isBtn
       ? `<button type="button" ${attrs} data-action="disco-stamp" aria-pressed="${chosen}" aria-label="${esc(label)}">${inner}</button>`
       : `<div ${attrs} role="img" aria-label="${esc(label)}">${inner}</div>`;
@@ -396,7 +402,7 @@ export function discoResultsHtml(view) {
     const extra = v === 'right' ? (r.noSquare ? 'geen vakje meer' : r.stamped != null ? 'afgestempeld' : pending.has(r.id) ? 'kiest een vakje' : '') : v === 'doubt' ? 'spelleider beslist' : '';
     return `<li class="dr is-${v}${view.you && r.id === view.you.id ? ' is-you' : ''}" data-testid="disco-result-${i}" data-name="${esc(r.name)}" data-verdict="${v}">
       <span class="dr-icon" aria-hidden="true">${vd ? vd.icon() : '–'}</span>
-      <span class="dr-name">${esc(r.name)}${view.you && r.id === view.you.id ? ' <small>(jij)</small>' : ''}</span>
+      <span class="dr-name">${avatarHtml(r, { cls: 'dr-av' })}<span class="dr-name-t">${esc(r.name)}${view.you && r.id === view.you.id ? ' <small>(jij)</small>' : ''}</span>${resultMarks(r)}</span>
       <span class="dr-answer">${esc(resultWords(r))}</span>
       <span class="dr-verdict">${vd ? vd.word : ''}${r.overridden || (r.decided && r.auto === 'doubt') ? ' <small>(spelleider)</small>' : ''}${extra ? `<small>${esc(extra)}</small>` : ''}</span>
     </li>`;
@@ -417,7 +423,7 @@ export function regieHtml(view) {
   const empty = rs.filter((r) => r.none || r.pass);
   const pendingNames = (d.pending || []).map((id) => rs.find((r) => r.id === id)?.name).filter(Boolean);
   const doubtRow = (r) => `<li class="rg is-doubt" data-testid="disco-regie-row" data-row="${r.i}" data-id="${esc(r.id)}" data-name="${esc(r.name)}" data-verdict="doubt">
-      <div class="rg-who"><b class="rg-name">${esc(r.name)}</b><span class="rg-answer">${esc(resultWords(r))}</span></div>
+      <div class="rg-who"><b class="rg-name">${avatarHtml(r, { cls: 'rg-av' })}<span class="rg-name-t">${esc(r.name)}</span>${resultMarks(r)}</b><span class="rg-answer">${esc(resultWords(r))}</span></div>
       <div class="rg-judge">
         <button type="button" class="btn btn-good" data-action="disco-judge" data-id="${esc(r.id)}" data-ok="1" data-testid="disco-judge-good-${r.i}" aria-label="Goed voor ${esc(r.name)}">${icons.check}<span>Goed</span></button>
         <button type="button" class="btn btn-bad" data-action="disco-judge" data-id="${esc(r.id)}" data-ok="0" data-testid="disco-judge-bad-${r.i}" aria-label="Fout voor ${esc(r.name)}">${icons.cross}<span>Fout</span></button>
@@ -429,7 +435,7 @@ export function regieHtml(view) {
     const stamp = v === 'right' ? (r.noSquare ? 'geen vakje meer' : r.stamped != null ? 'afgestempeld' : (d.pending || []).includes(r.id) ? 'kiest een vakje' : '') : '';
     return `<li class="rg is-${v}" data-testid="disco-regie-row" data-row="${r.i}" data-id="${esc(r.id)}" data-name="${esc(r.name)}" data-verdict="${v}">
       <span class="rg-icon" aria-hidden="true">${v === 'right' ? icons.check : icons.cross}</span>
-      <div class="rg-who"><b class="rg-name">${esc(r.name)}</b><span class="rg-answer">${esc(resultWords(r))}</span>
+      <div class="rg-who"><b class="rg-name">${avatarHtml(r, { cls: 'rg-av' })}<span class="rg-name-t">${esc(r.name)}</span>${resultMarks(r)}</b><span class="rg-answer">${esc(resultWords(r))}</span>
         <small class="rg-note">${v === 'right' ? 'Goed' : 'Fout'}${note ? ` · ${note}` : ''}${stamp ? ` · ${stamp}` : ''}</small></div>
       <button type="button" class="btn btn-small btn-ghost rg-flip" data-action="disco-judge" data-id="${esc(r.id)}" data-ok="${v === 'right' ? 0 : 1}" data-testid="disco-flip-${r.i}" aria-label="${v === 'right' ? 'Toch fout' : 'Toch goed'} voor ${esc(r.name)}">${v === 'right' ? 'Toch fout' : 'Toch goed'}</button>
     </li>`;
@@ -456,7 +462,7 @@ export function discoProgressHtml(view, { testid = 'disco-progress' } = {}) {
   const winners = new Set(g.winnerIds || []);
   return `<ol class="disco-progress" data-testid="${testid}" aria-label="Voortgang">
     ${list.map((p, i) => `<li class="${p.bingo || winners.has(p.id) ? 'is-bingo' : ''}${view.you && p.id === view.you.id ? ' is-you' : ''}" data-testid="${testid}-${i}" data-name="${esc(p.name)}" data-stamped="${p.stamped}" data-lines="${p.lines}" data-best="${p.best}" data-bingo="${p.bingo}">
-      <span class="dp-name">${esc(p.name)}${view.you && p.id === view.you.id ? ' <small>(jij)</small>' : ''}</span>
+      <span class="dp-name">${avatarHtml(p, { cls: 'dp-av' })}<span class="dp-name-t">${esc(p.name)}${view.you && p.id === view.you.id ? ' <small>(jij)</small>' : ''}</span>${view.phase === 'won' ? '' : `${streakMark(p.streak)}${jokerMark(p.jokers)}`}</span>
       <span class="dp-bar" aria-hidden="true"><i style="width:${Math.round((Math.max(0, Math.min(p.best, 5) - 1) / 4) * 100)}%"></i></span>
       <span class="dp-nums">${p.bingo ? '<b class="dp-bingo">BINGO</b>' : `${p.best === 4 ? '<em class="dp-almost">bijna!</em> ' : ''}`}<b>${p.stamped}</b> ${p.stamped === 1 ? 'vakje' : 'vakjes'} · ${p.lines} ${p.lines === 1 ? 'lijn' : 'lijnen'}</span>
     </li>`).join('')}

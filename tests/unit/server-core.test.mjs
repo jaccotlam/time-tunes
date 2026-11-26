@@ -18,7 +18,8 @@ const cards = Array.from({ length: 40 }, (_, i) => ({
   id: `c${String(i + 1).padStart(3, '0')}`, year: 1961 + i, title: `Geheime titel ${i + 1}`, artist: `Geheime artiest ${i + 1}`,
   previewUrl: `https://example.invalid/geheim-${i + 1}.m4a`, itunesId: 1000 + i, trackViewUrl: 'https://x.invalid/no',
 }));
-const flush = () => new Promise((r) => setTimeout(r, 60));
+const flush = () => new Promise((r) => setTimeout(r, 20));
+const settle = () => new Promise((r) => setTimeout(r, 80)); // core.mjs closes a socket 50 ms after its last message
 
 function setup(opts = {}) {
   let t = 1_000_000;
@@ -99,6 +100,7 @@ test('kaarten: alleen nodige velden, ongeldige weg', () => {
 test('http: health, kamer maken, opvragen, origin en versie', () => {
   const { core } = setup();
   assert.equal(http(core, 'GET', '/health').body.ok, true);
+  assert.equal(http(core, 'GET', '/health').body.v, V, 'health meldt de protocolversie');
   assert.equal(http(core, 'GET', '/health').headers['access-control-allow-origin'], ORIGIN);
   assert.equal(http(core, 'OPTIONS', '/rooms').status, 204);
   assert.equal(http(core, 'POST', '/rooms', { v: V, id: 'owner01' }, { origin: 'https://evil.example' }).status, 403);
@@ -128,7 +130,7 @@ test('meedoen, token: kapen mislukt, terugkomen lukt', async () => {
   assert.equal(thief.last('error').code, 'token');
   const thief2 = await join(core, code, 'playerA1', 'Dief', 'A'.repeat(32));
   assert.equal(thief2.last('error').code, 'token');
-  await flush();
+  await settle();
   assert.ok(thief.closed && thief2.closed, 'kaper wordt afgesloten');
   assert.equal(a.closed, null, 'Anouk blijft verbonden');
   // the owner's place can not be taken either
@@ -285,7 +287,7 @@ test('limieten: vol, te veel berichten, te veel verbindingen, te veel kamers', a
   const p = ps[0];
   for (let i = 0; i < RATE_MAX_MESSAGES + 5; i++) p.send({ t: 'withdraw' });
   assert.equal(p.last('error').code, 'ratelimit');
-  await flush();
+  await settle();
   assert.ok(p.closed);
   // pings are answered and do not count as messages
   const q = ps[1];
@@ -323,7 +325,7 @@ test('verlopen: ongebruikte kamer na 30 min, inactieve kamer na 6 uur; dode verb
   advance(STALE_MS + 1000);
   host.send('ping');
   core.sweep();
-  await flush();
+  await settle();
   assert.ok(a.closed, 'stille verbinding opgeruimd');
   assert.equal(host.last('state').lead.spectator.players.find((p) => p.name === 'Anouk').online, false);
   for (let t = 0; t < ROOM_IDLE_MS; t += STALE_MS - 1000) { advance(STALE_MS - 1000); host.send('ping'); core.sweep(); }
