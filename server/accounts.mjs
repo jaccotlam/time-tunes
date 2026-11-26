@@ -25,6 +25,7 @@
 // op(code, name, args) -> result }. AccountBox runs every operation of one account one at a
 // time, so two requests never interleave across an `await` (PBKDF2 is async).
 import { sha256Hex } from './sha256.mjs';
+import { evictOldest } from './policy.mjs';
 import { cleanPlaylist, cleanTrack, NAME_MAX, MAX_TRACKS, BUILTIN_ID } from '../app/js/playlist-logic.js';
 import { cleanName as cleanPlayerName } from '../app/js/multi/game.js';
 
@@ -324,7 +325,8 @@ export function failCounter({ limit, windowMs, lockMs = windowMs, now = Date.now
       const t = now();
       let f = cur(key);
       if (!f) {
-        if (map.size >= maxKeys) map.clear();
+        // full: expired entries go, then the oldest; never all (a flood of new keys must not unlock anybody)
+        evictOldest(map, maxKeys, (v) => (v.until ? t >= v.until : t - v.since > windowMs));
         f = { n: 0, since: t, until: 0 };
         map.set(key, f);
       }

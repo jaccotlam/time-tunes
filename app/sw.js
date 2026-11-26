@@ -87,6 +87,10 @@ const SHELL = [
   'css/disco-phone.css',
   'js/screens/party-ui.js',
   'css/party.css',
+  'js/screens/account-bits.js',
+  'js/screens/account.js',
+  'js/screens/my-rooms.js',
+  'css/account.css',
 ];
 const NETWORK_TIMEOUT_MS = 4000;
 
@@ -114,8 +118,9 @@ self.addEventListener('fetch', (event) => {
   // Back from the Spotify login (?code=&state=): let the browser load it untouched.
   if (req.mode === 'navigate' && url.searchParams.has('state') && (url.searchParams.has('code') || url.searchParams.has('error'))) return;
   if (req.headers.has('range')) return;
-  // the room server ("Samen spelen") on the same Worker: always live, never cached
-  if (/^\/(health|rooms)(\/|$)/.test(url.pathname)) return;
+  // the room server ("Samen spelen") on the same Worker: always live, never cached (accounts
+  // too: GET /account carries a session token and the account's data)
+  if (/^\/(health|rooms|account)(\/|$)/.test(url.pathname)) return;
   event.respondWith(networkFirst(req));
 });
 

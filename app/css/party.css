@@ -13,7 +13,7 @@
 }
 
 /* generic lists (room-ui.js) */
-.rp .rp-av { font-size: 1rem; }
+.rp .rp-av { font-size: 1.15rem; }
 .ranking li .rk-av { flex: none; font-size: .95rem; }
 .rr-name { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .rr .rr-av { font-size: .85rem; }
@@ -287,9 +287,10 @@
 .host-joker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 8px; }
 
 /* ---------- the big screen: marks next to the names ---------- */
-.st .st-av { font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif; font-weight: 400; font-size: 1.15em; line-height: 1; }
-.st-grid:not(.is-game) .st .st-av { width: 2.5em; height: 2.5em; font-size: 1.25em; background: color-mix(in srgb, var(--tc) 38%, rgba(23, 11, 36, .5)); box-shadow: 0 0 0 .12em var(--tc), 0 0 1em -.2em var(--tc); }
-.st-grid:not(.is-game) .st .st-name { font-size: .85em; }
+/* the emoji fills about 60% of the round badge (the badge stays as big as the old initial) */
+.st .st-av { font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif; font-weight: 400; font-size: 1.35em; width: 1.7em; height: 1.7em; line-height: 1; }
+.st-grid:not(.is-game) .st .st-av { font-size: 1.9em; width: 1.55em; height: 1.55em; background: color-mix(in srgb, var(--tc) 38%, rgba(23, 11, 36, .5)); box-shadow: 0 0 0 .07em var(--tc), 0 0 .6em -.1em var(--tc); }
+.st-grid.is-strip .st .st-av { font-size: 1.2em; width: 1.6em; height: 1.6em; }
 .st.av-swap .st-av { animation: av-pop .5s cubic-bezier(.2, 1.6, .4, 1); }
 .sr-name, .sk-name { display: flex; align-items: center; gap: .45em; min-width: 0; }
 .sr-name-t, .sk-name-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
