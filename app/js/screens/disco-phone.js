@@ -89,6 +89,7 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
   const timers = new Set();
   let focusFor = null;
   let lastBingo = false;
+  let phaseKey = null;
 
   const later = (fn, ms) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); };
   const view = () => getSession()?.view || null;
@@ -180,6 +181,8 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
     parts.status = el.querySelector('[data-region="status"]');
     momentId = null;
     moment = null;
+    sheet = null;
+    phaseKey = null;
   }
 
   function onLandLive() {
@@ -199,6 +202,10 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
     const g = v.game;
     const d = g.disco;
     el.dataset.view = v.phase;
+    // the reveal and a new spin are moments nobody should miss: the menu steps aside (not mid-mix or mid-leave)
+    const pk = `${v.phase}|${g.round}`;
+    if (phaseKey && pk !== phaseKey && sheet && !['mix', 'leave'].includes(sheet)) closeSheet();
+    phaseKey = pk;
     if (v.phase !== 'won' && d?.cat) {
       if (!stage) stage = createDiscoStage(parts.ball, { onLand: onLandLive });
       stage.sync(d, { now: serverNow(), phase: v.phase, round: g.round });
