@@ -120,10 +120,12 @@ async function owner(browser, rooms) {
   const host = await phone(browser, rooms, { seed: 7, ...HOST_TV });
   await installFakeItunes(host.context);
   await host.context.addInitScript((tracks) => {
-    if (localStorage.getItem('tt.screenInit')) return;
-    localStorage.setItem('tt.screenInit', '1');
-    localStorage.setItem('timetunesr.playlists.v1', JSON.stringify({ v: 1, lists: [{ id: 'feest', name: 'Feestmix', tracks }] }));
-    localStorage.setItem('timetunesr.activeDeck.v1', JSON.stringify('feest'));
+    try {
+      if (localStorage.getItem('tt.screenInit')) return;
+      localStorage.setItem('tt.screenInit', '1');
+      localStorage.setItem('timetunesr.playlists.v1', JSON.stringify({ v: 1, lists: [{ id: 'feest', name: 'Feestmix', tracks }] }));
+      localStorage.setItem('timetunesr.activeDeck.v1', JSON.stringify('feest'));
+    } catch { /* a document without storage (about:blank) */ }
   }, TRACKS);
   await host.context.addInitScript(displayGuard);
   return { context: host.context, H: host.page, errors: [], lsWrites: [] };
@@ -421,7 +423,8 @@ async function mainGame(browser, rooms, server) {
     await give(B, 'Bram');
     await waitCount(D, total0, total0);
     assert(await D.locator('.s-count.is-all').count() === 1 && /Iedereen heeft geantwoord/.test(await D.getByTestId('screen-count').textContent()), `round ${round}: everybody online has answered: "Iedereen heeft geantwoord!"`);
-    assert(await attr(H, 'room-reveal', 'data-ready') === 'true', `round ${round}: the host's Onthul is ready (players who are away do not block it)`);
+    await H.locator('[data-testid="room-reveal"][data-ready="true"]').waitFor({ timeout: 8000 });
+    assert(true, `round ${round}: the host's Onthul is ready (players who are away do not block it)`);
 
     // ----- no peeking before the reveal -----
     const forb = [song.title, song.artist, ...typed];
