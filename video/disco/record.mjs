@@ -316,8 +316,8 @@ async function recordOnce() {
     const doubts = host.page.getByTestId('disco-doubts');
     await reach(host, doubts);
     await hold(0.5);
-    await highlight(host, doubts, 0.2, 3.4, 6);
-    await hold(3.2);
+    await highlight(host, doubts, 0.2, 3.0, 6);
+    await hold(2.3);
     const row = await host.page.locator('[data-testid="disco-doubts"] [data-testid="disco-regie-row"]').first().getAttribute('data-row');
     await tap(host, `disco-judge-good-${row}`, { lead: 0.7 });
     await pb.page.locator('[data-testid="disco-verdict"][data-verdict="right"]').waitFor({ timeout: 8000 });

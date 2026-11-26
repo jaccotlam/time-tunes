@@ -16,6 +16,11 @@ const view = (page) => page.evaluate(() => window.__ttRoom?.session?.view || nul
 const received = (page) => page.evaluate(() => window.__ttRoom?.session?.received || []);
 const has = (text, needle) => new RegExp(`${String(needle).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![0-9])`).test(text);
 const song = async (host) => (await serverHost(host)).song;
+/** The running song, read only once the host's own session is on that round (a phone can be a message ahead of the host tab). */
+const songOfRound = async (host, r) => {
+  await host.waitForFunction((round) => { const x = window.__ttHost?.session; return x?.room?.phase === 'answering' && x.room.game?.round === round && !!x.currentSong(); }, r, { timeout: 15000 });
+  return song(host);
+};
 /** Click "Kopieer diagnose" and read what landed on the clipboard. */
 async function copyDiag(page) {
   await page.evaluate(() => navigator.clipboard.writeText(''));
@@ -142,7 +147,7 @@ export default async function run() {
 
     // round 2: Bram locks an answer and reloads; then the host reloads
     for (const p of [A, B]) await waitRound(p, 2);
-    s = await song(H);
+    s = await songOfRound(H, 2);
     const bBefore = await view(B);
     await bingoAnswer(B, { pass: true });
     await B.reload();
@@ -191,7 +196,7 @@ export default async function run() {
       await H.waitForFunction(() => ['answering', 'won'].includes(document.querySelector('[data-testid="screen-room-host"]').dataset.view));
       if ((await H.getByTestId('screen-room-host').getAttribute('data-view')) === 'won') break;
       for (const p of [A, B]) await waitRound(p, r);
-      s = await song(H);
+      s = await songOfRound(H, r);
       if (r === 1) for (const [p, n] of [[A, 'Anouk'], [B, 'Bram']]) await assertNoSpoiler(p, s, `${n} (tijdlijn)`);
       for (const p of [A, B]) {
         const v = await view(p);
