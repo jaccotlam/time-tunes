@@ -57,6 +57,19 @@ export function corsHeaders(origin) {
   return h;
 }
 
+/**
+ * Make room in a Map that is full: expired entries first, then the oldest (insertion order =
+ * when the window started). Never everything at once: a flood of new keys (spoofed or many
+ * addresses) must not reset the counters of the keys that are over their limit right now.
+ */
+export function evictOldest(map, maxKeys, expired) {
+  if (map.size < maxKeys) return;
+  for (const [k, v] of map) if (expired(v)) map.delete(k);
+  if (map.size < maxKeys) return;
+  let drop = map.size - maxKeys + Math.max(1, Math.floor(maxKeys / 10));
+  for (const k of map.keys()) { if (drop-- <= 0) break; map.delete(k); }
+}
+
 /** Fixed-window counter per key (an IP address): allow(key) -> true while under the limit. */
 export function rateLimiter({ limit, windowMs, now = Date.now, maxKeys = 10000 }) {
   const hits = new Map();
@@ -65,14 +78,15 @@ export function rateLimiter({ limit, windowMs, now = Date.now, maxKeys = 10000 }
       const t = now();
       let h = hits.get(key);
       if (!h || t - h.start > windowMs) {
-        if (hits.size >= maxKeys) for (const [k, v] of hits) if (t - v.start > windowMs) hits.delete(k);
-        if (hits.size >= maxKeys) hits.clear();
+        hits.delete(key); // a new window goes to the end of the order (see evictOldest)
+        evictOldest(hits, maxKeys, (v) => t - v.start > windowMs);
         h = { start: t, n: 0 };
         hits.set(key, h);
       }
       h.n++;
       return h.n <= limit;
     },
+    get size() { return hits.size; },
   };
 }
 
