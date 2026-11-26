@@ -188,30 +188,65 @@ test('scherm: kan geen spelberichten sturen (nette weigering, verbinding blijft,
   assert.equal(scr.raw.at(-1), 'pong');
 });
 
-test(`scherm: hoogstens ${MAX_SCREENS_PER_ROOM} per kamer, en schermen tellen mee voor de verbindingslimiet`, async () => {
-  const { core } = setup();
+test(`scherm: hoogstens ${MAX_SCREENS_PER_ROOM} per kamer: een nieuw scherm neemt de plek van het stilste over; schermen tellen mee voor de verbindingslimiet`, async () => {
+  const { core, advance } = setup();
   const { code, host, scr } = await room(core, { game: 'bingo' }, { start: false });
   const more = [scr];
-  for (let i = 1; i < MAX_SCREENS_PER_ROOM; i++) more.push(screen(core, code));
+  for (let i = 1; i < MAX_SCREENS_PER_ROOM; i++) { advance(1000); more.push(screen(core, code)); }
   await flush();
   assert.equal(host.meta().screens, MAX_SCREENS_PER_ROOM);
+  // everybody but the first one pings now: the first is heard from longest ago
+  advance(5000);
+  for (const d of more.slice(1)) d.send('ping');
+  const states = host.all('state').length;
   const extra = screen(core, code);
   await settle();
-  assert.equal(extra.last('error').code, 'screens');
-  assert.match(extra.last('error').message, /grote schermen/);
-  assert.equal(extra.closed?.c, 4000);
+  assert.ok(extra.last('welcome'), 'het nieuwe scherm komt erin');
+  assert.equal(extra.view().phase, 'lobby');
+  assert.equal(more[0].last('error').code, 'screenreplaced', 'het stilste scherm hoort waarom');
+  assert.equal(more[0].closed?.c, 4001);
+  assert.ok(more.slice(1).every((d) => d.closed == null), 'de andere blijven');
   assert.equal(host.meta().screens, MAX_SCREENS_PER_ROOM);
-  more[0].conn.closed();
-  await flush();
-  const again = screen(core, code);
-  await flush();
-  assert.ok(again.last('welcome'), 'na een vertrokken scherm mag er weer een bij');
+  assert.equal(host.all('state').length, states, 'het aantal bleef gelijk: niemand anders krijgt een nieuwe toestand');
   // connection limit: displays count, and a full room refuses a display as well
   const hub = core.rooms.get(code);
   const open = [];
   while (hub.conns.size < MAX_CONNS_PER_ROOM) open.push(connect(core, code));
   const over = connect(core, code);
   assert.equal(over.last('error').code, 'busy');
+});
+
+test('scherm: sid: een stil weggevallen tv neemt bij terugkomst zijn eigen plek terug; herhaalde hallo stuurt niets naar anderen', async () => {
+  const { core, advance } = setup();
+  const { code, host, players: [a] } = await room(core, { game: 'disco' }, { start: false, screenFirst: false });
+  const hub = core.rooms.get(code);
+  // four displays (tabs t0..t3) drop silently: no close, their slots stay until STALE_MS
+  const tabs = ['tabZero000', 'tabOne0000', 'tabTwo0000', 'tabThree00'];
+  const dead = tabs.map((sid) => screen(core, code, { sid }));
+  await flush();
+  assert.equal(hub.screenCount(), 4);
+  advance(10000);
+  host.send('ping');
+  // tab 2 reconnects: its own old slot goes, nobody else is pushed out
+  const back = screen(core, code, { sid: 'tabTwo0000' });
+  await settle();
+  assert.ok(back.last('welcome'));
+  assert.equal(back.last('error'), null);
+  assert.equal(dead[2].last('error').code, 'screenreplaced');
+  assert.ok([0, 1, 3].every((i) => dead[i].closed == null));
+  assert.equal(hub.screenCount(), 4);
+  // a sid of the wrong form is ignored (that display just takes the stalest slot)
+  const odd = screen(core, code, { sid: '__proto__' });
+  await settle();
+  assert.ok(odd.last('welcome'));
+  assert.equal(dead[0].last('error').code, 'screenreplaced');
+  // a repeated hello on the same connection: a welcome and a state for that display only
+  const n = a.msgs.filter((m) => m.t === 'state').length;
+  for (let i = 0; i < 70; i++) back.send({ t: 'hello', v: V, code, screen: true, sid: 'tabTwo0000' });
+  await flush();
+  assert.equal(a.msgs.filter((m) => m.t === 'state').length, n, 'geen nieuwe toestand naar spelers');
+  assert.equal(back.all('welcome').length, 71);
+  assert.equal(hub.screenCount(), 4);
 });
 
 test('scherm: kapotte en vreemde hallo\'s', async () => {

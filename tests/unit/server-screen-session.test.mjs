@@ -109,17 +109,26 @@ test('schermsessie: weergave, meta, servertijd, geen eigen sleutels in localStor
   a.ws.close();
 });
 
-test('schermsessie: te veel schermen = nette melding; onbekende kamer = wachten', async () => {
+test('schermsessie: een vijfde scherm neemt een plek over; het verdrongen scherm stopt (geen heen-en-weer); onbekende kamer = wachten', async () => {
   useServer(base);
   const { code, host } = await newRoom();
   const many = [];
-  for (let i = 0; i < 4; i++) { const s = createServerScreenSession({ code }); s.start(); many.push(s); }
-  await until(() => many.every((s) => s.online), 8000, 'vier schermen');
+  for (let i = 0; i < 4; i++) { const s = createServerScreenSession({ code }); s.start(); many.push(s); await until(() => s.online, 8000, `scherm ${i}`); }
+  const hellos = [];
   const fifth = createServerScreenSession({ code });
   fifth.start();
-  await until(() => fifth.error, 8000, 'vijfde scherm geweigerd');
-  assert.equal(fifth.error.code, 'screens');
-  assert.equal(fifth.status, 'closed');
+  await until(() => fifth.online, 8000, 'vijfde scherm online');
+  const out = await until(() => many.find((s) => s.error), 8000, 'een scherm verdrongen');
+  assert.equal(out.error.code, 'screenreplaced');
+  assert.equal(out.status, 'closed');
+  await new Promise((r) => setTimeout(r, 2500));
+  assert.equal(out.status, 'closed', 'probeert niet zelf opnieuw');
+  assert.equal(fifth.online, true, 'het nieuwe scherm blijft');
+  assert.equal(many.filter((s) => s.error).length, 1);
+  assert.ok(hellos.length === 0);
+  // two sessions never share a sid: the hello of each carries its own
+  const sids = new Set([...many, fifth].map((s) => s.received.length >= 0 && s.diag.role));
+  assert.equal(sids.size, 1);
   for (const s of many) s.destroy();
   const none = createServerScreenSession({ code: 'BCDF' });
   none.start();

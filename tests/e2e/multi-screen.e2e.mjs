@@ -560,17 +560,21 @@ async function mainGame(browser, rooms, server) {
   // (after the game the host tab no longer shows the screen box: ask the session's meta, which is what it shows)
   await H.waitForFunction(() => window.__ttHost.session.meta?.screens === 4, null, { timeout: 10000 });
   assert(true, 'four displays: the room server counts 4 screens (meta.screens)');
+  // a 5th display: the room server lets the display it heard from longest ago make room (it is told:
+  // "Een ander scherm kijkt nu mee", error screenreplaced); there are never more than 4
   const fifth = await plain.context.newPage();
   await fifth.goto(`${server.url}#/scherm/${code}`);
-  try {
-    await fifth.locator('[data-testid="screen-error"][data-code="screens"]').waitFor({ timeout: 15000 });
-  } catch (e) {
-    const st = await fifth.evaluate(() => ({ status: document.querySelector('[data-testid="screen-display"]')?.dataset.status, err: window.__ttScreen?.session?.error, text: document.body.innerText.slice(0, 200) }));
-    const n = await H.evaluate(() => window.__ttHost.session.meta?.screens);
-    throw new Error(`ASSERT: the 5th display did not get the screens error: ${JSON.stringify(st)}, room has ${n} screens`);
-  }
-  assert(/grote schermen/.test(await fifth.getByTestId('screen-error').textContent()), 'the 5th display gets the "screens" error screen (4 per room)');
-  assert(await attr(D, 'screen-display', 'data-status') === 'online', 'the other displays are not disturbed');
+  await fifth.locator(`[data-testid="screen-display"][data-code="${code}"][data-status="online"]`).waitFor({ timeout: 15000 });
+  const olds = [['the owner\'s', D], ['typed', X], ['second', more[0]], ['third', more[1]]];
+  const errCode = (pg) => pg.evaluate(() => document.querySelector('[data-testid="screen-error"]')?.dataset.code || '');
+  let gone = [];
+  const t1 = Date.now();
+  while (gone.length < 1 && Date.now() - t1 < 10000) { gone = []; for (const [nm, pg] of olds) if (await errCode(pg)) gone.push([nm, pg]); await sleep(200); }
+  assert(gone.length === 1 && await errCode(gone[0][1]) === 'screenreplaced', `the 5th display takes a slot: exactly one older display (${gone.map((g) => g[0]).join(', ')}) shows "screenreplaced"`);
+  assert(await attr(fifth, 'screen-display', 'data-status') === 'online' && await H.evaluate(() => window.__ttHost.session.meta?.screens) === 4, 'the 5th display is online and the room still counts 4 screens');
+  assert(/4/.test(await gone[0][1].getByTestId('screen-error').textContent()), 'the replaced display says that 4 can watch at the same time');
+  if (gone[0][1] === D) { await takeWrites(o, D); await D.reload(); } // the owner\'s own display was the quiet one: bring it back
+  await D.locator(`[data-testid="screen-display"][data-code="${code}"][data-status="online"]`).waitFor({ timeout: 15000 });
   await plain.context.close();
   await H.waitForFunction(() => window.__ttHost.session.meta?.screens === 1, null, { timeout: 10000 });
   assert(true, 'the extra displays closed: back to 1');
