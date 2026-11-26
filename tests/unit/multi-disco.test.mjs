@@ -318,11 +318,39 @@ test('nummers op: meeste gestempelde vakjes wint (gelijk = gedeeld), het midden 
   assert.equal(scoreOf(r.game, 'p1'), 0);
 });
 
+test('ids als "__proto__" / "constructor": nooit een speler, nooit een oordeel of stempel', () => {
+  let r = discoRoom(['Anouk']);
+  for (const id of ['__proto__', 'constructor', 'toString']) assert.throws(() => addPlayer(r, { id, name: 'x' }), (e) => e instanceof GameError && e.code === 'bad');
+  r = reveal(submitAnswer(r, 'p0', rightAnswer(r)));
+  for (const id of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+    assert.throws(() => judgeResult(r, id, true), (e) => e instanceof GameError);
+    assert.throws(() => overrideResult(r, id), (e) => e instanceof GameError);
+    assert.throws(() => stampSquare(r, id, 0), (e) => e instanceof GameError);
+    assert.deepEqual(choosableSquares(r.game, id), []);
+    assert.equal(removePlayer(r, id), r);
+    assert.equal(scoreOf(r.game, id), 0);
+  }
+  // a results entry without a snapshot / card (a broken state) does not break the helpers or the view
+  const odd = { ...r, game: { ...r.game, results: { ...r.game.results, ghost: { correct: true, verdict: 'right' } } } };
+  assert.deepEqual(choosableSquares(odd.game, 'ghost'), []);
+  assert.ok(!stillChoosing(odd.game).includes('ghost'));
+  assert.doesNotThrow(() => viewFor(odd, 'p0', {}));
+});
+
 test('beschrijving, geldige kamer en weergave na de onthulling', () => {
   let r = discoRoom(['Anouk', 'Bram']);
   assert.ok(isValidRoom(r));
   assert.ok(!isValidRoom({ ...r, game: { ...r.game, disco: null } }));
   assert.ok(!isValidRoom({ ...r, game: { ...r.game, per: { p0: { card: [], marks: [] } } } }));
+  const p0 = r.game.per.p0;
+  const withPer = (s0) => ({ ...r, game: { ...r.game, per: { ...r.game.per, p0: s0 } } });
+  assert.ok(!isValidRoom(withPer({ ...p0, card: p0.card.map((k, i) => (i === 0 ? 'year' : k)) })), 'kaart buiten de regels');
+  assert.ok(!isValidRoom(withPer({ ...p0, marks: p0.marks.map((m, i) => (i === 0 ? 'onbekend-nummer' : m)) })), 'stempel van een onbekend nummer');
+  assert.ok(!isValidRoom(withPer({ ...p0, marks: p0.marks.map((m, i) => (i === CENTER ? null : m)) })), 'midden niet gestempeld');
+  assert.ok(!isValidRoom({ ...r, game: { ...r.game, disco: { ...r.game.disco, choices: { p0: 25 } } } }));
+  assert.ok(!isValidRoom({ ...r, game: { ...r.game, disco: { ...r.game.disco, choices: { nobody: 1 } } } }));
+  assert.ok(!isValidRoom({ ...r, game: { ...r.game, per: { ...r.game.per, stranger: p0 } } }), 'kaart van iemand die niet meedoet');
+  assert.ok(!isValidRoom({ ...r, players: [...r.players, { id: '__proto__', name: 'x' }] }));
   const g = r.game;
   assert.equal(describeAnswer({ ...g, disco: { ...g.disco, cat: 'decade' } }, 'p0', { decade: 1980 }), 'Jaren 80');
   assert.equal(describeAnswer({ ...g, disco: { ...g.disco, cat: 'year' } }, 'p0', { guess: 1984 }), 'Jaartal: 1984');

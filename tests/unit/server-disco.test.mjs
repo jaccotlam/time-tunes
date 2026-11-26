@@ -298,3 +298,144 @@ test('disco: de spelleider speelt mee en laat instappen tijdens het spel', async
   assert.equal(lv.game.mine.stamped, 0, 'zoveel als wie het verst achter ligt');
   assert.ok(lv.game.disco.progress.some((p) => p.id === 'playerLate'));
 });
+
+const PROTO_IDS = ['__proto__', 'constructor', 'toString', 'hasOwnProperty', 'valueOf'];
+const roomState = (core, code) => JSON.stringify(core.rooms.get(code).snapshot());
+
+test('disco: player ids als "__proto__" / "constructor" veranderen niets en laten de server leven', async () => {
+  const { core } = setup();
+  const { code, host, players: [a] } = await discoRoom(core);
+  const song = host.last('state').lead.song;
+  a.send({ t: 'answer', round: 1, answer: { decade: Math.floor(song.year / 10) * 10, guess: String(song.year), text: song.title } });
+  await flush();
+  host.send({ t: 'reveal' });
+  await flush();
+  const errors = [];
+  const orig = console.error;
+  console.error = (...x) => errors.push(x.join(' '));
+  try {
+    for (const pid of PROTO_IDS) {
+      const before = roomState(core, code);
+      for (const m of [{ t: 'judge', pid, ok: true }, { t: 'judge', pid, ok: false }, { t: 'override', pid }, { t: 'remove', pid }]) {
+        host.send(m);
+        await flush();
+        assert.equal(roomState(core, code), before, `${m.t} ${pid}: kamer onveranderd`);
+      }
+      assert.ok(['answer', null].includes(host.last('error')?.code ?? null));
+      // such an id can not join either
+      const p = connect(core, code);
+      p.send({ t: 'hello', v: V, code, id: pid, name: 'X' });
+      await flush();
+      assert.ok(p.last('error'), `hello als ${pid} geweigerd`);
+      assert.equal(roomState(core, code), before);
+      a.send({ t: 'stamp', round: 1, index: pid });
+      a.send({ t: 'answer', round: 1, answer: { [pid]: 1 } });
+      a.send({ t: 'mix-add', tracks: { [pid]: 1 } });
+      await flush();
+    }
+  } finally { console.error = orig; }
+  assert.deepEqual(errors, [], 'geen onverwachte fout op de server');
+  // still alive: a normal judgement and the next round work
+  host.send({ t: 'judge', pid: 'playerB1', ok: true });
+  await flush();
+  host.send({ t: 'next' });
+  await flush();
+  assert.equal(a.view().phase, 'answering');
+  assert.equal(a.view().game.round, 2);
+});
+
+test('disco: een fout buiten de spelregels zet de kamer terug, wordt niet bewaard en de server blijft leven', async () => {
+  const { core } = setup();
+  const { code, host, players: [a] } = await discoRoom(core);
+  const hub = core.rooms.get(code);
+  const before = roomState(core, code);
+  const logs = [];
+  const orig = console.error;
+  console.error = (...x) => logs.push(x.join(' '));
+  try {
+    // a bug in a handler: it changes the state and then throws
+    const action = hub.action;
+    hub.action = function broken() { this.state.room = { ...this.state.room, phase: 'kapot' }; throw new TypeError('boem'); };
+    a.send({ t: 'withdraw' });
+    await flush();
+    hub.action = action;
+    assert.equal(roomState(core, code), before, 'teruggezet');
+    assert.equal(a.last('error').code, 'bad');
+    // a handler that leaves a state no view can render: also rolled back
+    hub.action = function poison() { const g = this.state.room.game; this.state.room = { ...this.state.room, game: { ...g, per: { ...g.per, playerA1: { card: null } } } }; this.changed(); };
+    a.send({ t: 'withdraw' });
+    await flush();
+    hub.action = action;
+    assert.equal(roomState(core, code), before, 'niet te tonen stand: teruggezet');
+    // a broken state that is already there: the broadcast logs instead of throwing
+    const good = hub.state.room;
+    hub.state.room = { ...good, game: { ...good.game, per: { ...good.game.per, playerA1: { card: null } } } };
+    hub.changed();
+    await flush();
+    hub.state.room = good;
+  } finally { console.error = orig; }
+  assert.ok(logs.some((l) => /rolled back/.test(l)));
+  assert.ok(logs.some((l) => /failed/.test(l)));
+  host.send({ t: 'reveal' });
+  await flush();
+  assert.equal(a.view().phase, 'revealed', 'de kamer speelt gewoon verder');
+});
+
+test('disco: willekeurige kapotte berichten van spelleider en spelers gooien nooit een fout', async () => {
+  let seed = 12345;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+  const pick = (xs) => xs[Math.floor(rnd() * xs.length)];
+  const vals = [0, 1, 12, 24, 25, -1, 1.5, NaN, null, true, false, '', 'x', '1980', ...PROTO_IDS, 'playerA1', 'playerB1', 'owner01', '!spectator',
+    [], [1], {}, { decade: 1980 }, { guess: '1985' }, { text: 'abc' }, { pass: true }, { text: { a: 1 } }, { decade: '1980' }, 'a'.repeat(3000), 1e9];
+  const types = ['answer', 'withdraw', 'settings', 'reveal', 'override', 'next', 'lobby', 'remove', 'lead', 'playing', 'stamp', 'judge', 'mix-add', 'mix-clear', 'start'];
+  const logs = [];
+  const orig = console.error;
+  console.error = (...x) => logs.push(x.join(' '));
+  try {
+    for (let run = 0; run < 6; run++) {
+      const { core } = setup();
+      const { host, players } = await discoRoom(core);
+      const conns = [host, ...players];
+      for (let i = 0; i < 200; i++) {
+        const c = pick(conns);
+        const m = { t: pick(types) };
+        for (const k of ['round', 'answer', 'pid', 'ok', 'index', 'patch', 'tracks']) if (rnd() < 0.5) m[k] = pick(vals);
+        if ((m.t === 'stamp' || m.t === 'answer') && rnd() < 0.7) m.round = c.last('state')?.view?.game?.round ?? 1;
+        if (m.t === 'remove' || m.t === 'lobby' || m.t === 'start') { if (rnd() < 0.8) continue; }
+        c.send(m);
+        if (rnd() < 0.2) host.send({ t: pick(['reveal', 'next']) });
+        if (rnd() < 0.1) await flush();
+      }
+      await flush();
+      for (const c of conns) assert.ok(c.last('state'), 'elke telefoon heeft een stand');
+    }
+  } finally { console.error = orig; }
+  assert.deepEqual(logs, [], 'alleen gewone weigeringen (GameError), nooit een andere fout');
+});
+
+test('disco: een vervalste back-up met een kapotte kaart of keuze wordt niet teruggezet', async () => {
+  const { core } = setup();
+  const { code, token, host } = await discoRoom(core);
+  const snap = host.last('backup').snap;
+  assert.ok(G.isValidRoom(snap.room));
+  const forge = (fn) => { const s = JSON.parse(JSON.stringify(snap)); fn(s.room.game); return s; };
+  const bad = [
+    forge((g) => { g.per.playerA1.card[0] = 'nonsense'; }),
+    forge((g) => { g.per.playerA1.marks = g.per.playerA1.marks.slice(0, 24); }),
+    forge((g) => { g.per.playerA1.marks[0] = { x: 1 }; }),
+    forge((g) => { g.disco.choices = { playerA1: 99 }; }),
+    forge((g) => { g.disco.choices = JSON.parse('{"__proto__": 3}'); }),
+    forge((g) => { g.per = JSON.parse(JSON.stringify(g.per).replace('"playerA1"', '"__proto__"')); }),
+    forge((g) => { g.disco.cat = 'nope'; }),
+    forge((g) => { g.disco.win = 'all'; }),
+  ];
+  for (const s of bad) {
+    assert.equal(G.isValidRoom(s.room), false);
+    const core2 = createRoomServer({ now: () => 1 });
+    const res = core2.http({ method: 'POST', path: `/rooms/${code}/restore`, origin: ORIGIN, ip: '1', body: JSON.stringify({ v: V, id: 'owner01', token, snap: s }) });
+    assert.equal(res.status, 400);
+  }
+  const core3 = createRoomServer({ now: () => 1 });
+  const ok = core3.http({ method: 'POST', path: `/rooms/${code}/restore`, origin: ORIGIN, ip: '1', body: JSON.stringify({ v: V, id: 'owner01', token, snap }) });
+  assert.equal(ok.status, 200, 'de echte back-up wel');
+});

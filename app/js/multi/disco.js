@@ -187,9 +187,13 @@ export function lateMarks(count, rand) {
 
 export const decadeOf = (year) => Math.floor(Number(year) / 10) * 10;
 
-/** "Jaren 80", "Jaren 00"; the sub line "1980–1989". */
+/**
+ * "Jaren 80", "Jaren 00"; the sub line "1980–1989". Before 1930 the short name would clash
+ * with a later decade ("Jaren 00" = 1900 or 2000), so those get the years as label and no sub.
+ */
 export function decadeLabel(decade) {
   const d = Number(decade);
+  if (d < 1930) return { decade: d, label: `${d}–${d + 9}`, sub: '' };
   return { decade: d, label: `Jaren ${String(d % 100).padStart(2, '0')}`, sub: `${d}–${d + 9}` };
 }
 

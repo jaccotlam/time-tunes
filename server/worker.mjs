@@ -187,7 +187,8 @@ export class Room extends DurableObject {
   async webSocketMessage(ws, message) {
     const a = ws.deserializeAttachment();
     if (!a?.connId || !this.hub) { try { ws.close(4003, 'unknown'); } catch { /* ignore */ } return; }
-    this.hub.message(a.connId, typeof message === 'string' ? message : null);
+    // the hub already rolls a failed message back; this is the last net for the object itself
+    try { this.hub.message(a.connId, typeof message === 'string' ? message : null); } catch (e) { console.error('room message failed', e?.stack || e); }
     await this.schedule();
   }
 
@@ -205,7 +206,8 @@ export class Room extends DurableObject {
 
   async alarm() {
     if (!this.hub) return;
-    const { expired } = this.hub.tick();
+    let expired = false;
+    try { ({ expired } = this.hub.tick()); } catch (e) { console.error('room tick failed', e?.stack || e); }
     if (expired || !this.hub.exists()) {
       if (!this.hub.conns.size) { await this.ctx.storage.deleteAll(); this.hub = null; this.code = null; return; }
     }

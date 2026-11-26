@@ -49,6 +49,10 @@ export function migrateState(state) {
 
 const withSettings = (room) => ({ ...room, settings: G.normalizeSettings(room.settings || {}) });
 
+/** A member id from a phone: the right form, and never a name an empty object already answers to ("__proto__"). */
+export const validId = (id) => typeof id === 'string' && ID_RE.test(id) && G.isSafeId(id);
+const has = (obj, key) => !!obj && typeof obj === 'object' && Object.hasOwn(obj, key);
+
 export function randomToken(bytes = 24) {
   const b = new Uint8Array(bytes);
   globalThis.crypto.getRandomValues(b);
@@ -69,12 +73,12 @@ function versionText(theirs) {
 export function validSnapshot(snap, code) {
   if (!snap || typeof snap !== 'object' || snap.v !== 1 || snap.code !== code) return false;
   if (!G.isValidRoom(snap.room) || snap.room.code !== code) return false;
-  if (typeof snap.ownerId !== 'string' || !ID_RE.test(snap.ownerId)) return false;
+  if (!validId(snap.ownerId)) return false;
   if (!snap.members || typeof snap.members !== 'object') return false;
   const ids = Object.keys(snap.members);
-  if (ids.length > G.MAX_ROOM_PLAYERS + 1 || !snap.members[snap.ownerId]) return false;
-  if (!ids.every((id) => ID_RE.test(id) && /^[0-9a-f]{64}$/.test(snap.members[id]?.th || ''))) return false;
-  return snap.room.players.every((p) => snap.members[p.id]);
+  if (ids.length > G.MAX_ROOM_PLAYERS + 1 || !has(snap.members, snap.ownerId)) return false;
+  if (!ids.every((id) => validId(id) && /^[0-9a-f]{64}$/.test(snap.members[id]?.th || ''))) return false;
+  return snap.room.players.every((p) => has(snap.members, p.id));
 }
 
 /**
@@ -107,7 +111,7 @@ export class RoomHub {
   /** A fresh room for its owner. Returns { code, token } (the owner's secret). */
   create({ ownerId, name = '', hostPlays = false, settings = {} }) {
     if (this.state) throw Object.assign(new Error('taken'), { code: 'taken' });
-    if (!ID_RE.test(String(ownerId || ''))) throw Object.assign(new Error('bad id'), { code: 'bad' });
+    if (!validId(String(ownerId || ''))) throw Object.assign(new Error('bad id'), { code: 'bad' });
     const token = randomToken();
     const ownerName = G.cleanName(name, 'Spelleider');
     const t = this.now();
@@ -131,7 +135,7 @@ export class RoomHub {
 
   /** Bring a room back from the owner's backup after a server restart. */
   restore(snap, { id, token }) {
-    const ok = (s) => s.ownerId === id && typeof token === 'string' && s.members[id]?.th === hashToken(token);
+    const ok = (s) => s.ownerId === id && typeof token === 'string' && has(s.members, id) && s.members[id].th === hashToken(token);
     if (this.state) {
       if (ok(this.state)) return { code: this.code, restored: false };
       throw Object.assign(new Error('taken'), { code: 'taken' });
@@ -147,7 +151,7 @@ export class RoomHub {
       claimed: true,
       ownerId: snap.ownerId,
       ownerName: G.cleanName(snap.ownerName, 'Spelleider'),
-      leaderId: members[snap.leaderId] ? snap.leaderId : snap.ownerId,
+      leaderId: has(members, snap.leaderId) ? snap.leaderId : snap.ownerId,
       leaderAwaySince: t,
       members,
       room: restartQuizQuestion(withSettings(snap.room), t),
@@ -253,16 +257,62 @@ export class RoomHub {
     if (++c.count > RATE_MAX_MESSAGES) { this.fatal(connId, 'ratelimit', 'Te veel berichten. Ververs de pagina.'); return; }
     const m = parseClientMessage(text);
     if (!m) { this.sendTo(connId, { t: 'error', code: 'bad', message: 'Onbekend bericht.' }); return; }
-    if (m.t === 'hello') { this.hello(connId, m); return; }
-    if (!this.state) { this.fatal(connId, 'notfound', 'Deze kamer bestaat niet (meer).'); return; }
-    if (!c.mid || !this.state.members[c.mid]) { this.sendTo(connId, { t: 'error', code: 'bad', message: 'Zeg eerst hallo.' }); return; }
-    this.state.lastActive = t;
-    try {
+    this.guarded(connId, () => {
+      if (m.t === 'hello') { this.hello(connId, m); return; }
+      if (!this.state) { this.fatal(connId, 'notfound', 'Deze kamer bestaat niet (meer).'); return; }
+      if (!c.mid || !has(this.state.members, c.mid)) { this.sendTo(connId, { t: 'error', code: 'bad', message: 'Zeg eerst hallo.' }); return; }
+      this.state.lastActive = t;
       this.action(connId, c.mid, m);
+    });
+  }
+
+  /**
+   * Handle one message as a transaction: nothing is saved or sent until it is done and
+   * every phone's state can be rendered. A GameError is a normal refusal; any other error
+   * (a bug, or a message nobody thought of) puts the room back as it was, so a bad message
+   * can never break the room for everybody or get persisted.
+   */
+  guarded(connId, fn) {
+    const before = this.checkpoint();
+    this.holding = true;
+    this.held = false;
+    try {
+      fn();
+      if (this.held && this.state) this.renderAll();
     } catch (e) {
+      this.holding = false;
+      this.rollback(before);
       if (e instanceof G.GameError) this.sendTo(connId, { t: 'error', code: e.code || 'bad', message: e.message });
-      else throw e;
+      else {
+        console.error('room', this.code, 'message failed, state rolled back:', e?.stack || e);
+        this.sendTo(connId, { t: 'error', code: 'bad', message: 'Dat lukte niet.' });
+      }
+      return;
+    } finally {
+      this.holding = false;
     }
+    if (this.held) this.changed();
+  }
+
+  /** The parts of the state a message can change (the room objects themselves are never mutated). */
+  checkpoint() {
+    const s = this.state;
+    return s ? { ...s, members: { ...s.members }, mix: { ...s.mix } } : null;
+  }
+
+  rollback(saved) {
+    if (!saved) return; // the room was created or closed meanwhile: nothing to put back
+    this.state = saved;
+    this.mixVersion++;
+    this.mixCache = null;
+  }
+
+  /** Throws when the state of some phone (or the leader's extra part) can not be rendered. */
+  renderAll() {
+    const s = this.state;
+    const pres = this.presence();
+    const ids = new Set([...s.room.players.map((p) => p.id), s.ownerId, s.leaderId]);
+    for (const id of ids) JSON.stringify(this.stateFor(id, pres));
   }
 
   hello(connId, m) {
@@ -271,10 +321,10 @@ export class RoomHub {
     const s = this.state;
     if (!s) { this.fatal(connId, 'notfound', 'Deze kamer bestaat niet (meer).'); return; }
     if (m.code && m.code !== this.code) { this.fatal(connId, 'room', 'Deze kamer bestaat niet meer.'); return; }
-    const id = typeof m.id === 'string' && ID_RE.test(m.id) ? m.id : null;
+    const id = validId(m.id) ? m.id : null;
     if (!id) { this.fatal(connId, 'bad', 'Onbekende speler.'); return; }
     let token;
-    if (s.members[id]) {
+    if (has(s.members, id)) {
       if (typeof m.token !== 'string' || !TOKEN_RE.test(m.token) || hashToken(m.token) !== s.members[id].th) {
         this.fatal(connId, 'token', 'Deze plek in de kamer hoort bij een ander toestel. Doe mee met een andere naam of vraag de spelleider om hulp.');
         return;
@@ -342,6 +392,7 @@ export class RoomHub {
       }
       case 'judge': {
         if (typeof m.ok !== 'boolean' || typeof m.pid !== 'string') throw new G.GameError('bad', 'Kies Goed of Fout.');
+        if (!r.players.some((p) => p.id === m.pid)) throw new G.GameError('answer', 'Deze speler heeft geen antwoord om te beoordelen.');
         s.room = G.judgeResult(r, m.pid, m.ok);
         break;
       }
@@ -360,7 +411,7 @@ export class RoomHub {
         break;
       }
       case 'mix-add': {
-        const cur = s.mix[mid]?.tracks || [];
+        const cur = (has(s.mix, mid) && s.mix[mid].tracks) || [];
         const out = addToContribution(cur, m.tracks, { roomTotal: contributionTotal(s.mix) });
         if (out.added) { s.mix[mid] = { at: this.now(), tracks: out.list }; this.mixVersion++; }
         if (out.refused) {
@@ -370,17 +421,22 @@ export class RoomHub {
         break;
       }
       case 'mix-clear': {
-        if (!s.mix[mid]) return;
+        if (!has(s.mix, mid)) return;
         this.dropContribution(mid);
         break;
       }
       case 'reveal': s.room = G.reveal(r, { now: this.now() }); break;
-      case 'override': s.room = G.overrideResult(r, String(m.pid || '')); break;
+      case 'override': {
+        if (!r.players.some((p) => p.id === m.pid)) throw new G.GameError('answer', 'Deze speler heeft geen antwoord om te beoordelen.');
+        s.room = G.overrideResult(r, m.pid);
+        break;
+      }
       case 'next': s.room = G.nextRound(r, { now: this.now() }); break;
       case 'lobby': s.room = G.backToLobby(r); break;
       case 'remove': {
-        const pid = String(m.pid || '');
+        const pid = typeof m.pid === 'string' ? m.pid : '';
         if (pid === s.ownerId || pid === mid) throw new G.GameError('host', 'De spelleider kan zichzelf niet verwijderen.');
+        if (!s.room.players.some((p) => p.id === pid) && !has(s.members, pid)) return; // gone already (or never there)
         s.room = G.removePlayer(r, pid);
         delete s.members[pid];
         this.dropContribution(pid);
@@ -452,7 +508,7 @@ export class RoomHub {
    */
   dropContribution(mid) {
     const s = this.state;
-    if (!s.mix[mid]) return;
+    if (!has(s.mix, mid)) return;
     delete s.mix[mid];
     this.mixVersion++;
     const g = s.room.game;
@@ -485,11 +541,15 @@ export class RoomHub {
   // ---------- state to the phones ----------
   changed() {
     if (!this.state) return;
+    if (this.holding) { this.held = true; return; } // a message is being handled: see guarded()
     this.persist();
     this.deps.wake?.(quizNextEvent(this.state.room, QUIZ_START_FALLBACK_MS));
     if (this.dirty) return;
     this.dirty = true;
-    queueMicrotask(() => { this.dirty = false; this.broadcast(); });
+    queueMicrotask(() => {
+      this.dirty = false;
+      try { this.broadcast(); } catch (e) { console.error('room', this.code, 'broadcast failed:', e?.stack || e); }
+    });
   }
 
   meta(mid) {
@@ -509,7 +569,7 @@ export class RoomHub {
       restored: !!s.restoredAt,
       now: this.now(), // the server's clock, for the Quiz countdown
       // "Mix van de groep": counts only, never a title
-      mix: { ...this.mixCounts(), mine: s.mix[mid]?.tracks?.length || 0 },
+      mix: { ...this.mixCounts(), mine: (has(s.mix, mid) && s.mix[mid].tracks?.length) || 0 },
       // the spelleider's Spotify Client ID, so players can log in for "Doe mijn favorieten erbij"
       spotifyClientId: typeof s.spotifyClientId === 'string' && SPOTIFY_CLIENT_ID_RE.test(s.spotifyClientId) ? s.spotifyClientId : null,
     };
@@ -574,7 +634,8 @@ export class RoomHub {
     let ownerConn = null;
     for (const [connId, c] of this.conns) {
       if (!c.mid) continue;
-      this.sendTo(connId, this.stateFor(c.mid, pres));
+      // one phone whose state can not be rendered must not keep the others waiting
+      try { this.sendTo(connId, this.stateFor(c.mid, pres)); } catch (e) { console.error('room', this.code, 'state for', c.mid, 'failed:', e?.message || e); }
       if (c.mid === this.state.ownerId) ownerConn = connId;
     }
     if (ownerConn) this.maybeBackup(ownerConn);

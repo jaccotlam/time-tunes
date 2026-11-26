@@ -8,7 +8,7 @@
 // view holds nothing about the running song: no id, no title, artist or year. Answers are
 // judged on the host.
 import { SQUARES } from '../bingo.js';
-import { describeAnswer, scoreOf, FREE, choosableSquares, undecided, stillChoosing } from './game.js';
+import { describeAnswer, scoreOf, FREE, choosableSquares, undecided, stillChoosing, own } from './game.js';
 import { PROMPTS } from './quiz.js';
 import { decadeLabel, goalCells, completeLines, reachedGoal, stampedCount, bestLineCount, SPIN_MS } from './disco.js';
 
@@ -77,7 +77,7 @@ export function viewFor(room, pid, presence = {}) {
     game: null,
   };
   if (!g) return view;
-  const mineState = g.per[pid];
+  const mineState = own(g.per, pid);
   const game = {
     kind: g.kind,
     round: g.round,
@@ -119,10 +119,10 @@ export function viewFor(room, pid, presence = {}) {
     } else {
       game.mine = { timeline: mineState.timeline.map((id) => songInfo(g.songs[id])) };
     }
-    if (room.phase === 'answering' && g.answers[pid]) game.answer = { ...g.answers[pid] };
+    if (room.phase === 'answering' && own(g.answers, pid)) game.answer = { ...g.answers[pid] };
   }
   if (revealed && g.current && g.results) {
-    const r = g.results[pid] || null;
+    const r = own(g.results, pid) || null;
     const cur = g.songs[g.current];
     game.reveal = {
       // a song from the "Mix van de groep" says whose favourite it was (names only, after the reveal)
@@ -207,8 +207,9 @@ function discoView(room, pid, revealed) {
   const D = g.disco;
   const live = room.phase === 'answering' || room.phase === 'revealed';
   const shown = revealed && room.phase === 'revealed';
-  const r = g.results?.[pid];
-  const ids = room.players.map((p) => p.id).filter((id) => g.per[id]);
+  const r = own(g.results, pid);
+  // a card without marks (a broken state) is left out rather than breaking every view
+  const ids = room.players.map((p) => p.id).filter((id) => Array.isArray(own(g.per, id)?.marks));
   return {
     cat: live ? D.cat : null,
     spin: g.round, // a new value = a new spin of the ball
@@ -217,7 +218,7 @@ function discoView(room, pid, revealed) {
     win: D.win,
     decades: D.decades.map(decadeLabel),
     // after the reveal: my stamp choice and where I may put it
-    choice: shown && Number.isInteger(D.choices?.[pid]) ? D.choices[pid] : null,
+    choice: shown && Number.isInteger(own(D.choices, pid)) ? D.choices[pid] : null,
     choosable: shown ? choosableSquares(g, pid) : [],
     mustChoose: shown ? stillChoosing(g).includes(pid) : false,
     waitingForHost: shown && r?.verdict === 'doubt',
@@ -235,8 +236,8 @@ function discoView(room, pid, revealed) {
 /** Discobingo fields of one entry in reveal.results: the literal answer, the verdicts and the stamp. */
 function discoResult(g, id) {
   const r = g.results[id];
-  const at = g.disco.choices?.[id];
-  const stamped = r.correct && Number.isInteger(at) && g.per[id]?.marks[at] === g.current ? at : null;
+  const at = own(g.disco.choices, id);
+  const stamped = r.correct && Number.isInteger(at) && own(g.per, id)?.marks?.[at] === g.current ? at : null;
   return {
     cat: r.cat ?? g.disco.cat,
     verdict: r.verdict ?? null, // 'right' | 'wrong' | 'doubt' | null (no answer / pass)

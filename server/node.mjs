@@ -77,6 +77,9 @@ export function startNodeServer({ port = Number(process.env.PORT) || 8787, host 
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
+  // the last net: one room's bug must not end the game in every other room on this server
+  process.on('uncaughtException', (e) => console.error('uncaught:', e?.stack || e));
+  process.on('unhandledRejection', (e) => console.error('unhandled rejection:', e?.stack || e));
   const s = await startNodeServer();
   const stop = () => { s.close().then(() => process.exit(0)); };
   process.on('SIGTERM', stop);

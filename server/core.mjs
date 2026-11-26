@@ -10,6 +10,11 @@ import {
 } from './policy.mjs';
 import { makeFreshCode } from '../app/js/multi/code.js';
 
+/** Run a room handler; an exception stays in that room (logged), it never takes the process down. */
+function safely(what, fn) {
+  try { return fn(); } catch (e) { console.error(`room ${what} failed:`, e?.stack || e); return undefined; }
+}
+
 export function createRoomServer({ origins = DEFAULT_ORIGINS, now = Date.now, limits = {}, log = () => {} } = {}) {
   const L = { ...LIMITS, ...limits };
   const allowed = parseOrigins(origins);
@@ -28,7 +33,7 @@ export function createRoomServer({ origins = DEFAULT_ORIGINS, now = Date.now, li
         wake: (at) => {
           clearTimeout(timer);
           if (at == null) return;
-          timer = setTimeout(() => hub.tick(), Math.max(0, at - now()) + 5);
+          timer = setTimeout(() => safely('tick', () => hub.tick()), Math.max(0, at - now()) + 5);
           timer.unref?.();
         },
         send: (connId, text) => { try { sockets.get(connId)?.socket.send(text); } catch { /* gone */ } },
@@ -120,8 +125,8 @@ export function createRoomServer({ origins = DEFAULT_ORIGINS, now = Date.now, li
         const hub = rooms.get(r.code) || makeHub(r.code);
         hub.open(connId);
         return {
-          message: (text) => { if (sockets.has(connId)) hub.message(connId, text); },
-          closed: () => { sockets.delete(connId); hub.close(connId); },
+          message: (text) => { if (sockets.has(connId)) safely('message', () => hub.message(connId, text)); },
+          closed: () => { sockets.delete(connId); safely('close', () => hub.close(connId)); },
         };
       },
     };
@@ -130,7 +135,7 @@ export function createRoomServer({ origins = DEFAULT_ORIGINS, now = Date.now, li
   /** Housekeeping, every few seconds: dead connections, expired rooms. */
   function sweep() {
     for (const [code, hub] of [...rooms]) {
-      const { expired } = hub.tick();
+      const { expired } = safely('tick', () => hub.tick()) || {};
       if (expired || !hub.exists()) { rooms.delete(code); log('expire', code); }
     }
   }

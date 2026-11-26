@@ -101,6 +101,11 @@ test('decennia en jaartal ±2', () => {
   assert.deepEqual(decadeLabel(1980), { decade: 1980, label: 'Jaren 80', sub: '1980–1989' });
   assert.equal(decadeLabel(2000).label, 'Jaren 00');
   assert.equal(decadeLabel(2010).label, 'Jaren 10');
+  assert.deepEqual(decadeLabel(1900), { decade: 1900, label: '1900–1909', sub: '' }, 'vóór 1930: geen botsing met de jaren 00');
+  assert.equal(decadeLabel(1920).label, '1920–1929');
+  assert.equal(decadeLabel(1930).label, 'Jaren 30');
+  const labels = decadesFor([1900, 2029]).map((d) => decadeLabel(d).label);
+  assert.equal(new Set(labels).size, labels.length, 'nooit twee knoppen met hetzelfde opschrift');
   assert.ok(yearRight(1982, 1984) && yearRight(1986, 1984));
   assert.ok(!yearRight(1981, 1984) && !yearRight(1987, 1984));
 });

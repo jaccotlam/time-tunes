@@ -179,13 +179,62 @@ function judgePair(g, t, kind) {
 }
 
 const RANK = { right: 2, doubt: 1, wrong: 0 };
+/** The edit distance is quadratic: longer texts than a song field (200) are never compared. */
+const MAX_VERDICT_CHARS = 200;
+const lower = (a, b) => (RANK[a] <= RANK[b] ? a : b);
+
+/** Articles that really are one (a band or title is the same with or without them). */
+const STRONG_ARTICLES = new Set(['the', 'de', 'het', 'een', 'an']);
+
+/**
+ * Spellings of one normalised name for the verdict, each with the best verdict it may give:
+ * the words as they are, and without a leading article. "The" / "De" / "Het" ... are real
+ * articles (Beatles = The Beatles). A leading "Die", "La", "A" ... may be a word of the name
+ * itself ("Die Young", "La Bamba"): leaving it out with only one or two words left is a doubt.
+ */
+function variants(normalized, cap = 'right') {
+  const ws = words(normalized).split(' ').filter(Boolean).map((w) => (AND_WORDS.has(w) ? 'and' : w));
+  if (!ws.length) return [];
+  const out = [{ t: ws.join(' '), cap }];
+  const rest = ws.slice();
+  let weak = false;
+  while (rest.length > 1 && ARTICLES.has(rest[0])) { if (!STRONG_ARTICLES.has(rest[0])) weak = true; rest.shift(); }
+  if (rest.length < ws.length) out.push({ t: rest.join(' '), cap: weak && rest.length <= 2 ? lower(cap, 'doubt') : cap });
+  return out;
+}
+
+/** Spellings of a title for the verdict: the core title and the title including bracket words. */
+function titleVariants(title) {
+  const full = fold(title).replace(/\s\b(feat|ft|featuring)\b\.?\s.*$/, ' ').replace(/\s+-\s+.*$/, ' ');
+  return [...variants(normalizeTitle(title)), ...variants(full)];
+}
+
+/**
+ * Spellings of an artist credit for the verdict. The whole credit and a featured artist
+ * ("Drake feat. Rihanna" -> Rihanna) are right; one part of a duo or band name joined by
+ * & / and / en / + / , ("Wind" for "Earth, Wind & Fire", "Simon" for "Simon & Garfunkel")
+ * is at most a doubt: the host decides with one tap.
+ */
+function artistVariants(artist) {
+  const f = fold(artist).replace(/[()[\]]/g, ' ');
+  const [main, ...featured] = f.split(/\s(?:feat\.?|ft\.?|featuring|with|met)\s/);
+  const out = [...variants(normalizeArtist(main))];
+  const parts = splitArtists(main);
+  if (parts.length > 1) for (const p of parts) out.push(...variants(p, 'doubt'));
+  for (const x of featured) {
+    out.push(...variants(normalizeArtist(x)));
+    for (const p of splitArtists(x)) out.push(...variants(p));
+  }
+  return out;
+}
 
 function threeWay(guessForms, targetForms, kind) {
   let best = { verdict: 'wrong', score: 0 };
   for (const t of targetForms) {
     for (const g of guessForms) {
-      const r = judgePair(g, t, kind);
-      if (RANK[r.verdict] > RANK[best.verdict] || (r.verdict === best.verdict && r.score > best.score)) best = r;
+      const r = judgePair(g.t, t.t, kind);
+      const verdict = lower(r.verdict, lower(g.cap, t.cap));
+      if (RANK[verdict] > RANK[best.verdict] || (verdict === best.verdict && r.score > best.score)) best = { verdict, score: r.score };
     }
   }
   const verdict = best.verdict;
@@ -194,14 +243,14 @@ function threeWay(guessForms, targetForms, kind) {
 
 /** Three-way verdict of a typed artist: { verdict: 'right'|'doubt'|'wrong', ok, doubt, score }. */
 export function artistVerdict(guess, artist) {
-  const g = String(guess ?? '').trim();
+  const g = String(guess ?? '').trim().slice(0, MAX_VERDICT_CHARS);
   if (!g) return { verdict: 'wrong', ok: false, doubt: false, score: 0 };
-  return threeWay([canon(normalizeArtist(g))], artistForms(artist), 'artist');
+  return threeWay(variants(normalizeArtist(g)), artistVariants(String(artist ?? '').slice(0, MAX_VERDICT_CHARS)), 'artist');
 }
 
 /** Three-way verdict of a typed title: { verdict: 'right'|'doubt'|'wrong', ok, doubt, score }. */
 export function titleVerdict(guess, title) {
-  const g = String(guess ?? '').trim();
+  const g = String(guess ?? '').trim().slice(0, MAX_VERDICT_CHARS);
   if (!g) return { verdict: 'wrong', ok: false, doubt: false, score: 0 };
-  return threeWay(titleForms(g), titleForms(title), 'title');
+  return threeWay(titleVariants(g), titleVariants(String(title ?? '').slice(0, MAX_VERDICT_CHARS)), 'title');
 }

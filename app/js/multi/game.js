@@ -22,7 +22,7 @@ import {
 import {
   CATEGORY_KEYS, CENTER_KEY, CELLS, DISCO_MIN_SONGS, categoryOf, uniqueDiscoCard, discoSignature, freshMarks,
   stampedCount, reachedGoal, goalCells, openSquares, bestSquare, lateMarks, decadeOf, decadeLabel, decadesFor,
-  yearRight, drawCategory, freshBag, normalizeWin,
+  yearRight, drawCategory, freshBag, normalizeWin, isValidCard, CENTER, WINS,
 } from './disco.js';
 
 export const MAX_ROOM_PLAYERS = 12;
@@ -90,12 +90,20 @@ export function setSettings(room, patch) {
 export const findPlayer = (room, id) => room.players.find((p) => p.id === id) || null;
 
 /**
+ * Ids come from the phones: an id like "__proto__" or "constructor" would find an inherited
+ * member of a plain object (per, results, answers ...). Such ids never get in, and every
+ * lookup by a client-supplied id goes through own().
+ */
+export const isSafeId = (id) => typeof id === 'string' && id.length > 0 && !(id in Object.prototype);
+export const own = (obj, key) => (obj && typeof obj === 'object' && Object.hasOwn(obj, key) ? obj[key] : undefined);
+
+/**
  * Somebody joins (or comes back). A known id keeps its place and stand; a new player who
  * arrives during a game gets a fair start (lateStart). Throws GameError 'removed' / 'full'.
  */
 export function addPlayer(room, { id, name }) {
   const pid = String(id || '');
-  if (!pid) throw new GameError('bad', 'Speler zonder id.');
+  if (!pid || !isSafeId(pid)) throw new GameError('bad', 'Speler zonder id.');
   if (room.removed.includes(pid)) throw new GameError('removed', 'Je bent door de spelleider uit deze kamer gehaald.');
   const known = findPlayer(room, pid);
   if (known) {
@@ -281,7 +289,7 @@ const clonePer = (s) => (s.card ? { card: s.card, marks: s.marks.slice() } : s.t
 export function normalizeAnswer(room, pid, answer) {
   const g = room.game;
   if (!g || room.phase !== 'answering') throw new GameError('late', 'Je kunt nu niet (meer) antwoorden.');
-  const mine = g.per[pid];
+  const mine = own(g.per, pid);
   if (!mine) throw new GameError('answer', 'Je doet niet mee aan dit spel.');
   const a = answer && typeof answer === 'object' ? answer : {};
   if (g.kind === 'disco') return normalizeDiscoAnswer(g, a);
@@ -338,7 +346,7 @@ export function submitAnswer(room, pid, answer, { now = Date.now() } = {}) {
 
 /** Take an answer back (still allowed until the reveal). */
 export function withdrawAnswer(room, pid) {
-  if (room.phase !== 'answering' || !room.game?.answers[pid]) return room;
+  if (room.phase !== 'answering' || !own(room.game?.answers, pid)) return room;
   if (room.game.kind === 'quiz') throw new GameError('final', 'In de quiz kun je je antwoord niet meer wijzigen.');
   const answers = { ...room.game.answers };
   delete answers[pid];
@@ -442,7 +450,7 @@ function applyResults(room) {
 export function overrideResult(room, pid) {
   if (room.phase !== 'revealed') throw new GameError('phase', 'Je kunt alleen na de onthulling een oordeel omdraaien.');
   if (room.game.kind === 'quiz') throw new GameError('answer', 'In de quiz beslist de klok: er valt niets om te draaien.');
-  const r = room.game.results?.[pid];
+  const r = own(room.game.results, pid);
   if (!r || r.none || r.pass) throw new GameError('answer', 'Deze speler heeft geen antwoord om te beoordelen.');
   if (room.game.kind === 'disco') {
     if (r.verdict === 'doubt') throw new GameError('doubt', 'Twijfelgeval: kies Goed of Fout.');
@@ -461,7 +469,7 @@ export function judgeResult(room, pid, ok) {
   if (room.phase !== 'revealed') throw new GameError('phase', 'Je kunt alleen na de onthulling een oordeel geven.');
   const g = room.game;
   if (g.kind !== 'disco') return overrideResult(room, pid);
-  const r = g.results?.[pid];
+  const r = own(g.results, pid);
   if (!r || r.none || r.pass) throw new GameError('answer', 'Deze speler heeft geen antwoord om te beoordelen.');
   const verdict = ok ? 'right' : 'wrong';
   const next = { ...r, verdict, correct: ok, decided: true, overridden: r.auto !== 'doubt' && verdict !== r.auto };
@@ -472,9 +480,9 @@ export function judgeResult(room, pid, ok) {
 
 /** Discobingo: the squares a player may stamp this round (open squares of the category; none unless right). */
 export function choosableSquares(game, pid) {
-  const r = game?.results?.[pid];
-  const before = game?.prev?.[pid];
-  if (game?.kind !== 'disco' || !r?.correct || !before) return [];
+  const r = own(game?.results, pid);
+  const before = own(game?.prev, pid);
+  if (game?.kind !== 'disco' || !r?.correct || !Array.isArray(before?.card) || !Array.isArray(before?.marks)) return [];
   return openSquares(before.card, before.marks, game.disco.cat);
 }
 
@@ -483,7 +491,7 @@ export function stampSquare(room, pid, index) {
   const g = room.game;
   if (g?.kind !== 'disco') throw new GameError('answer', 'Dit kan alleen bij Discobingo.');
   if (room.phase !== 'revealed') throw new GameError('phase', 'Je kunt alleen na de onthulling een vakje afstempelen.');
-  const r = g.results?.[pid];
+  const r = own(g.results, pid);
   if (!r) throw new GameError('answer', 'Je doet niet mee aan dit spel.');
   if (r.verdict === 'doubt') throw new GameError('doubt', 'De spelleider kijkt nog naar je antwoord.');
   if (!r.correct) throw new GameError('answer', 'Alleen met een goed antwoord mag je een vakje afstempelen.');
@@ -499,11 +507,11 @@ export function stampSquare(room, pid, index) {
 
 /** Discobingo: players whose verdict the host still has to give. */
 export const undecided = (game) => (game?.kind === 'disco' && game.results
-  ? Object.keys(game.results).filter((id) => game.results[id].verdict === 'doubt') : []);
+  ? Object.keys(game.results).filter((id) => game.results[id]?.verdict === 'doubt') : []);
 
 /** Discobingo: right players who have not chosen a square yet (and have one to choose). */
 export const stillChoosing = (game) => (game?.kind === 'disco' && game.results
-  ? Object.keys(game.results).filter((id) => game.results[id].correct && !Number.isInteger(game.disco.choices?.[id]) && choosableSquares(game, id).length)
+  ? Object.keys(game.results).filter((id) => game.results[id]?.correct && !Number.isInteger(own(game.disco.choices, id)) && choosableSquares(game, id).length)
   : []);
 
 /** After a reveal: to the winner screen when somebody won this round, otherwise the next song. */
@@ -527,7 +535,7 @@ export function nextRound(room, { now = Date.now() } = {}) {
 }
 
 export function scoreOf(game, pid) {
-  const s = game?.per?.[pid];
+  const s = own(game?.per, pid);
   if (!s) return 0;
   if (game.kind === 'disco') return stampedCount(s.marks);
   if (s.card) return markCount(s.marks);
@@ -602,10 +610,10 @@ export function startQuizClock(room, now = Date.now()) {
 function submitQuizAnswer(room, pid, answer, now) {
   const g = room.game;
   if (room.phase !== 'answering') throw new GameError('late', 'Je kunt nu niet (meer) antwoorden.');
-  if (!g.per[pid]) throw new GameError('answer', 'Je doet niet mee aan deze quiz.');
+  if (!own(g.per, pid)) throw new GameError('answer', 'Je doet niet mee aan deze quiz.');
   if (g.quiz.startedAt == null) throw new GameError('wait', 'Even wachten: de klok start zodra de muziek speelt.');
   if (now > g.quiz.deadline + QUIZ_GRACE_MS) throw new GameError('late', 'De tijd is om.');
-  if (g.answers[pid]) throw new GameError('final', 'Je hebt al geantwoord; in de quiz kun je dat niet wijzigen.');
+  if (own(g.answers, pid)) throw new GameError('final', 'Je hebt al geantwoord; in de quiz kun je dat niet wijzigen.');
   const choice = Number(answer?.choice);
   if (!Number.isInteger(choice) || choice < 0 || choice >= g.quiz.q.options.length) throw new GameError('answer', 'Kies een van de vier antwoorden.');
   return { ...room, game: { ...g, answers: { ...g.answers, [pid]: { choice, at: Math.min(now, g.quiz.deadline) } } } };
@@ -697,11 +705,36 @@ export function describeAnswer(game, pid, answer, { forOwner = true } = {}) {
   return `plek ${answer.slot + 1}`;
 }
 
+const isObj = (o) => !!o && typeof o === 'object' && !Array.isArray(o);
+
+/**
+ * Discobingo: a stored or restored game must be one the views can render: valid cards,
+ * marks of 25 known values, choices and results of players in the game.
+ */
+function isValidDisco(r, g) {
+  const d = g.disco;
+  if (!isObj(d) || !WINS.includes(d.win) || !Array.isArray(d.decades) || !d.decades.every(Number.isInteger)) return false;
+  if (!Array.isArray(d.bag) || !d.bag.every((k) => CATEGORY_KEYS.includes(k))) return false;
+  if ((r.phase === 'answering' || r.phase === 'revealed') && !CATEGORY_KEYS.includes(d.cat)) return false;
+  const ids = new Set(r.players.map((p) => p.id));
+  const card = (s) => isObj(s) && isValidCard(s.card) && Array.isArray(s.marks) && s.marks.length === CELLS && s.marks[CENTER] != null
+    && s.marks.every((m) => m === null || m === FREE || (typeof m === 'string' && Object.hasOwn(g.songs, m)));
+  const ofPlayers = (o) => isObj(o) && Object.keys(o).every((id) => ids.has(id));
+  if (!ofPlayers(g.per) || !Object.values(g.per).every(card)) return false;
+  if (!ofPlayers(d.choices) || !Object.values(d.choices).every((i) => Number.isInteger(i) && i >= 0 && i < CELLS)) return false;
+  if (g.answers != null && !ofPlayers(g.answers)) return false;
+  if (r.phase === 'revealed' || (r.phase === 'won' && g.results)) {
+    if (!ofPlayers(g.prev) || !Object.values(g.prev).every(card)) return false;
+    if (!ofPlayers(g.results) || !Object.values(g.results).every((x) => isObj(x) && [undefined, null, 'right', 'wrong', 'doubt'].includes(x.verdict))) return false;
+  }
+  return true;
+}
+
 /** Shape check for a room restored from localStorage. */
 export function isValidRoom(r) {
   if (!r || r.v !== 1 || typeof r.code !== 'string' || !Array.isArray(r.players) || !Array.isArray(r.removed)) return false;
   if (!['lobby', 'answering', 'revealed', 'won'].includes(r.phase)) return false;
-  if (!r.players.every((p) => p && typeof p.id === 'string' && typeof p.name === 'string')) return false;
+  if (!r.players.every((p) => p && isSafeId(p.id) && typeof p.name === 'string')) return false;
   if (r.phase === 'lobby') return true;
   const g = r.game;
   if (!g || !GAMES.includes(g.kind) || !g.songs || !Array.isArray(g.pile) || !g.per) return false;
@@ -713,13 +746,7 @@ export function isValidRoom(r) {
     if ((r.phase === 'answering' || r.phase === 'revealed') && (!q.q || !Array.isArray(q.q.options) || !Number.isInteger(q.q.answer))) return false;
     return Object.values(g.per).every((s) => s && Number.isFinite(s.score) && Number.isFinite(s.streak));
   }
-  if (g.kind === 'disco') {
-    const d = g.disco;
-    if (!d || !Array.isArray(d.decades) || !Array.isArray(d.bag) || !d.choices || typeof d.choices !== 'object') return false;
-    if ((r.phase === 'answering' || r.phase === 'revealed') && !CATEGORY_KEYS.includes(d.cat)) return false;
-    return Object.values(g.per).every((s) => s && Array.isArray(s.card) && Array.isArray(s.marks) && s.card.length === CELLS && s.marks.length === CELLS
-      && s.card.every((k) => k === CENTER_KEY || CATEGORY_KEYS.includes(k)));
-  }
+  if (g.kind === 'disco') return isValidDisco(r, g);
   return Object.values(g.per).every((s) => (g.kind === 'bingo'
     ? Array.isArray(s.card) && Array.isArray(s.marks) && s.card.length === g.size * g.size && s.card.every((k) => SQUARES[k])
     : Array.isArray(s.timeline) && s.timeline.every((id) => g.songs[id])));

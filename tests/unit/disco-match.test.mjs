@@ -18,7 +18,9 @@ test('goed: normalisatie, kleine typefouten en klinkt hetzelfde (voorbeelden uit
   assert.equal(A('Eminen', 'Eminem'), 'right');
   assert.equal(A('the beatles', 'Beatles'), 'right');
   assert.equal(A('Simon en Garfunkel', 'Simon & Garfunkel'), 'right');
-  assert.equal(A('Dua Lipa', 'Calvin Harris & Dua Lipa'), 'right', 'een van de artiesten is genoeg');
+  assert.equal(A('Rihanna', 'Drake feat. Rihanna'), 'right', 'een gastartiest is genoeg');
+  assert.equal(A('calvin harris', 'Calvin Harris feat. Rihanna'), 'right');
+  assert.equal(A('Calvin Harris & Dua Lipa', 'Calvin Harris & Dua Lipa'), 'right');
   assert.equal(T('Bohemian Rapsody', 'Bohemian Rhapsody'), 'right');
   assert.equal(T('Final Countdown', 'The Final Countdown'), 'right');
   assert.equal(T('Smells like teen spirit', 'Smells Like Teen Spirit (Remastered 2021)'), 'right');
@@ -83,4 +85,37 @@ test('vorm van het oordeel; matchArtist / matchTitle blijven zoals ze waren', ()
   // classic room Bingo keeps its own (stricter) rule for short names
   assert.equal(matchArtist('ABA', 'ABBA').ok, false);
   assert.deepEqual(Object.keys(matchTitle('x', 'y')).sort(), ['doubt', 'ok', 'score']);
+});
+
+test('een deel van een duo of band met & / and / en / + / , is hooguit twijfel; een gastartiest is goed', () => {
+  for (const [g, t] of [
+    ['Wind', 'Earth, Wind & Fire'], ['Fire', 'Earth, Wind & Fire'], ['Earth', 'Earth, Wind & Fire'], ['Sons', 'Mumford & Sons'],
+    ['Mumford', 'Mumford & Sons'], ['Gang', 'Kool & The Gang'], ['Kool', 'Kool & The Gang'], ['Oates', 'Hall & Oates'],
+    ['Young', 'Crosby, Stills, Nash & Young'], ['Machine', 'Florence + The Machine'], ['Revolution', 'Prince & The Revolution'],
+    ['Simon', 'Simon & Garfunkel'], ['Queen', 'Queen & David Bowie'], ['Dua Lipa', 'Calvin Harris & Dua Lipa'],
+  ]) assert.equal(A(g, t), 'doubt', `${g} / ${t}`);
+  assert.equal(A('Earth Wind and Fire', 'Earth, Wind & Fire'), 'right', 'de hele naam');
+  assert.equal(A('Hall en Oates', 'Hall & Oates'), 'right');
+  assert.equal(A('Florence and the Machine', 'Florence + The Machine'), 'right');
+  assert.equal(A('Rihanna', 'Drake feat. Rihanna'), 'right');
+  assert.equal(A('Drake', 'Drake feat. Rihanna'), 'right');
+  assert.equal(A('Rihanna', 'Drake ft. Rihanna & Future'), 'right');
+  assert.equal(A('Rihanna', 'Drake'), 'wrong');
+  assert.equal(matchArtist('Wind', 'Earth, Wind & Fire').ok, true, 'klassieke Bingo blijft zoals hij was');
+});
+
+test('lidwoorden: een typefout in het lidwoord is goed; een gewoon woord weglaten is twijfel', () => {
+  assert.equal(T('LaeBamba', 'La Bamba'), 'right');
+  assert.equal(T('Lq Bamba', 'La Bamba'), 'right');
+  assert.equal(T('Bamba', 'La Bamba'), 'doubt');
+  assert.equal(T('Young', 'Die Young'), 'doubt');
+  assert.equal(T('Another Day', 'Die Another Day'), 'doubt');
+  assert.equal(T('Whiter Shade of Pale', 'A Whiter Shade of Pale'), 'right', 'lang genoeg: het lidwoord telt niet');
+  assert.equal(T('Final Countdown', 'The Final Countdown'), 'right');
+  assert.equal(T('The Final Countdown', 'Final Countdown'), 'right');
+  assert.equal(T('Zoutelande', 'Het Zoutelande'), 'right');
+  assert.equal(A('Beatles', 'The Beatles'), 'right');
+  assert.equal(A('Dijk', 'De Dijk'), 'right');
+  assert.equal(A('Ha', 'A-ha'), 'doubt');
+  assert.equal(A('aha', 'A-ha'), 'right');
 });
