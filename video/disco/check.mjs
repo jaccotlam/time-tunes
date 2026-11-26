@@ -31,7 +31,7 @@ export function check(extra = []) {
   const times = scenes.flatMap((s) => {
     const len = s.o1 - s.o0;
     return len > 7 ? [s.o0 + len * 0.2, s.o0 + len * 0.6, s.o0 + len * 0.93] : [s.o0 + len * 0.6];
-  }).map((t, i) => ({ t, id: [...scenes].reverse().find((s) => s.o0 <= t)?.id }))
+  }).map((t) => ({ t, id: [...scenes].reverse().find((s) => s.o0 <= t)?.id }))
     .concat(extra.map((t) => ({ t, id: [...scenes].reverse().find((s) => s.o0 <= t)?.id })));
   times.sort((a, b) => a.t - b.t);
   for (const { t, id } of times) {

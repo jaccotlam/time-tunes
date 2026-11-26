@@ -135,6 +135,8 @@ export async function capturePage(page, dir, prefix, now, { castFormat = 'png' }
   return {
     frames,
     pause() { active = false; },
+    /** Nieuwe tijdlijn (de opname zet de klok opnieuw op 0): de tijd van het laatste beeld vergeten. */
+    resetClock() { lastT = -1; },
     resume() { active = true; grab(); },
     async setMode(m) {
       if (m === mode || stopped) return;

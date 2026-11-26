@@ -1,6 +1,6 @@
 // Stap 2 van de Discobingo-video: teken de video frame voor frame (decor + schermbeelden uit de opname) en
 // zet hem om naar MP4. Scherp en precies 30 fps; zelfde aanpak als ../3-render.mjs, maar met eigen decor.
-import { rmSync, statSync, readFileSync, writeFileSync } from 'node:fs';
+import { rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TMP, FPS, VIDEO, OUT_FILE } from './config.mjs';
 import { startServer, launch, ensureDir, ffmpeg, ffmpegPipe } from '../lib.mjs';
@@ -78,4 +78,3 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const times = args.flatMap((a, i) => (a === '--still' ? [Number(args[i + 1])] : []));
   (times.length ? stills(times) : render()).catch((e) => { console.error(e); process.exit(1); });
 }
-void readFileSync;

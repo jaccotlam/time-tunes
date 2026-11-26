@@ -71,9 +71,13 @@ async function recordOnce() {
     let T0 = Date.now() / 1000;
     const rel = () => Date.now() / 1000 - T0;
     for (const d of devs) { d.cap = await capturePage(d.page, join(phoneDir, d.key), 'f', rel, { castFormat: 'jpeg' }); captures.push(d.cap); }
-    await sleep(300);
+    // De opname begint hier: het laatste beeld van de voorbereiding is het beginbeeld (t = 0). Even pauzeren,
+    // zodat er geen beeld met de oude klok meer onderweg is (onder druk duurt de voorbereiding soms tientallen seconden).
+    for (const c of captures) c.pause();
+    await sleep(700);
     T0 = Date.now() / 1000;
-    for (const c of captures) for (const f of c.frames) f[0] = 0;
+    for (const c of captures) { c.frames.splice(0, c.frames.length - 1); c.frames[0][0] = 0; c.resetClock(); c.resume(); }
+    await sleep(200);
 
     const ev = { edit: [], taps: [], highlights: [], marks: {}, players: PLAYERS, code: null };
     const seg = (id, opts = {}) => { ev.edit.push({ id, r0: rel(), speed: 1, ...opts }); console.log(`${rel().toFixed(2).padStart(7)}  ${id ?? '(wegknippen)'}${opts.speed ? ` x${opts.speed}` : ''}`); };
@@ -361,7 +365,8 @@ async function recordOnce() {
     ev.duration = rel();
     for (const c of captures) await c.stop();
     ev.edit.push({ id: 'end', dur: END_SECONDS });
-    ev.frames = Object.fromEntries(devs.map((d) => [d.key, d.cap.frames]));
+    // beelden van de screenshot- en de screencast-modus kunnen elkaar om een paar ms inhalen: op tijd sorteren
+    ev.frames = Object.fromEntries(devs.map((d) => [d.key, [...d.cap.frames].sort((x, y) => x[0] - y[0])]));
     ev.config = { TV, PHONE, SEED, PUBLIC_URL };
     for (const d of devs) {
       if (await d.page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) problems.push(`${d.key}: pagina breder dan het scherm`);

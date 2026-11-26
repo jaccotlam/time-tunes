@@ -64,3 +64,44 @@ Eén deel opnemen terwijl je eraan werkt: `TT_ONLY=multi,playlist node video/2-r
 - Spotify is in de opname niet gekoppeld. De video laat alleen de keuze bij Instellingen zien.
 - De app gebruikt het systeemlettertype. Op de machine waar deze video gemaakt is, is dat Inter; op een andere machine kan de telefoon er iets anders uitzien.
 - Aan `app/`, `tests/` en `tools/` verandert dit niets. De eigen pagina's worden via Playwright onder `/__video/` op de origin van de app geserveerd.
+
+## Discobingo-video
+
+`discobingo-uitleg.mp4` legt Discobingo uit aan wie het nog nooit zag: 1920 × 1080, 30 fps, H.264 (yuv420p), zonder geluid, ongeveer 95 seconden, ongeveer 12 MB.
+Links de spelleider als laptop of tv (de brede opmaak van de app, 1280 × 720, op 0,75× opgenomen: 960 × 540 pixels in beeld), rechts twee echte, verbonden telefoons (Anouk en Bram, 351 × 765 pixels), eronder de ondertitel met stapnummer.
+Alles wat je ziet is de echte app; er wordt een compleet potje gespeeld.
+
+```bash
+node video/disco/make.mjs                 # alles: opname, video, nakijkbeelden (zo'n 6 minuten)
+node video/disco/make.mjs render check    # alleen de video opnieuw (3 minuten); de opname blijft staan
+node video/disco/render.mjs --still 45    # één los beeld, zonder alles te renderen
+```
+
+Eigen pipeline in `video/disco/`, los van de grote video: `config.mjs` (instellingen), `plan.mjs` (draaiboek nagerekend met de regels van de app), `record.mjs`, `render.mjs`, `check.mjs`, `make.mjs`, en het decor in `stage.html`, `stage.css`, `stage.js` en `scenes.js`.
+Dezelfde aanpak als hierboven (verliesvrije frames per scherm met `capturePage` uit `lib.mjs`, `events.json`, het decor frame voor frame in ffmpeg) en dezelfde huisstijl (`app/css/app.css` en `disco.css`).
+Tussenbestanden komen in `$TT_VIDEO_TMP/disco` (standaard `<tmp>/timetunesr-video/disco`), nooit in de repo.
+
+| Stap | Scène | Tekst op beeld (kort) | Wat de opname doet |
+| --- | --- | --- | --- |
+| – | titel | Discobingo, muziekbingo met ieder een eigen telefoon | alleen decor |
+| 1 | `room` | Maak een kamer | Spelleider tikt *Maak een kamer*; Anouk en Bram doen mee met de code |
+| 2 | `lobby` | Kies Discobingo | Lobby scrollt naar *Welk spel?* en *Winnen met: 1 lijn* (kader) |
+| 3 | `spin` | De discobal draait | Start; de hele draai van de bal, op alle drie de schermen |
+| 4 | `card` | Ieder een eigen kaart | Telefoons scrollen naar de 5×5-kaart (kader), vier kleuren, gratis ster |
+| 5 | `answer` | Luister en typ | Anouk typt “Rick Astly” (typfout), Bram “Astley” (deel van de naam) |
+| 6 | `reveal` | Onthul en stempel | Onthullen; Anouk kiest een vakje en verplaatst het één keer |
+| 7 | `doubt` | Twijfel? De spelleider beslist | Regie: Bram is een twijfelgeval, spelleider tikt *Goed*; Bram kiest een vakje |
+| 8 | `year` | Jaartal: 2 ernaast mag | Ronde 2 (draai op ×2): 2014 bij 2016 is goed, Bram's 2020 niet |
+| 9 | `later` | Even later… | Ronde 3 echt gespeeld maar op ×3 getoond, met het opschrift *Even later…* |
+| 10 | `bingo` | Een lijn vol: bingo! | Ronde 4: decennium-knoppen, het laatste vakje van de rij, BINGO |
+| 11 | `win` | Anouk wint! | *Naar de uitslag*, winnaarscherm met confetti |
+| – | slot | adres en *Ieder een eigen telefoon → Maak een kamer* | alleen decor |
+
+**Voorspelbaar.** `SEED` in `config.mjs` is de vaste zaaiwaarde van de kamer (`timetunesr.multiSeed.v1` bij de spelleider). `plan.mjs` rekent daarmee vooraf na wat er gebeurt (met `game.js` en `disco.js` van de app) en kan een andere zaaiwaarde zoeken (`node video/disco/plan.mjs`): ronde 1 moet Artiest of Titel zijn en Anouk moet een lijn door de ster hebben met alle vier de kleuren, zodat ze na vier rondes wint. De opname breekt af als de app andere categorieën, nummers of beoordelingen geeft dan gepland (`SCRIPT` in `config.mjs`: wat Anouk en Bram typen of tikken; de typfouten worden met `match.js` van de app gecontroleerd).
+**Het nummer blijft geheim.** Tijdens het draaien, luisteren en antwoorden controleert de opname op alle drie de schermen dat titel, artiest en jaartal van het lopende nummer nergens in beeld staan; bij een lek wordt de opname afgekeurd.
+**Geen internet nodig.** Er zit geen geluid in de video, dus de fragmenten zijn stil: de opname geeft de app voor elk nummer een stil fragment en een eigen iTunes-lookup-antwoord (`common.mjs`). Het deck, de titels en jaartallen zijn wel die van de app.
+**De bal.** Een screenshot per scherm haalt onder deze belasting maar zo'n 14 beelden per seconde; tijdens het draaien van de bal (en op het winnaarscherm met confetti) schakelt de opname daarom per scherm om naar de beelden van de screencast zelf (JPEG, 1 CSS-pixel per pixel, ongeveer 24 per seconde). Op een rustige machine is dat vloeiender. Dit is `castFormat` in `capturePage` (`lib.mjs`, voor de andere video ongewijzigd).
+**De kamercode** kiest de kamerserver zelf; bij brede letters (M, W) past de lobby niet op een telefoon (zie hierboven) en neemt het script automatisch opnieuw op (hoogstens acht keer).
+**Montage.** `record.mjs` schrijft een montagelijst (`edit` in `events.json`): stukken van de opname met een scène-id en snelheid; `stage.js` maakt daar de tijdlijn van. Een scène korter of langer maken kan dus met een `hold(…)` in `record.mjs`, of met `speed` bij `seg(...)`.
+
+Aanpassen: de teksten op beeld in `disco/scenes.js` (leg ze naast `#/regels` in de app, kopje Discobingo), de spelers en antwoorden in `disco/config.mjs`, het draaiboek en de tijden in `disco/record.mjs`, de vormgeving in `disco/stage.css`. Chromium, Node 20+, Playwright, ffmpeg en de devDependency `peer` zoals hierboven; `HTTPS_PROXY` is niet nodig. Als een andere taak de machine zwaar belast (`uptime`), kan de opname haperen: neem dan opnieuw op.
