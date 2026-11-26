@@ -38,6 +38,8 @@ export const ROOM_IDLE_MS = 6 * 60 * 60 * 1000; // a room with no activity for 6
 export const UNCLAIMED_MS = 30 * 60 * 1000; // a created room nobody ever connected to
 /** A room an account prepared in advance (prepared.mjs) lives this long after its last activity. */
 export const PREPARED_IDLE_MS = 30 * 24 * 60 * 60 * 1000;
+/** A prepared room in the lobby: only the owner (the account's device) may lead it, no take-over. */
+export const leadLocked = (s) => !!s?.prepared && s.room?.phase === 'lobby';
 /** How long this room may stay without activity before it expires. */
 export const idleLimit = (s) => (s?.prepared ? PREPARED_IDLE_MS : s?.claimed ? ROOM_IDLE_MS : UNCLAIMED_MS);
 export const MAX_CONNS_PER_ROOM = 40;
@@ -616,6 +618,8 @@ export class RoomHub {
         if (isLeader) break;
         if (mid !== s.ownerId) {
           if (!s.room.players.some((p) => p.id === mid)) throw new G.GameError('lead', 'Alleen een speler kan de leiding overnemen.');
+          // a room set up in advance is led from the account's device until a game runs
+          if (leadLocked(s)) throw new G.GameError('lead', 'Deze kamer is klaargezet: de spelleider opent hem zo. Tot het spel begint kan niemand anders de leiding nemen.');
           if (this.online(s.leaderId)) throw new G.GameError('leaderonline', 'De spelleider is er weer.');
           const away = this.now() - (s.leaderAwaySince ?? this.now());
           if (away < TAKEOVER_MS) throw new G.GameError('wait', `Wacht nog ${Math.ceil((TAKEOVER_MS - away) / 1000)} s: misschien komt de spelleider terug.`);
@@ -752,7 +756,12 @@ export class RoomHub {
       leaderIsOwner: s.leaderId === s.ownerId,
       leaderOnline,
       leaderAwayMs: leaderOnline ? 0 : Math.max(0, this.now() - (s.leaderAwaySince ?? this.now())),
-      takeoverMs: TAKEOVER_MS,
+      // null while nobody may take over (a prepared room in the lobby): see takeover
+      takeoverMs: leadLocked(s) ? null : TAKEOVER_MS,
+      takeover: !leadLocked(s), // may a player take the lead when the leader stays away?
+      prepared: !!s.prepared, // set up in advance by an account (prepared.mjs)
+      // a prepared room in the lobby whose owner's device is not here (not opened yet, or gone again)
+      waitingForOwner: !!s.prepared && s.room.phase === 'lobby' && !this.online(s.ownerId),
       restored: !!s.restoredAt,
       now: this.now(), // the server's clock, for the Quiz countdown
       // "Mix van de groep": counts only, never a title
