@@ -286,8 +286,9 @@ html.tt-screen #toast { font-size: 1rem; }
   padding: .55rem 1rem .55rem .65rem; border-radius: 1.1rem; background: rgba(44, 24, 70, .85); border: .1rem solid var(--line); font-size: 1.3rem; min-width: 0;
   animation: s-rise .45s ease-out both;
 }
-.sa.is-two .sr { font-size: 1.1rem; grid-template-areas: "icon name verdict" "icon answer answer"; }
-.sa.is-two .sr-verdict { flex-direction: row; align-items: baseline; gap: .5em; }
+.sa.is-two .sr { font-size: 1.1rem; }
+/* many players: the line under the list says who still chooses, so the rows keep room for the names */
+.sa.is-two .sr-note { display: none; }
 .sa.is-two .sr-verdict small { font-size: .85em; }
 .sr-icon { grid-area: icon; width: 2.1em; height: 2.1em; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .1); color: var(--muted); font-weight: 900; font-family: var(--font-display); }
 .sr-icon .ico { width: 1.3em; height: 1.3em; }
