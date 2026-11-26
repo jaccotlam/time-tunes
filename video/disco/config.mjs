@@ -10,8 +10,11 @@ export const DISCO_DIR = fileURLToPath(new URL('.', import.meta.url)).replace(/\
 export const TMP = process.env.TT_VIDEO_TMP ? join(process.env.TT_VIDEO_TMP, 'disco') : join(tmpdir(), 'timetunesr-video', 'disco');
 export const OUT_FILE = join(ROOT, 'video', 'discobingo-uitleg.mp4');
 
-/** De spelleider is een laptop/tv (brede opmaak), opgenomen op 0,75x: 960 x 540 videopixels. */
-export const TV = { width: 1280, height: 720, scale: 0.75 };
+/**
+ * Het grote scherm (tab 2, op de tv) en het tabblad van de spelleider (tab 1, op de laptop): allebei 16:9, 1280 x 720
+ * CSS-px, opgenomen op 0,8x = 1024 x 576 videopixels. In beeld staan ze nooit groter dan 1:1 (zie LAYOUTS in stage.js).
+ */
+export const TV = { width: 1280, height: 720, scale: 0.8 };
 /** Telefoons: 390 x 850 CSS-px, opgenomen op 0,9x: 351 x 765 videopixels (1 op 1 in beeld). */
 export const PHONE = { width: 390, height: 850, scale: 0.9 };
 
@@ -26,6 +29,6 @@ export const SEED = 80;
 export const SCRIPT = {
   r1: { anouk: 'Rick Astly', bram: 'Astley' }, //  typfout = goed, alleen de achternaam = twijfel
   r2: { anouk: '2014', bram: '2020' }, //            Timberlake 2016: 2 ernaast is goed, 4 ernaast fout
-  r3: { anouk: 'Final Countdwon' }, //               typfout = goed; Bram: weet ik niet
+  r3: { anouk: 'Final Countdwon' }, //               typfout = goed; Bram heeft de kamer verlaten en komt terug
   r4: { anouk: 1980, bram: 1990 }, //                Diana Ross 1980
 };
