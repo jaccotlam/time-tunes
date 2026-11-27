@@ -145,7 +145,10 @@ export default async function run() {
 
     // a player's phone keeps pausing the worker (as before)
     assert(await a.page.evaluate(() => window.__tt.enrich.isPaused()), "a player's phone pauses the background work on the room screen");
-    assert(host.page.errors.length === 0 && a.page.errors.length === 0, `no page errors (${[...host.page.errors, ...a.page.errors].join(' | ')})`);
+    // the init scripts of the test (localStorage) and Playwright's own service-worker probe
+    // also run in Deezer's sandboxed frame, where they are (rightly) refused
+    const real = [...host.page.errors, ...a.page.errors].filter((m) => !/context is sandboxed|document is sandboxed/.test(m));
+    assert(real.length === 0, `no page errors (${real.join(' | ')})`);
   } finally {
     await browser.close();
     server.stop();
