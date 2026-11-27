@@ -7,6 +7,7 @@ import { cleanName } from '../multi/game.js';
 import { usesServer, createServerClientSession, wakeServer, SERVER_HOST_KEY, storedSeat, checkSeat, forgetSeat, storedAvatar, AVATAR_KEY } from '../multi/server-session.js';
 import { ERROR_TITLES } from '../multi/server-protocol.js';
 import { createMixShare, forgetMixShare } from '../multi/mix-share.js';
+import { spotifyListProvider } from '../multi/mix-spotify.js';
 import { mixBlockHtml, mixServerOnlyHtml, mixKey, onMixChange, mixCountsHtml, mixPanelHtml, bindMixPanel } from './room-mix.js';
 import { icons, esc, toast, vibrate, store } from '../ui.js';
 import {
@@ -88,7 +89,7 @@ export function render(root, { params, navigate }) {
     });
     if (viaServer) {
       const s = session;
-      ms = createMixShare({ code, memberId: () => s.playerId, session: s, returnHash: `#/kamer/${code}`, onChange: () => draw(), inLobby: () => s.view?.phase === 'lobby' });
+      ms = createMixShare({ code, memberId: () => s.playerId, session: s, returnHash: `#/kamer/${code}`, onChange: () => draw(), inLobby: () => s.view?.phase === 'lobby', listProvider: spotifyListProvider() });
     }
     session.start();
     draw();

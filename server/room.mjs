@@ -23,7 +23,7 @@ import * as G from '../app/js/multi/game.js';
 import { viewFor } from '../app/js/multi/protocol.js';
 import {
   SERVER_PROTOCOL_VERSION, TAKEOVER_MS, STALE_MS, PING_TEXT, PONG_TEXT, LEADER_TYPES, ID_RE, TOKEN_RE, SPOTIFY_CLIENT_ID_RE,
-  parseClientMessage, cleanCards, utf8Length, MAX_CLIENT_MESSAGE,
+  parseClientMessage, cleanCards, utf8Length, MAX_CLIENT_MESSAGE, PLAY_SOURCES,
 } from '../app/js/multi/server-protocol.js';
 import { startQuizClock, quizRoundOver, quizNextEvent } from '../app/js/multi/game.js';
 import { QUIZ_START_FALLBACK_MS } from '../app/js/multi/quiz.js';
@@ -34,6 +34,7 @@ import { sha256Hex } from './sha256.mjs';
 import { cleanHistory, nextGame, markPlayed, emptyHistory, gameSeed } from '../app/js/multi/order.js';
 import { resetPrepared } from './prepared.mjs';
 import { isAvatar, avatarOf, isReaction, REACT_GAP_MS, REACT_ROOM_MAX, REACT_ROOM_WINDOW_MS } from '../app/js/multi/party.js';
+import { cleanLinks, linkCounts } from '../app/js/spotify-links.js';
 
 export const ROOM_IDLE_MS = 6 * 60 * 60 * 1000; // a room with no activity for 6 hours expires
 export const UNCLAIMED_MS = 30 * 60 * 1000; // a created room nobody ever connected to
@@ -73,7 +74,19 @@ export function migrateState(state) {
   if (state.room && typeof state.room === 'object') state.room = G.migrateRoom(withSettings(state.room));
   // the songs played in this room's earlier games (order.js): fresh songs come first in a new game
   state.played = cleanHistory(state.played);
+  // several Spotify links (spotify-links.js): checked again on every load, as if they were new
+  if ('spotifyLinks' in state) state.spotifyLinks = cleanLinks(state.spotifyLinks);
+  if ('play' in state && !PLAY_SOURCES.includes(state.play)) delete state.play;
+  state.linkUse = cleanLinkUse(state.linkUse);
   return state;
+}
+
+/** { memberId: clientId } of the phones that said which link they logged in through. */
+function cleanLinkUse(u) {
+  if (!u || typeof u !== 'object' || Array.isArray(u)) return {};
+  const out = {};
+  for (const [mid, id] of Object.entries(u)) if (validId(mid) && typeof id === 'string' && SPOTIFY_CLIENT_ID_RE.test(id)) out[mid] = id.toLowerCase();
+  return out;
 }
 
 const withSettings = (room) => ({ ...room, settings: G.normalizeSettings(room.settings || {}) });
@@ -475,9 +488,12 @@ export class RoomHub {
     this.attach(connId);
     // the owner's Spotify Client ID goes to the players (a public value; only the form is checked).
     // No cid field (an older app): keep what there is; '' = the owner has none (any more).
-    if (id === s.ownerId && typeof m.cid === 'string') {
+    if (id === s.ownerId && Array.isArray(m.links)) this.setLinks(m.links, m.play);
+    else if (id === s.ownerId && typeof m.cid === 'string') {
+      // an app of before the links: one Client ID, and the list follows it
       if (SPOTIFY_CLIENT_ID_RE.test(m.cid)) s.spotifyClientId = m.cid.toLowerCase();
       else if (m.cid === '') delete s.spotifyClientId;
+      delete s.spotifyLinks;
     }
     s.claimed = true;
     s.lastActive = this.now();
@@ -607,6 +623,25 @@ export class RoomHub {
           this.sendTo(connId, { t: 'error', code: 'mix', message: out.list.length >= MIX_PER_PLAYER ? `Je deelt al het maximum van ${MIX_PER_PLAYER} nummers.` : 'Niet alle nummers konden worden toegevoegd (ongeldig, of de mix van deze kamer is vol).' });
         }
         if (!out.added) return;
+        break;
+      }
+      case 'links': {
+        // the owner's links (a link added or renamed in the lobby), and how the music plays
+        if (mid !== s.ownerId) throw new G.GameError('notleader', 'Alleen de spelleider kan de Spotify-links van de kamer instellen.');
+        if (!Array.isArray(m.links)) return;
+        const before = JSON.stringify([s.spotifyLinks, s.spotifyClientId, s.play]);
+        this.setLinks(m.links, m.play);
+        if (JSON.stringify([s.spotifyLinks, s.spotifyClientId, s.play]) === before) return;
+        break;
+      }
+      case 'link': {
+        // a phone logged in through link i of this room: only the index, checked against the list
+        const list = this.links();
+        const i = m.i;
+        if (!Number.isInteger(i) || i < 0 || i >= list.length) return;
+        const id = list[i].id;
+        if (s.linkUse?.[mid] === id) return;
+        s.linkUse = { ...cleanLinkUse(s.linkUse), [mid]: id };
         break;
       }
       case 'mix-clear': {
@@ -825,6 +860,8 @@ export class RoomHub {
   meta(mid) {
     const s = this.state;
     const leader = s.room.players.find((p) => p.id === s.leaderId);
+    const links = this.links();
+    const mine = mid != null && has(s.linkUse, mid) ? links.findIndex((l) => l.id === s.linkUse[mid]) : -1;
     const leaderOnline = this.online(s.leaderId);
     return {
       you: mid,
@@ -849,7 +886,36 @@ export class RoomHub {
       ...(s.prepared ? { roomName: s.prepared.name } : {}), // a prepared room's public name
       // the spelleider's Spotify Client ID, so players can log in for "Doe mijn favorieten erbij"
       spotifyClientId: typeof s.spotifyClientId === 'string' && SPOTIFY_CLIENT_ID_RE.test(s.spotifyClientId) ? s.spotifyClientId : null,
+      // the spelleider's links (spotify-links.js): a player chooses "link 1 of link 2" when logging in
+      spotifyLinks: links,
+      play: PLAY_SOURCES.includes(s.play) ? s.play : null,
+      myLink: mine >= 0 ? mine : null,
+      // per link how many phones logged in through it: counts only, for the leader only
+      ...(mid != null && mid === s.leaderId ? { linkUse: linkCounts(links, s.linkUse, this.linkMembers()) } : {}),
     };
+  }
+
+  /** The room's links: the owner's list, or (an owner app of before) its single Client ID. */
+  links() {
+    const s = this.state;
+    if (Array.isArray(s.spotifyLinks)) return s.spotifyLinks;
+    return typeof s.spotifyClientId === 'string' && SPOTIFY_CLIENT_ID_RE.test(s.spotifyClientId) ? [{ id: s.spotifyClientId, name: '' }] : [];
+  }
+
+  /** The owner's hello / links message: the list (checked), the first one for older phones, and how the music plays. */
+  setLinks(raw, play) {
+    const s = this.state;
+    const list = cleanLinks(raw);
+    s.spotifyLinks = list;
+    if (list.length) s.spotifyClientId = list[0].id;
+    else delete s.spotifyClientId;
+    if (PLAY_SOURCES.includes(play)) s.play = play;
+  }
+
+  /** Who counts for the link counts: the players in the room (not the owner himself, not who left). */
+  linkMembers() {
+    const s = this.state;
+    return s.room.players.map((p) => p.id).filter((id) => id !== s.ownerId && has(s.members, id));
   }
 
   /** Counts of the mix, worked out again only when a contribution changed. */

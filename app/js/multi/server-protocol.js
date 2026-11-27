@@ -60,6 +60,20 @@
 //   checked year (its `deezerId` is ignored); else it is refused with error 'mix', and the room
 //   and the rest of the message are not affected. No new version was needed.
 //
+// Several Spotify "links" (optional addition within version 5; /health `features` lists 'links'):
+//   a link is one Spotify app (one Client ID) with room for 5 people on its user list; the host
+//   may have several (spotify-links.js). The owner's hello may carry `links` [{ id, name }]
+//   (checked: the Client-ID form, max 10, names plain text of max 20 characters, no duplicates)
+//   and `play` ('spotify' | 'preview': how the leader's phone plays the music). The server
+//   puts them in every state's meta as `spotifyLinks` [{ id, name }] and `play`, and keeps
+//   `spotifyClientId` (= the first link) for phones of before. links {links, play} (owner
+//   only): the same during the room (a link added in the lobby). link {i}: a phone says it
+//   logged in through link i of the room (an index in spotifyLinks, nothing else); the leader's
+//   meta then has `linkUse` [n per link] (counts only, never who), every phone's meta `myLink`
+//   (its own index or null, so it can say it again after a server restart). An older server
+//   ignores the hello fields and would refuse the two new messages ('bad'), so a phone sends
+//   them only when the feature is listed; an older phone simply sees spotifyClientId.
+//
 // Version 2 (November 2026): the Quiz (settings questions/qtype/think, playing, the quiz part of
 // the view). Version 3 (November 2026): "Mix van de groep" (mix-add, mix-clear, settings.music,
 // start.play, meta.mix). Version 4 (November 2026): Discobingo (game 'disco', settings.win, stamp,
@@ -72,7 +86,11 @@ export const SERVER_PROTOCOL_VERSION = 5;
 /** Optional additions within this version that the server announces in /health `features`. */
 /** The feature of "Kies een playlist" in the group mix (v3-10 had 'mix-playlists', Deezer-based). */
 export const MIX_LISTS_FEATURE = 'mix-lists';
-export const SERVER_FEATURES = ['screen', 'party', MIX_LISTS_FEATURE];
+/** Several Spotify links in a room (see above). */
+export const LINKS_FEATURE = 'links';
+export const SERVER_FEATURES = ['screen', 'party', MIX_LISTS_FEATURE, LINKS_FEATURE];
+/** How the leader's phone plays the music (meta.play): a guest's phone needs a fragment for every song only with 'preview'. */
+export const PLAY_SOURCES = ['spotify', 'preview'];
 /**
  * Largest message from a phone (the deck at the start of a game), in UTF-8 bytes. A start
  * with 2000 realistic cards is about 300 kB (tests/unit/big-lists.test.mjs); fitCards keeps
@@ -91,7 +109,7 @@ export const CLIENT_PING_MS = 10000;
 /** Nothing heard for this long: the connection is dead. */
 export const STALE_MS = 25000;
 
-const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing', 'mix-add', 'mix-clear', 'stamp', 'judge', 'avatar', 'react', 'hold', 'continue', 'finish'];
+const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing', 'mix-add', 'mix-clear', 'stamp', 'judge', 'avatar', 'react', 'hold', 'continue', 'finish', 'links', 'link'];
 const SERVER_TYPES = ['welcome', 'state', 'error', 'backup', 'react'];
 export const LEADER_TYPES = ['settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'playing', 'judge', 'hold', 'continue', 'finish'];
 

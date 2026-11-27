@@ -6,6 +6,7 @@ import { store, toast } from './ui.js';
 import * as pkce from './pkce.js';
 import { bestMatch, isrcMatch, searchQueries, isSpotifyId } from './spotify-match.js';
 import { codeForApi, codeForToken, codeForCallback, looksLikeClientId as isClientId } from './spotify-setup.js';
+import { cleanLinks, cleanLinkName, LINKS_MAX } from './spotify-links.js';
 
 const API = 'https://api.spotify.com/v1';
 export const SCOPES = 'user-read-playback-state user-modify-playback-state';
@@ -20,7 +21,9 @@ const PENDING_MAX_AGE_MS = 30 * 60 * 1000;
 const K = {
   settings: 'timetunesr.settings.v1',
   clientId: 'timetunesr.spotify.clientId.v1',
+  links: 'timetunesr.spotify.links.v1',
   token: 'timetunesr.spotify.token.v1',
+  tokens: 'timetunesr.spotify.tokens.v1',
   pending: 'timetunesr.spotify.pending.v1',
   device: 'timetunesr.spotify.device.v1',
   profile: 'timetunesr.spotify.profile.v1',
@@ -70,15 +73,128 @@ export function getClientId() {
 }
 export const defaultClientId = () => SPOTIFY_CLIENT_ID || '';
 
-/** Save a Client ID typed by the user; empty (or the default) falls back to config.js. */
+/**
+ * Save a Client ID typed by the user; empty (or the default) falls back to config.js. This is
+ * the app the host logs in with HIMSELF; with several links (below) it is one of them: a new
+ * value takes the place of the old one in the list (keeping its name), '' takes it out.
+ */
 export function setClientId(value) {
   const v = String(value || '').trim();
   const prev = getClientId();
   if (!v || v === SPOTIFY_CLIENT_ID) store.remove(K.clientId);
   else store.set(K.clientId, v);
+  const now = getClientId();
+  // keep the list of links in step (it is only stored once the host has more than his own)
+  const stored = storedLinks();
+  if (stored.length && now !== prev) {
+    const i = stored.findIndex((l) => l.id === prev);
+    let next = stored.slice();
+    if (!now) next = next.filter((l) => l.id !== prev);
+    else if (next.some((l) => l.id === now)) { /* already a link: only the own one changes */ } else if (i >= 0) next[i] = { ...next[i], id: now };
+    else next.unshift({ id: now, name: '' });
+    writeLinks(next);
+  }
   const tokenApp = readToken()?.clientId || prev;
-  if (isConnected() && tokenApp !== getClientId()) disconnect({ quiet: true }); // tokens belong to one app
+  if (isConnected() && tokenApp !== getClientId()) {
+    // tokens belong to one app: use the one kept for the new app, or log out of the old one
+    if (!useClientToken(getClientId())) disconnect({ quiet: true });
+  }
   emit('settings');
+}
+
+/* ---------- links: several Spotify apps (Client IDs) for the guests of a room ---------- */
+
+function storedLinks() { return cleanLinks(store.get(K.links, null)); }
+function writeLinks(list) {
+  const clean = cleanLinks(list);
+  // one link without a name is just the Client ID: nothing extra to keep
+  if (clean.length > 1 || (clean.length === 1 && clean[0].name)) store.set(K.links, clean);
+  else store.remove(K.links);
+}
+
+/**
+ * The host's links: [{ id, name }], "Link 1" first. Without a list it is the own Client ID
+ * alone (or nothing). The own Client ID is always one of them.
+ */
+export function getLinks() {
+  const own = getClientId();
+  const list = storedLinks();
+  if (own && !list.some((l) => l.id === own.toLowerCase())) list.unshift({ id: own.toLowerCase(), name: '' });
+  return list.slice(0, LINKS_MAX);
+}
+
+/** Which link the host logs in with himself (index in getLinks()), or -1 (none). */
+export const ownLinkIndex = () => { const own = getClientId().toLowerCase(); return own ? getLinks().findIndex((l) => l.id === own) : -1; };
+
+/**
+ * Save the links (cleaned: valid Client IDs, no duplicates, names max 20, max 10). `own`: the
+ * index of the link the host logs in with himself (default: the current one when it is still
+ * there, else Link 1).
+ */
+export function setLinks(list, { own = null } = {}) {
+  const clean = cleanLinks(list);
+  const cur = getClientId().toLowerCase();
+  const ownId = Number.isInteger(own) && clean[own] ? clean[own].id : clean.some((l) => l.id === cur) ? cur : clean[0]?.id || '';
+  writeLinks(clean);
+  if (ownId !== cur) setClientId(ownId); // also emits
+  else emit('settings');
+  return getLinks();
+}
+
+/** Rename one link (plain text, max 20 characters). */
+export function renameLink(id, name) {
+  setLinks(getLinks().map((l) => (l.id === id ? { ...l, name: cleanLinkName(name) } : l)));
+}
+
+/* ---------- tokens per Client ID ---------- */
+
+/**
+ * The logins of other apps (links) this phone made, kept so switching between links never
+ * throws a working login away: { clientId: token }. The token in use is K.token.
+ */
+function stash() {
+  const s = store.get(K.tokens, null);
+  return s && typeof s === 'object' && !Array.isArray(s) ? s : {};
+}
+function stashToken(t) {
+  if (!t?.clientId || typeof t.access_token !== 'string') return;
+  const s = stash();
+  s[t.clientId] = t;
+  const keys = Object.keys(s);
+  for (const k of keys.slice(0, Math.max(0, keys.length - LINKS_MAX))) delete s[k];
+  store.set(K.tokens, s);
+}
+
+/** Has this phone a login for this Client ID (in use or kept)? */
+export function hasClientToken(clientId) {
+  const c = String(clientId || '').toLowerCase();
+  if (!c) return false;
+  if (String(readToken()?.clientId || '').toLowerCase() === c) return true;
+  const t = stash()[c] || stash()[clientId];
+  return !!(t && typeof t.access_token === 'string');
+}
+
+/**
+ * Use the kept login of this Client ID (the current one is kept in turn). True when the
+ * phone is now logged in with that app.
+ */
+export function useClientToken(clientId) {
+  const c = String(clientId || '');
+  const cur = readToken();
+  if (!c) return false;
+  if (cur?.clientId && cur.clientId.toLowerCase() === c.toLowerCase()) return true;
+  const s = stash();
+  const key = Object.keys(s).find((k) => k.toLowerCase() === c.toLowerCase());
+  const t = key ? s[key] : null;
+  if (!t || typeof t.access_token !== 'string') return false;
+  delete s[key];
+  store.set(K.tokens, s);
+  if (cur) stashToken(cur);
+  store.set(K.token, t);
+  store.remove(K.profile); // another account may be behind another app
+  store.remove(K.device);
+  emit('connected');
+  return true;
 }
 
 export const looksLikeClientId = (v) => isClientId(String(v || '').trim());
@@ -133,7 +249,7 @@ export function environmentProblem() {
 /* ---------- status + events ---------- */
 
 // busy: 'connecting' | null; error: code of the last failure; detail: what Spotify said (for "Kopieer foutdetails")
-const status = { busy: null, error: null, detail: null };
+const status = { busy: null, error: null, detail: null, failedClientId: null };
 const listeners = new Set();
 
 function emit(reason) {
@@ -152,11 +268,12 @@ export function getStatus() {
     busy: status.busy,
     error: status.error,
     detail: status.detail,
+    failedClientId: status.error ? status.failedClientId : null, // the app (link) the last failed login was for
     profile: store.get(K.profile, null),
     device: getDevice(),
   };
 }
-export function clearError() { status.error = null; status.detail = null; emit('status'); }
+export function clearError() { status.error = null; status.detail = null; status.failedClientId = null; emit('status'); }
 
 // Back from Spotify's own error page with the browser's back button: the page can come back
 // from the back/forward cache with "connecting…" still on. That login is not running any more.
@@ -313,9 +430,10 @@ export async function api(path, { method = 'GET', query, body, keepalive = false
 /* ---------- login ---------- */
 
 /** Start the PKCE login; the browser leaves for accounts.spotify.com. */
-export async function connect(returnHash = location.hash || '#/', { playlists = false, top = false, clientId: borrowed = '' } = {}) {
-  // borrowed: a room's Client ID (the spelleider's), used when this phone has none of its own
-  const clientId = getClientId() || (isClientId(borrowed) ? borrowed : '');
+export async function connect(returnHash = location.hash || '#/', { playlists = false, top = false, clientId: borrowed = '', exact = false, quiet = false } = {}) {
+  // borrowed: a room's Client ID (the spelleider's), used when this phone has none of its own;
+  // exact: log in with exactly that one (a guest chose "link 2" of the room)
+  const clientId = exact && isClientId(borrowed) ? borrowed : getClientId() || (isClientId(borrowed) ? borrowed : '');
   if (!clientId) throw new SpotifyError('no-client');
   const problem = environmentProblem();
   if (problem) throw new SpotifyError(problem);
@@ -325,7 +443,7 @@ export async function connect(returnHash = location.hash || '#/', { playlists = 
   const state = pkce.randomString(32);
   const challenge = await pkce.codeChallenge(verifier);
   const uri = redirectUri();
-  store.set(K.pending, { state, verifier, clientId, redirectUri: uri, returnHash, at: Date.now() });
+  store.set(K.pending, { state, verifier, clientId, redirectUri: uri, returnHash, at: Date.now(), ...(quiet ? { quiet: true } : {}) });
   status.busy = 'connecting';
   status.error = null;
   status.detail = null;
@@ -352,11 +470,13 @@ export function handleRedirect() {
   history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${back}`);
 
   const fail = (code, detail = null) => {
+    status.failedClientId = pending?.clientId || null;
     status.busy = null;
     status.error = code;
     status.detail = detail;
     emit('status'); // the settings screen shows the message
-    if (!back.startsWith('#/instellingen')) toast(errorMessage(code), { kind: 'warn', ms: 6000 });
+    // quiet: the screen that started the login explains it itself (the mix panel's "not on this link")
+    if (!back.startsWith('#/instellingen') && !pending?.quiet) toast(errorMessage(code), { kind: 'warn', ms: 6000 });
     return Promise.resolve(false);
   };
   if (!pending || pending.state !== cb.state || Date.now() - (pending.at || 0) > PENDING_MAX_AGE_MS) return fail('state');
@@ -368,21 +488,41 @@ export function handleRedirect() {
   status.busy = 'connecting';
   status.error = null;
   emit('status');
+  // the login of another app (an earlier link) is kept, and comes back when this one fails
+  const before = readToken();
+  const other = before && before.clientId !== pending.clientId ? before : null;
   return tokenRequest(pkce.tokenRequestBody({
     clientId: pending.clientId, code: cb.code, redirectUri: pending.redirectUri, verifier: pending.verifier,
   }))
     .then(async (json) => {
       saveToken(json, { clientId: pending.clientId });
-      await loadProfile();
+      try {
+        await loadProfile(); // the first API call: an account that is not on this app's list gets 403 here
+      } catch (e) {
+        if (other) { store.set(K.token, other); store.remove(K.profile); }
+        else { store.remove(K.token); store.remove(K.profile); }
+        throw Object.assign(e, { kept: !!other });
+      }
+      if (other) stashToken(other);
+      dropStashed(pending.clientId); // the fresh login replaces an older one of the same app
       status.busy = null;
       emit('connected');
       toast('Verbonden met Spotify', { ms: 2600 });
       return true;
     })
     .catch((e) => {
-      if (isConnected()) dropSession(e.code, e.detail); // e.g. token fine, but the account is not allowed
+      // e.g. token fine, but the account is not allowed: the token of THAT app is gone already,
+      // an earlier login of another app stays (never a broken token left behind)
+      if (!e.kept && isConnected() && readToken()?.clientId === pending.clientId) dropSession(e.code, e.detail);
       return fail(e.code || 'unavailable', e.detail || null);
     });
+}
+
+function dropStashed(clientId) {
+  const s = stash();
+  if (!(clientId in s)) return;
+  delete s[clientId];
+  store.set(K.tokens, s);
 }
 
 async function loadProfile() {
@@ -399,6 +539,7 @@ async function loadProfile() {
 /** Forget tokens (and the chosen device); the Spotify app permission stays until revoked at Spotify. */
 export function disconnect({ quiet = false } = {}) {
   store.remove(K.token);
+  store.remove(K.tokens); // the logins kept for other links go too
   store.remove(K.profile);
   store.remove(K.device);
   status.error = null;

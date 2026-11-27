@@ -16,16 +16,22 @@
 // a reload or a sleeping phone goes on where it was and never sends a song twice; after a
 // server restart the songs are sent again (sync). Withdraw = mix-clear.
 //
-// The provider (where the lists come from) is the seam for the next step. Shape:
+// With the 30-second fragments (the leader's phone plays 'preview', meta.play) a song also needs
+// an Apple Music fragment: after the year check the phone looks it up (apple-match.js, the
+// throttled iTunes queue, as "Doe mijn favorieten erbij" does); a song without one is left out
+// and counted (st.noFragment). With Spotify (meta.play 'spotify') the Spotify id is enough.
+//
+// The provider (where the lists come from). Shape:
 //   {
 //     lists({ signal }):  Promise<[{ id: string, title, count?, picture? (https), by? }]>
 //     tracks(id, { signal, onProgress(read, total) }):
 //                         Promise<[{ spotifyId?, title, artist, album?, year?, isrc? }]>
 //     errorMessage(e):    Dutch text for an error of the two calls
 //   }
-// The app has no provider yet (v3-11 removed the public Deezer catalogue that was here), so
-// createMixShare passes none, `available()` is false and no screen offers this way.
+// The app's provider is the guest's own Spotify playlists (mix-spotify.js, "Kies uit mijn
+// playlists"); without a provider `available()` is false and no screen offers this way.
 import * as mbApi from '../musicbrainz.js';
+import { appleMatch } from '../apple-match.js';
 import { store as lsStore } from '../ui.js';
 import { MAX_TRACKS, rateEta } from '../playlist-logic.js';
 import {
@@ -97,10 +103,12 @@ export function forgetMixLists(code, store = lsStore) {
  * session: the room session with mixAdd(tracks), mixClear(), online, meta.
  * provider: where the lists come from (see the top of this file), or null (none: nothing offered).
  * inLobby(): may the phone work now (the room is in the lobby)?
- * onChange(): redraw. deps (tests): { musicbrainz, store, rand, wait }.
+ * needFragment(): must every song have an Apple Music fragment (the leader plays fragments)?
+ * onChange(): redraw. deps (tests): { musicbrainz, apple, store, rand, wait }.
  */
-export function createListShare({ code, session, provider = null, onChange, inLobby = () => true, deps = {} }) {
+export function createListShare({ code, session, provider = null, onChange, inLobby = () => true, needFragment = () => false, deps = {} }) {
   const mb = deps.musicbrainz || mbApi;
+  const apple = deps.apple || appleMatch;
   const store = deps.store || lsStore;
   const rand = deps.rand || Math.random;
   const wait = deps.wait || ((ms, signal) => new Promise((resolve) => {
@@ -118,7 +126,9 @@ export function createListShare({ code, session, provider = null, onChange, inLo
   let resyncAt = null;
   let recheck = 0;
   let plan = []; // candidates still to look at, in order
-  let checked = []; // [candidateKey, year | 0, sure 0|1, listId]: what this phone already decided
+  // [candidateKey, year | 0, sure 0|1, listId, fragment?]: what this phone already decided;
+  // fragment: absent = not looked up, 0 = Apple Music has none, [itunesId, previewUrl] = found
+  let checked = [];
   let pace = null; // { t0, n0, n, last }: songs shared since this walk started, for an honest estimate
   const tracksOf = new Map(); // listId -> songs read this session
 
@@ -130,6 +140,7 @@ export function createListShare({ code, session, provider = null, onChange, inLo
     count: DEFAULT_LIST_COUNT,
     shared: [],
     skipped: 0,
+    noFragment: 0, // checked, but no Apple Music fragment while the leader plays fragments: left out
     read: 0, // songs read while reading the lists
     readTotal: 0,
     // the picker: the provider's lists
@@ -154,6 +165,7 @@ export function createListShare({ code, session, provider = null, onChange, inLo
       plan: plan.slice(0, STORED_PLAN_MAX).map(packCand),
       checked: checked.slice(-CHECKED_MAX),
       skipped: st.skipped,
+      noFragment: st.noFragment,
       stale: st.stale,
       at: Date.now(),
     });
@@ -167,8 +179,10 @@ export function createListShare({ code, session, provider = null, onChange, inLo
     st.count = LIST_COUNTS.includes(s.count) ? s.count : DEFAULT_LIST_COUNT;
     st.shared = (Array.isArray(s.shared) ? s.shared : []).filter(sharedOk).slice(0, MIX_PER_PLAYER);
     plan = (Array.isArray(s.plan) ? s.plan : []).map(unpackCand).filter(Boolean);
-    checked = (Array.isArray(s.checked) ? s.checked : []).filter((c) => Array.isArray(c) && typeof c[0] === 'string').slice(-CHECKED_MAX);
+    checked = (Array.isArray(s.checked) ? s.checked : []).filter((c) => Array.isArray(c) && typeof c[0] === 'string').slice(-CHECKED_MAX)
+      .map((c) => (c.length < 5 || c[4] === 0 || (Array.isArray(c[4]) && Number.isSafeInteger(c[4][0]) && (c[4][1] === '' || (typeof c[4][1] === 'string' && /^https:\/\/[^\s"'<>]{4,600}$/.test(c[4][1])))) ? c : c.slice(0, 4)));
     st.skipped = Number.isSafeInteger(s.skipped) && s.skipped >= 0 ? s.skipped : 0;
+    st.noFragment = Number.isSafeInteger(s.noFragment) && s.noFragment >= 0 ? s.noFragment : 0;
     st.stale = s.stale === true;
     return true;
   }
@@ -231,8 +245,8 @@ export function createListShare({ code, session, provider = null, onChange, inLo
         const c = plan[0];
         const ck = candidateKey(c);
         let r;
-        const k = known(ck);
-        if (k) r = k[1] ? { year: k[1], sure: k[2] === 1 } : null;
+        let entry = known(ck);
+        if (entry) r = entry[1] ? { year: entry[1], sure: entry[2] === 1 } : null;
         else {
           try {
             r = await check(c, signal);
@@ -250,14 +264,33 @@ export function createListShare({ code, session, provider = null, onChange, inLo
             continue; // the same song again
           }
           if (signal.aborted || my !== gen) return;
-          checked.push([ck, r ? r.year : 0, r?.sure ? 1 : 0, c.list]);
+          entry = [ck, r ? r.year : 0, r?.sure ? 1 : 0, c.list];
+          checked.push(entry);
         }
         fails = 0;
+        // the leader plays fragments: the song needs one (looked up once, remembered with the year)
+        let frag = null;
+        if (r && needFragment()) {
+          if (entry.length < 5) {
+            let hit = null;
+            try {
+              hit = await apple({ title: c.title, artist: c.artist, year: r.year }, { signal });
+            } catch (e) {
+              if (signal.aborted || my !== gen || e?.code === 'aborted') return;
+            }
+            if (signal.aborted || my !== gen) return;
+            entry[4] = hit && (hit.previewUrl || hit.itunesId) ? [Number(hit.itunesId) || 0, typeof hit.previewUrl === 'string' ? hit.previewUrl : ''] : 0;
+          }
+          frag = Array.isArray(entry[4]) ? entry[4] : null;
+        } else if (r && Array.isArray(entry[4])) frag = entry[4]; // found earlier: take it along anyway
         plan.shift();
-        if (r) {
+        if (r && needFragment() && !frag) st.noFragment++;
+        else if (r) {
           const t = { title: c.title, artist: c.artist, year: r.year, yearSure: r.sure, checked: true, l: c.list };
           if (c.spotifyId) t.spotifyId = c.spotifyId;
           if (c.isrc) t.isrc = c.isrc;
+          if (frag?.[0]) t.itunesId = frag[0];
+          if (frag?.[1]) t.previewUrl = frag[1];
           const have = sharedKeys();
           if (![...idKeys(t), mixKey(t)].some((x) => x && have.has(x))) {
             st.shared.push(t);
@@ -334,6 +367,7 @@ export function createListShare({ code, session, provider = null, onChange, inLo
     if (st.shared.length) session.mixClear();
     st.shared = [];
     st.skipped = 0;
+    st.noFragment = 0;
     resyncAt = null;
     save();
     walk();
@@ -342,7 +376,7 @@ export function createListShare({ code, session, provider = null, onChange, inLo
   function reset() {
     stop();
     plan = [];
-    Object.assign(st, { phase: 'idle', error: '', lists: [], shared: [], skipped: 0, read: 0, readTotal: 0, stale: false });
+    Object.assign(st, { phase: 'idle', error: '', lists: [], shared: [], skipped: 0, noFragment: 0, read: 0, readTotal: 0, stale: false });
     resyncAt = null;
     forgetMixLists(code, store);
   }
@@ -381,8 +415,10 @@ export function createListShare({ code, session, provider = null, onChange, inLo
 
   const api = {
     get state() { return st; },
-    /** Is there a provider to choose lists from? (none yet in this version) */
+    /** Is there a provider to choose lists from? */
     available() { return !!provider; },
+    /** Does every song need an Apple Music fragment now (the leader plays fragments)? */
+    needsFragment() { return !!needFragment(); },
     /** Seconds still to go (estimate from the rate observed so far), or 0. */
     eta() {
       if (st.phase !== 'checking' || !pace) return 0;
