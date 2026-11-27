@@ -34,7 +34,7 @@
 // time, so two requests never interleave across an `await` (PBKDF2 is async).
 import { sha256Hex } from './sha256.mjs';
 import { evictOldest } from './policy.mjs';
-import { cleanPlaylist, cleanTrack, cleanSource, NAME_MAX, MAX_TRACKS, BUILTIN_ID } from '../app/js/playlist-logic.js';
+import { cleanPlaylist, cleanTrack, cleanSource, legacySource, NAME_MAX, MAX_TRACKS, BUILTIN_ID } from '../app/js/playlist-logic.js';
 import { cleanName as cleanPlayerName } from '../app/js/multi/game.js';
 
 export const PBKDF2_ITERATIONS = 100000; // Cloudflare's maximum for PBKDF2 in WebCrypto
@@ -205,6 +205,7 @@ export function validatePlaylist(p) {
     for (const k of TRACK_STRINGS) if (t[k] != null && (typeof t[k] !== 'string' || t[k].length > 200)) return { error: `Een nummer in "${p.name}" is ongeldig.` };
     if (t.year != null && !Number.isInteger(t.year)) return { error: `Een nummer in "${p.name}" heeft een ongeldig jaar.` };
     for (const k of ['previewUrl', 'trackViewUrl']) if (t[k] != null && (typeof t[k] !== 'string' || !/^https:\/\/[^\s"'<>]{4,600}$/.test(t[k]))) return { error: `Een nummer in "${p.name}" heeft een ongeldig adres.` };
+    // deezerId: no source any more, still valid stored data of v3-10 (carried along, see playlist-logic.js)
     if (t.deezerId != null && !(Number.isSafeInteger(t.deezerId) && t.deezerId > 0)) return { error: `Een nummer in "${p.name}" heeft een ongeldige Deezer-id.` };
     if (t.isrc != null && (typeof t.isrc !== 'string' || !/^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(t.isrc))) return { error: `Een nummer in "${p.name}" heeft een ongeldige ISRC.` };
     if ((t.yearFixed != null && typeof t.yearFixed !== 'boolean') || (t.yearChecked != null && typeof t.yearChecked !== 'boolean')) return { error: `Een nummer in "${p.name}" is ongeldig.` };
@@ -212,7 +213,8 @@ export function validatePlaylist(p) {
   }
   if (p.shareId != null && (typeof p.shareId !== 'string' || !/^[0-9a-z]{4,12}$/.test(p.shareId))) return { error: `De playlist "${p.name}" is beschadigd.` };
   if (p.playNow != null && typeof p.playNow !== 'boolean') return { error: `De playlist "${p.name}" is beschadigd.` };
-  if (p.source != null && !cleanSource(p.source)) return { error: `De playlist "${p.name}" heeft een ongeldige herkomst.` };
+  // a 'deezer' source (v3-10) is valid stored data, kept out of the stored value (cleanPlaylist)
+  if (p.source != null && !cleanSource(p.source) && !legacySource(p.source)) return { error: `De playlist "${p.name}" heeft een ongeldige herkomst.` };
   // known fields only: anything else is dropped (never stored)
   const known = Object.fromEntries(ALLOWED_PLAYLIST.filter((k) => p[k] !== undefined).map((k) => [k, p[k]]));
   const value = cleanPlaylist(known);

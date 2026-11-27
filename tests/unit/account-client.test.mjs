@@ -349,7 +349,10 @@ test('accountmodule: drie lijsten van 2000 nummers naar een tweede toestel, daar
     assert.equal(l.ok, true, JSON.stringify(l));
     assert.equal(playlists.all().length, 3);
     assert.equal(playlists.get('g2').tracks.length, 2000);
-    assert.deepEqual(playlists.get('g2').source, { kind: 'deezer', id: '1266971851', name: 'Top' });
+    // stored by v3-10 after a Deezer import: the save was taken, the list reads as an ordinary
+    // saved list (no source), the songs keep their (unused) deezerId for an app of v3-10
+    assert.equal(playlists.get('g2').source, undefined);
+    assert.equal(playlists.get('g2').tracks[0].deezerId, 3135000);
     // D fixes one year in g2: the save sends that list only (the others as stubs)
     sent.length = 0;
     playlists.fixYear('g2', 5, 1977);

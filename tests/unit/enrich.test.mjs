@@ -1,5 +1,6 @@
-// The background worker (app/js/enrich.js) with a fake playlist store and fake Deezer,
-// MusicBrainz and Apple: step order, manual fixes kept, pause/resume, prepare(). No network.
+// The background worker (app/js/enrich.js) with a fake playlist store and fake MusicBrainz
+// and Apple: step order, manual fixes kept, pause/resume, prepare(), the songs a v3-10 Deezer
+// import left behind. No network.
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -7,7 +8,6 @@ const storage = new Map();
 globalThis.localStorage = { getItem: (k) => (storage.has(k) ? storage.get(k) : null), setItem: (k, v) => storage.set(k, String(v)), removeItem: (k) => storage.delete(k) };
 
 const enrich = await import('../../app/js/enrich.js');
-const { DeezerError } = await import('../../app/js/deezer.js');
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(cond, ms = 3000, what = 'condition') {
@@ -62,20 +62,10 @@ const { MusicBrainzError } = await import('../../app/js/musicbrainz.js');
 
 /** Fake services that log every call: [lane, what]. */
 function fakeServices({
-  dzYear = () => 1999, mbYear = () => null, mbSearch = () => null, apple = () => null,
-  dzDelay = 1, mbDelay = 1, appleDelay = 1,
+  mbYear = () => null, mbSearch = () => null, apple = () => null,
+  mbDelay = 1, appleDelay = 1,
 } = {}) {
   const log = [];
-  const deezer = {
-    async trackInfo(id, { signal } = {}) {
-      log.push(['dz', id]);
-      await wait(dzDelay);
-      if (signal?.aborted) throw new DeezerError('aborted');
-      const y = dzYear(id);
-      if (y instanceof Error) throw y;
-      return { deezerId: id, title: 't', artist: 'a', album: '', isrc: null, year: y, preview: null };
-    },
-  };
   const mbCall = async (what, arg, fn, signal) => {
     log.push([what, arg]);
     await wait(mbDelay);
@@ -94,7 +84,7 @@ function fakeServices({
     if (signal?.aborted) throw new MusicBrainzError('aborted');
     return apple(t);
   };
-  return { log, deezer, musicbrainz, appleMatch };
+  return { log, musicbrainz, appleMatch };
 }
 
 function setup(lists, services, active = null) {
@@ -106,7 +96,7 @@ function setup(lists, services, active = null) {
 
 beforeEach(() => {
   storage.clear();
-  enrich._configure({ idleMs: 30, flushMs: 10, emitMs: 2, backoffMs: 10, quotaMs: 10, memSaveMs: 1 });
+  enrich._configure({ idleMs: 30, emitMs: 2, backoffMs: 10, memSaveMs: 1 });
 });
 afterEach(() => { enrich.stop(); enrich._reset(); });
 
@@ -127,15 +117,14 @@ test('yearPending(): a pure predicate on the stored fields', () => {
   assert.equal(yearChecked({ year: null, yearChecked: true }), false, 'checked but no year: not playable');
 });
 
-test('Deezer year and MusicBrainz run side by side; MusicBrainz earlier year wins (sure, checked); Apple last, fragment only', async () => {
-  const tracks = [{ n: 1, deezerId: 11, isrc: isrc(1), title: 'Sweet Child O Mine', artist: 'Guns N Roses', year: null, yearSure: true }];
-  const sv = fakeServices({ dzDelay: 30, mbDelay: 5, dzYear: () => 2018, mbYear: () => 1987, apple: () => ({ itunesId: 501, previewUrl: 'https://a/1.m4a', trackViewUrl: null, year: 1985, yearSure: true }) });
+test('MusicBrainz earlier year beats the Spotify album year (sure, checked); Apple last, fragment only', async () => {
+  const tracks = [{ n: 1, spotifyId: 'r'.repeat(22), isrc: isrc(1), title: 'Sweet Child O Mine', artist: 'Guns N Roses', year: 2018, yearSure: false }];
+  const sv = fakeServices({ mbYear: () => 1987, apple: () => ({ itunesId: 501, previewUrl: 'https://a/1.m4a', trackViewUrl: null, year: 1985, yearSure: true }) });
   setup([{ id: 'p1', tracks }], sv);
   await until(done('p1'), 3000, 'done');
-  assert.deepEqual(kinds(sv).slice(0, 2).sort(), ['dz', 'mb'], 'both started before either finished');
-  assert.equal(kinds(sv).at(-1), 'apple', 'Apple last');
+  assert.deepEqual(kinds(sv), ['mb', 'apple'], 'MusicBrainz first, Apple last');
   const t = tracks[0];
-  assert.equal(t.year, 1987, 'MusicBrainz first release beats Deezer 2018 (also when Deezer answers later)');
+  assert.equal(t.year, 1987, 'MusicBrainz first release beats the 2018 album year');
   assert.equal(t.yearSure, true);
   assert.equal(t.yearChecked, true);
   assert.equal(t.itunesId, 501, 'Apple adds the fragment');
@@ -143,14 +132,14 @@ test('Deezer year and MusicBrainz run side by side; MusicBrainz earlier year win
 });
 
 test('MusicBrainz LATER than ours: ours kept, checked; not asked again after a reload', async () => {
-  const tracks = [{ n: 1, deezerId: 21, isrc: isrc(2), title: 'S', artist: 'A', year: 1990, yearSure: false, match: 'none' }];
+  const tracks = [{ n: 1, spotifyId: 's'.repeat(22), isrc: isrc(2), title: 'S', artist: 'A', year: 1990, yearSure: false, match: 'none' }];
   const sv = fakeServices({ mbYear: () => 1995 });
   setup([{ id: 'p1', tracks }], sv);
   await until(done('p1'));
   assert.equal(tracks[0].year, 1990);
   assert.equal(tracks[0].yearSure, false);
   assert.equal(tracks[0].yearChecked, true);
-  assert.deepEqual(kinds(sv), ['mb'], 'no search after an ISRC hit; no Deezer (has a year); match none: no Apple');
+  assert.deepEqual(kinds(sv), ['mb'], 'no search after an ISRC hit; match none: no Apple');
   await wait(20);
   enrich.stop();
   delete tracks[0].yearChecked; // even a store that lost the mark: the answer is remembered
@@ -239,8 +228,8 @@ test('Apple never raises a year and never touches a sure one', async () => {
 });
 
 test('prepare({ min }) needs no Apple at all: every ISRC unknown, every search empty, Apple hangs', async () => {
-  const tracks = Array.from({ length: 40 }, (_, i) => ({ n: i + 1, deezerId: 9100 + i, isrc: isrc(9100 + i), title: `nieuw ${i}`, artist: 'a', year: null, yearSure: true }));
-  const sv = fakeServices({ dzYear: () => 2026 });
+  const tracks = Array.from({ length: 40 }, (_, i) => ({ n: i + 1, spotifyId: `${String(i).padStart(2, '0')}${'n'.repeat(20)}`, isrc: isrc(9100 + i), title: `nieuw ${i}`, artist: 'a', year: 2026, yearSure: false }));
+  const sv = fakeServices();
   sv.appleMatch = () => new Promise(() => {}); // never answers
   setup([{ id: 'new', tracks }], sv);
   const st = await enrich.prepare('new', { min: 30 });
@@ -270,20 +259,29 @@ test('Apple starts on a song right after its MusicBrainz check (no sleep until t
   assert.ok(Date.now() - t0 < 1500, `Apple ran ${Date.now() - t0} ms after the start, not after the 5 s idle re-scan`);
 });
 
-test('Apple: songs without a Deezer preview first', async () => {
+test('a song a v3-10 Deezer import left (deezerId, no Apple id, no year): checked, then Apple adds the fragment and a not-sure year', async () => {
   const tracks = [
-    ...Array.from({ length: 3 }, (_, i) => ({ n: i + 1, deezerId: 9300 + i, title: `dz${i}`, artist: 'a', year: 1990, yearSure: true, match: 'pending' })),
-    ...Array.from({ length: 3 }, (_, i) => ({ n: i + 4, spotifyId: String(i + 5).repeat(22), title: `sp${i}`, artist: 'a', year: 1990, yearSure: true, match: 'pending' })),
+    { n: 1, deezerId: 9300, isrc: isrc(93), title: 'Ooit van Deezer', artist: 'A', year: null, yearSure: true },
+    { n: 2, deezerId: 9301, isrc: isrc(94), title: 'Met een jaar', artist: 'B', year: 2011, yearSure: false, yearChecked: true },
   ];
-  const sv = fakeServices({ apple: () => null });
+  const sv = fakeServices({ apple: (t) => ({ itunesId: t.title.startsWith('Ooit') ? 931 : 932, previewUrl: null, trackViewUrl: null, year: t.title.startsWith('Ooit') ? 1979 : 1984, yearSure: true }) });
+  enrich._setDeps({ playlists: fakeStore([{ id: 'p', tracks }]) });
+  const st0 = enrich.status('p');
+  assert.equal(st0.fragmentsMissing, 2, 'a deezerId is no fragment');
+  assert.equal(st0.yearsPending, 1);
   setup([{ id: 'p', tracks }], sv);
   await until(done('p'));
-  const order = sv.log.filter((x) => x[0] === 'apple').map((x) => x[1]);
-  assert.deepEqual(order.slice(0, 3).sort(), ['sp0', 'sp1', 'sp2'], `Spotify-only songs first (${order})`);
+  const l = sv.log.map((x) => x.join(':'));
+  assert.deepEqual([...l].sort(), [`mb:${isrc(93)}`, 'mbs:A - Ooit van Deezer', 'apple:Ooit van Deezer', 'apple:Met een jaar'].sort());
+  assert.ok(l.indexOf('mbs:A - Ooit van Deezer') < l.indexOf('apple:Ooit van Deezer'), 'Apple after the year check of that song');
+  assert.ok(!sv.log.some((x) => x[0] === 'dz'), 'no Deezer lane any more');
+  assert.deepEqual([tracks[0].itunesId, tracks[0].year, tracks[0].yearSure, tracks[0].yearChecked], [931, 1979, false, true], 'Apple: fragment and a year, not sure');
+  assert.deepEqual([tracks[1].itunesId, tracks[1].year, tracks[1].yearSure], [932, 1984, false], 'an unsure year may be lowered');
+  assert.equal(enrich.status('p').fragmentsMissing, 0);
 });
 
 test('a full localStorage: the worker stops (no more requests), says so in status(), resumes when a write fits again', async () => {
-  const tracks = Array.from({ length: 20 }, (_, i) => ({ n: i + 1, deezerId: 9400 + i, title: `t${i}`, artist: 'a', year: null, yearSure: true, match: 'none' }));
+  const tracks = Array.from({ length: 20 }, (_, i) => ({ n: i + 1, title: `t${i}`, artist: 'a', year: null, yearSure: true, match: 'none' }));
   const store = fakeStore([{ id: 'p', tracks }]);
   let full = true;
   let failures = 0;
@@ -299,7 +297,7 @@ test('a full localStorage: the worker stops (no more requests), says so in statu
     lastError = null;
     return orig(id, changes);
   };
-  const sv = fakeServices({ dzYear: () => 1999 });
+  const sv = fakeServices({ mbSearch: () => 1999 });
   enrich._setDeps({ playlists: store, ...sv });
   enrich.start();
   await until(() => enrich.status('p').storageFull, 3000, 'stopped for storage');
@@ -327,24 +325,24 @@ test('Spotify song checked by MusicBrainz: Apple only adds the fragment, never a
   assert.equal(tracks[0].itunesId, 77);
 });
 
-test('a year the user typed is never touched (not by MusicBrainz, Apple, or a Deezer answer in flight)', async () => {
+test('a year the user typed is never touched (not by MusicBrainz, Apple, or an answer in flight)', async () => {
   const tracks = [
     { n: 1, isrc: isrc(6), spotifyId: 'f'.repeat(22), title: 'Fixed', artist: 'A', year: 1970, yearSure: true, yearFixed: true },
-    { n: 2, deezerId: 32, isrc: isrc(7), title: 'Typed meanwhile', artist: 'B', year: null, yearSure: true, match: 'none' },
+    { n: 2, spotifyId: 'u'.repeat(22), isrc: isrc(7), title: 'Typed meanwhile', artist: 'B', year: 2005, yearSure: false, match: 'none' },
   ];
   const sv = fakeServices({
-    dzDelay: 40, mbDelay: 40, dzYear: () => 2005, mbYear: () => 1960,
+    mbDelay: 40, mbYear: () => 1960,
     apple: () => ({ itunesId: 777, previewUrl: null, trackViewUrl: null, year: 1965, yearSure: true }),
   });
   const store = setup([{ id: 'p1', tracks }], sv);
-  await until(() => sv.log.some((x) => x[0] === 'dz') && sv.log.some((x) => x[0] === 'mb'));
+  await until(() => sv.log.some((x) => x[1] === isrc(7)));
   store.updateTrack('p1', 2, { year: 1983, yearSure: true, yearFixed: true }); // typed while both are asked
   await until(done('p1'));
   await wait(60);
   assert.ok(!sv.log.some((x) => x[1] === isrc(6)), 'a typed year needs no check');
   assert.equal(tracks[0].year, 1970);
   assert.equal(tracks[0].itunesId, 777, 'Apple still adds the fragment');
-  assert.equal(tracks[1].year, 1983, 'neither the late Deezer nor the late MusicBrainz answer overwrote it');
+  assert.equal(tracks[1].year, 1983, 'the late MusicBrainz answer did not overwrite it');
 });
 
 test('Apple: a duplicate fragment is not taken twice', async () => {
@@ -364,38 +362,29 @@ test('Apple: a duplicate fragment is not taken twice', async () => {
 test('status(): the counts', () => {
   const tracks = [
     { n: 1, itunesId: 1, year: 1980, yearSure: true, title: 'a', artist: 'x' },
-    { n: 2, deezerId: 2, year: 1981, yearSure: false, title: 'b', artist: 'x', match: 'none' },
-    { n: 3, deezerId: 3, year: null, yearSure: true, title: 'c', artist: 'x', match: 'none' },
+    { n: 2, deezerId: 2, isrc: isrc(2), year: 1981, yearSure: false, title: 'b', artist: 'x', match: 'none' }, // from a v3-10 Deezer import
+    { n: 3, spotifyId: 'v'.repeat(22), year: null, yearSure: true, title: 'c', artist: 'x', match: 'none' },
     { n: 4, spotifyId: 'h'.repeat(22), year: 1990, yearSure: false, yearChecked: true, title: 'd', artist: 'x', match: 'none' },
   ];
   enrich._setDeps({ playlists: fakeStore([{ id: 'p', tracks }]) });
   const st = enrich.status('p');
   const pickKeys = (o, ks) => Object.fromEntries(ks.map((k) => [k, o[k]]));
   assert.deepEqual(pickKeys(st, ['total', 'ready', 'yearsChecked', 'yearsPending', 'yearsMissing', 'yearsUnsure', 'fragmentsMissing', 'working']),
-    { total: 4, ready: 3, yearsChecked: 2, yearsPending: 2, yearsMissing: 1, yearsUnsure: 2, fragmentsMissing: 1, working: false });
+    { total: 4, ready: 3, yearsChecked: 2, yearsPending: 2, yearsMissing: 1, yearsUnsure: 2, fragmentsMissing: 3, working: false });
   assert.equal(enrich.status('nope').total, 0);
 });
 
-test('writes of Deezer years are batched (one store write per batch)', async () => {
-  const tracks = Array.from({ length: 40 }, (_, i) => ({ n: i + 1, deezerId: 1000 + i, title: `t${i}`, year: null, yearSure: true, match: 'none' }));
-  enrich._configure({ flushMs: 30 });
-  const store = setup([{ id: 'p1', tracks }], fakeServices());
-  await until(done('p1'));
-  assert.ok(tracks.every((t) => t.year === 1999 && t.yearSure === false));
-  assert.ok(store.writes.length < 20, `${store.writes.length} writes for 40 songs`);
-});
-
 test('the active playlist goes first, then the one asked for comes before everything', async () => {
-  const mk = (id, base) => ({ id, tracks: Array.from({ length: 12 }, (_, i) => ({ n: i + 1, deezerId: base + i, title: 'x', year: null, yearSure: true, match: 'none' })) });
+  const mk = (id, base) => ({ id, tracks: Array.from({ length: 12 }, (_, i) => ({ n: i + 1, isrc: isrc(base + i), title: 'x', artist: 'y', year: null, yearSure: true, match: 'none' })) });
   const lists = [mk('a', 100), mk('b', 200), mk('c', 300)];
-  const sv = fakeServices({ dzDelay: 5 });
-  enrich._configure({ flushMs: 1 });
+  const sv = fakeServices({ mbDelay: 3, mbYear: () => 1980 });
   setup(lists, sv, 'c');
-  await until(() => sv.log.length >= 1);
-  assert.ok(sv.log.slice(0, 4).every((x) => x[1] >= 300 && x[1] < 400), 'active list first');
+  await until(() => sv.log.length >= 2);
+  const idOf = (x) => Number(x[1].slice(-3));
+  assert.ok(sv.log.slice(0, 2).every((x) => idOf(x) >= 300 && idOf(x) < 400), 'active list first');
   enrich.prioritise('b');
   await until(() => ['a', 'b', 'c'].every((id) => enrich.status(id).pending === 0), 5000);
-  const ids = sv.log.map((x) => x[1]);
+  const ids = sv.log.map(idOf);
   const lastB = ids.findLastIndex((id) => id >= 200 && id < 300);
   assert.equal(ids.slice(0, lastB).filter((id) => id < 200).length, 0, 'b (asked for) before a');
 });
@@ -421,41 +410,40 @@ test('pause() stops new work (and Apple/MusicBrainz in flight); resume() continu
 });
 
 test('prepare(): resolves on CHECKED years (not merely fetched), from all over the list; the rest goes on', async () => {
-  const tracks = Array.from({ length: 200 }, (_, i) => ({ n: i + 1, deezerId: 5000 + i, isrc: isrc(5000 + i), title: `t${i}`, artist: 'a', year: null, yearSure: true, match: 'none' }));
-  const sv = fakeServices({ dzDelay: 2, mbDelay: 8, dzYear: (id) => 2000 + (id % 20), mbYear: (i) => 1960 + (Number(i.slice(-3)) % 30) });
+  const tracks = Array.from({ length: 200 }, (_, i) => ({ n: i + 1, isrc: isrc(5000 + i), title: `t${i}`, artist: 'a', year: 2000 + (i % 20), yearSure: false, match: 'none' }));
+  const sv = fakeServices({ mbDelay: 2, mbYear: (i) => 1960 + (Number(i.slice(-3)) % 30) });
   setup([{ id: 'big', tracks }], sv);
   const progress = [];
   const st = await enrich.prepare('big', { min: 12, onProgress: (s) => progress.push([s.ready, s.yearsChecked]) });
   assert.ok(st.yearsChecked >= 12, `checked ${st.yearsChecked}`);
   assert.ok(st.yearsChecked < 200, 'resolved before the whole list was checked');
-  assert.ok(progress.some(([ready, checked]) => ready > checked), 'onProgress reports fetched and checked years separately');
+  assert.ok(progress.some(([ready, checked]) => ready > checked), 'onProgress reports years and checked years separately');
   const before = progress.filter(([, c]) => c < 12);
-  assert.ok(before.length > 0 && before.some(([r]) => r >= 12), 'it did not resolve on fetched (unchecked) Deezer years');
+  assert.ok(before.length > 0 && before.some(([r]) => r >= 12), 'it did not resolve on (unchecked) catalogue years');
   const got = tracks.map((t, i) => (t.yearChecked ? i : -1)).filter((i) => i >= 0);
   const quarters = [0, 1, 2, 3].map((q) => got.filter((i) => Math.floor(i / 50) === q).length);
   assert.ok(quarters.every((n) => n >= 2), `a fair sample of the list (${quarters})`);
-  assert.ok(sv.log.findIndex((x) => x[0] === 'mb') < sv.log.filter((x) => x[0] === 'dz').length, 'MusicBrainz started before all Deezer years were in');
   await until(() => tracks.every((t) => t.yearChecked), 8000, 'the rest in the background');
 });
 
 test('prepare(): works while paused (only for that list), short lists, resolves at once when ready', async () => {
-  const mk = (id, base, n) => ({ id, tracks: Array.from({ length: n }, (_, i) => ({ n: i + 1, deezerId: base + i, isrc: isrc(base + i), title: 'x', artist: 'y', year: null, yearSure: true, match: 'none' })) });
+  const mk = (id, base, n) => ({ id, tracks: Array.from({ length: n }, (_, i) => ({ n: i + 1, isrc: isrc(base + i), title: 'x', artist: 'y', year: null, yearSure: true, match: 'none' })) });
   const lists = [mk('other', 100, 5), mk('want', 200, 8)];
   const sv = fakeServices({ mbYear: () => 1980 });
   enrich.pause('game');
   setup(lists, sv);
   const st = await enrich.prepare('want', { min: 30 });
   assert.equal(st.yearsChecked, 8, 'fewer songs than min: resolves when nothing more can be checked');
-  assert.ok(sv.log.every((x) => (x[0] === 'dz' ? x[1] >= 200 : Number(x[1].slice(-3)) >= 200)), 'the other list waits for the pause');
+  assert.ok(sv.log.every((x) => Number(x[1].slice(-3)) >= 200), 'the other list waits for the pause');
   assert.equal((await enrich.prepare('want', { min: 5 })).yearsChecked, 8);
   enrich.resume('game');
   await until(() => enrich.status('other').pending === 0);
 });
 
-test('prepare(): rejects when Deezer or MusicBrainz keeps failing; abort', async () => {
-  const tracks = Array.from({ length: 50 }, (_, i) => ({ n: i + 1, deezerId: 7000 + i, title: 'x', year: null, yearSure: true, match: 'none' }));
-  setup([{ id: 'p', tracks }], fakeServices({ dzYear: () => new DeezerError('unavailable') }));
-  await assert.rejects(enrich.prepare('p', { min: 10 }), (e) => e instanceof DeezerError && e.code === 'unavailable');
+test('prepare(): rejects when MusicBrainz keeps failing (search or ISRC); abort', async () => {
+  const tracks = Array.from({ length: 50 }, (_, i) => ({ n: i + 1, title: `x${i}`, artist: 'y', year: null, yearSure: true, match: 'none' }));
+  setup([{ id: 'p', tracks }], fakeServices({ mbSearch: () => new MusicBrainzError('unavailable') }));
+  await assert.rejects(enrich.prepare('p', { min: 10 }), (e) => e instanceof MusicBrainzError && e.code === 'unavailable');
   const ctrl = new AbortController();
   const p = enrich.prepare('p', { min: 10, signal: ctrl.signal });
   ctrl.abort();
@@ -466,31 +454,33 @@ test('prepare(): rejects when Deezer or MusicBrainz keeps failing; abort', async
   const e = await enrich.prepare('q', { min: 10 }).catch((x) => x);
   assert.ok(e instanceof MusicBrainzError && e.code === 'unavailable');
   assert.match(enrich.errorMessage(e), /MusicBrainz/);
-  assert.match(enrich.errorMessage(new DeezerError('quota')), /Deezer/);
+  assert.match(enrich.errorMessage(new MusicBrainzError('offline')), /internet/i);
+  assert.match(enrich.errorMessage({ code: 'storage' }), /vol/);
   assert.ok(t2.every((t) => !t.yearChecked), 'a failure never counts as checked');
 });
 
-test('Deezer notfound / no year is remembered; a MusicBrainz failure is not remembered as an answer', async () => {
+test('a MusicBrainz failure is not remembered as an answer; the Deezer part of a v3-10 memory is dropped', async () => {
+  storage.set('timetunesr.enrich.v1', JSON.stringify({ v: 1, dz: [81, 82], mb: {}, ms: {} })); // as v3-10 kept it
   const tracks = [
-    { n: 1, deezerId: 81, title: 'gone', year: null, yearSure: true, match: 'none' },
-    { n: 2, deezerId: 82, title: 'no date', year: null, yearSure: true, match: 'none' },
-    { n: 3, isrc: isrc(9), spotifyId: 'i'.repeat(22), title: 'mb down', artist: 'a', year: 1999, yearSure: false, match: 'none' },
+    { n: 1, isrc: isrc(9), spotifyId: 'i'.repeat(22), title: 'mb down', artist: 'a', year: 1999, yearSure: false, match: 'none' },
+    { n: 2, isrc: isrc(10), spotifyId: 'w'.repeat(22), title: 'mb up', artist: 'b', year: 1999, yearSure: false, match: 'none' },
   ];
-  const sv = fakeServices({ dzYear: (id) => (id === 81 ? new DeezerError('notfound') : null), mbYear: () => new MusicBrainzError('unavailable') });
+  const sv = fakeServices({ mbYear: (i) => (i === isrc(9) ? new MusicBrainzError('unavailable') : 1980) });
   setup([{ id: 'p', tracks }], sv);
   await until(done('p'));
   await wait(40);
-  assert.deepEqual(sv.log.map((x) => x.join(':')).sort(), ['dz:81', 'dz:82', `mb:${isrc(9)}`]);
-  assert.equal(tracks[2].yearChecked, undefined);
-  assert.equal(enrich.yearPending(tracks[2]), true, 'still pending: retried in a later session');
+  assert.deepEqual(sv.log.map((x) => x.join(':')).sort(), [`mb:${isrc(10)}`, `mb:${isrc(9)}`].sort());
+  assert.equal(tracks[0].yearChecked, undefined);
+  assert.equal(enrich.yearPending(tracks[0]), true, 'still pending: retried in a later session');
   enrich.stop();
   const memRaw = JSON.parse(storage.get('timetunesr.enrich.v1'));
-  assert.deepEqual(memRaw.dz.sort(), [81, 82]);
   assert.equal(memRaw.mb[isrc(9)], undefined);
+  assert.equal(memRaw.mb[isrc(10)], 1980);
+  assert.equal(memRaw.dz, undefined, 'no Deezer ids kept');
 });
 
 test('hostile memory in localStorage is ignored', async () => {
-  storage.set('timetunesr.enrich.v1', JSON.stringify({ v: 1, dz: ['x', -1, 1e300, 5], mb: { NOTANISRC: 1990, [isrc(1)]: 'abc', [isrc(2)]: 1975 }, ms: { nobar: 1980, 'a|b': '1970', ['x|'.repeat(100)]: 1960 } }).replace('"mb":{', '"mb":{"__proto__":{"x":1},'));
+  storage.set('timetunesr.enrich.v1', JSON.stringify({ v: 1, dz: 'x', mb: { NOTANISRC: 1990, [isrc(1)]: 'abc', [isrc(2)]: 1975 }, ms: { nobar: 1980, 'a|b': '1970', ['x|'.repeat(100)]: 1960 } }).replace('"mb":{', '"mb":{"__proto__":{"x":1},'));
   const tracks = [{ n: 1, isrc: isrc(2), spotifyId: 'j'.repeat(22), title: 'x', artist: 'y', year: 1980, yearSure: false, match: 'none' }];
   const sv = fakeServices();
   setup([{ id: 'p', tracks }], sv);
@@ -518,18 +508,17 @@ test('a store that drops yearChecked: no endless loop, checked for this session'
 test('with the real playlist store (playlists.js): checked years written, a fixed year kept', async () => {
   const store = await import('../../app/js/playlists.js');
   store.reload();
-  const p = store.create('Deezer test');
+  const p = store.create('Spotify test');
   assert.ok(p, 'playlist made');
   store.addTracks(p.id, [
-    { deezerId: 91, isrc: isrc(91), title: 'Een', artist: 'A', year: null, yearSure: false, match: 'none' },
-    { deezerId: 92, isrc: isrc(92), title: 'Twee', artist: 'B', year: null, yearSure: false, match: 'none' },
+    { spotifyId: 'x'.repeat(22), isrc: isrc(91), title: 'Een', artist: 'A', year: 2001, yearSure: false, match: 'none' },
+    { spotifyId: 'y'.repeat(22), isrc: isrc(92), title: 'Twee', artist: 'B', year: 2001, yearSure: false, match: 'none' },
   ]);
   const stored = store.get(p.id).tracks;
-  assert.equal(stored[0].deezerId, 91, 'deezerId stored (part A)');
-  const sv = fakeServices({ dzYear: () => 2001, mbYear: (i) => (i === isrc(91) ? 1977 : null), dzDelay: 20, mbDelay: 20 });
+  const sv = fakeServices({ mbYear: (i) => (i === isrc(91) ? 1977 : null), mbDelay: 20 });
   enrich._setDeps({ playlists: store, ...sv });
   enrich.start();
-  await until(() => sv.log.some((x) => x[1] === 92));
+  await until(() => sv.log.some((x) => x[1] === isrc(92)));
   store.fixYear(p.id, stored[1].n, 1988);
   await until(() => enrich.status(p.id).pending === 0, 3000);
   await wait(30);

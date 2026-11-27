@@ -48,11 +48,17 @@
 //   Refused reactions are dropped silently. A new app must not send avatar / react to a server
 //   without the 'party' feature: that one answers 'bad'.
 //
-// "Mix van de groep" takes Spotify favourites only (mix-add tracks need a spotifyId). The
-//   short-lived 'mix-playlists' feature of v3-10 (songs from public catalogue playlists) is gone
-//   without a new version: the server no longer lists it in /health, so an app of v3-10 no longer
-//   offers it, and a song such an app still sends without a spotifyId is refused like any invalid
-//   song (error 'mix'; the room and the rest of the message are not affected).
+// "Mix van de groep" from playlists (optional addition within version 5; /health `features`
+//   lists 'mix-lists'): a mix-add track may carry an `isrc` instead of a `spotifyId`; such a
+//   song must say `checked: true` (its year was checked at MusicBrainz on the phone), else it is
+//   refused like any invalid song. Duplicates are also recognised by ISRC. A new app offers
+//   "Kies een playlist" only when the server lists the feature (and the app has a provider for
+//   the lists, see mix-lists.js). v3-10 called this feature 'mix-playlists' and filled it from
+//   the public Deezer catalogue; v3-11 removed Deezer and renamed the feature, so a server no
+//   longer announces 'mix-playlists' and an app of v3-10 stops offering its Deezer search. A
+//   song such an app still sends is taken only when it has a Spotify id or an ISRC with a
+//   checked year (its `deezerId` is ignored); else it is refused with error 'mix', and the room
+//   and the rest of the message are not affected. No new version was needed.
 //
 // Version 2 (November 2026): the Quiz (settings questions/qtype/think, playing, the quiz part of
 // the view). Version 3 (November 2026): "Mix van de groep" (mix-add, mix-clear, settings.music,
@@ -64,7 +70,9 @@
 
 export const SERVER_PROTOCOL_VERSION = 5;
 /** Optional additions within this version that the server announces in /health `features`. */
-export const SERVER_FEATURES = ['screen', 'party'];
+/** The feature of "Kies een playlist" in the group mix (v3-10 had 'mix-playlists', Deezer-based). */
+export const MIX_LISTS_FEATURE = 'mix-lists';
+export const SERVER_FEATURES = ['screen', 'party', MIX_LISTS_FEATURE];
 /**
  * Largest message from a phone (the deck at the start of a game), in UTF-8 bytes. A start
  * with 2000 realistic cards is about 300 kB (tests/unit/big-lists.test.mjs); fitCards keeps

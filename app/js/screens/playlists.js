@@ -1,12 +1,10 @@
 // "Muziek kiezen" (#/playlists): the hub for the music. Top to bottom: what plays now (Speel),
-// search a playlist in the public Deezer catalogue (quick picks, covers, paste a link), the
-// player's own Spotify playlists, the saved lists (the built-in deck and own playlists: a tap
-// makes one active), and making / restoring a list. A playlist opens in a sheet
-// (music-sheet.js: Speel direct / Bewaar). Opened from a room lobby (pick mode) the choice goes
-// straight back to that room. Also receives shared links (#/pl/<payload>).
+// the player's own Spotify playlists (covers), the saved lists (the built-in deck and own
+// playlists: a tap makes one active), and making / restoring a list. A Spotify playlist opens
+// in a sheet (music-sheet.js: Speel direct / Bewaar). Opened from a room lobby (pick mode) the
+// choice goes straight back to that room. Also receives shared links (#/pl/<payload>).
 import * as store from '../playlists.js';
 import * as itunes from '../itunes.js';
-import * as deezer from '../deezer.js';
 import * as spl from '../spotify-playlists.js';
 import * as enrich from '../enrich.js';
 import { loadBuiltinDeck, musicSource } from '../deck.js';
@@ -21,7 +19,7 @@ import { DEFAULT_RANGE } from '../multi/mix.js';
 import { accountNoteHtml, onLogInOut } from './account-bits.js';
 import { createMusicSheet, coverHtml, noteIcon } from './music-sheet.js';
 import {
-  readPick, clearPick, markPicked, isPlaylistLink, countLine, readinessInfo, workLine, sourceLabel,
+  readPick, clearPick, markPicked, readinessInfo, workLine, sourceLabel,
 } from './music-bits.js';
 
 export const name = 'playlists';
@@ -30,15 +28,10 @@ const plural = (n, one, more) => `${n} ${n === 1 ? one : more}`;
 const uploadIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 15V4M7.5 8.5L12 4l4.5 4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 19.5h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
 const spotifyIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7.2 9.6c3.4-1 6.9-.7 9.8.9M7.8 12.6c2.8-.8 5.6-.5 7.9.8M8.5 15.4c2.1-.5 4.1-.3 5.9.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 const editIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
-const searchIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M15.5 15.5L21 21" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>';
 const starIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3.5l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
 
-const SEARCH_DEBOUNCE_MS = 550;
-const SEARCH_PAGE = 24;
-
-/* The last search and the Spotify playlists stay while the app is open (back from a sheet or the
-   edit screen shows the same results). */
-let lastSearch = null; // { q, items, total, next }
+/* The Spotify playlists stay while the app is open (back from a sheet or the edit screen shows
+   the same tiles). */
 let spCache = null; // { items, at }
 
 export function render(root, { params, navigate }) {
@@ -47,10 +40,6 @@ export function render(root, { params, navigate }) {
   let builtinCount = null;
   let alive = true;
   let pick = readPick();
-  const search = {
-    q: lastSearch?.q || '', items: lastSearch?.items || [], total: lastSearch?.total || 0, next: lastSearch?.next ?? null,
-    busy: false, more: false, error: '', ctrl: null, timer: 0, done: !!lastSearch,
-  };
   const sp = { busy: false, error: '' };
 
   root.innerHTML = `<section class="screen screen-playlists" data-testid="screen-playlists">
@@ -62,18 +51,6 @@ export function render(root, { params, navigate }) {
     <div data-slot="pick"></div>
     <div class="music-layout">
       <section class="music-now" data-slot="current" aria-label="Nu gekozen"></section>
-      <section class="set-card music-find" data-testid="pl-search" aria-labelledby="pl-find-title">
-        <h2 id="pl-find-title">${searchIcon}<span>Zoek een playlist</span></h2>
-        <form class="pl-search music-find-form" role="search" autocomplete="off" data-testid="pl-find-form">
-          <input type="search" name="q" value="${esc(search.q)}" placeholder="Zoek een playlist: top 40, jaren 90, hardcore…" aria-label="Zoek een playlist" data-testid="pl-search-input" enterkeyhint="search" autocapitalize="off" spellcheck="false" maxlength="200">
-          <button class="btn btn-primary btn-small" type="submit" aria-label="Zoek" data-testid="pl-search-go">${searchIcon}</button>
-        </form>
-        <div class="quick-row" role="group" aria-label="Snel kiezen">
-          ${deezer.FEATURED.map((f) => `<button type="button" class="quick-pick" data-act="quick" data-key="${esc(f.key)}" data-testid="pl-quick-${esc(f.key)}"><span aria-hidden="true">${esc(f.emoji)}</span>${esc(f.label)}</button>`).join('')}
-        </div>
-        <p class="small muted music-find-note" data-testid="pl-search-note">Zoeken gaat via de openbare catalogus van Deezer. Afspelen doe je met je eigen Spotify of met fragmenten.</p>
-        <div class="music-results" data-slot="results"></div>
-      </section>
       <section class="set-card music-spotify" data-slot="spotify" aria-labelledby="sp-title"></section>
       <section class="set-card music-saved" aria-labelledby="saved-title">
         <h2 id="saved-title">${starIcon}<span>Bewaard</span></h2>
@@ -165,88 +142,6 @@ export function render(root, { params, navigate }) {
       </div>`;
   }
 
-  /* ---------- search ---------- */
-  function resultsHtml() {
-    if (search.error) {
-      return `<p class="set-error" role="alert" data-testid="pl-search-error">${esc(search.error)}</p>
-        <button class="btn btn-ghost btn-small" type="button" data-act="search-retry" data-testid="pl-search-retry">${icons.restart}<span>Probeer opnieuw</span></button>`;
-    }
-    if (search.busy && !search.items.length) return '<p class="pl-status small" role="status" data-testid="pl-search-status">Zoeken…</p>';
-    if (!search.done) return '';
-    if (!search.items.length) {
-      return `<p class="set-empty" data-testid="pl-search-empty">Niets gevonden voor “${esc(search.q)}”. Probeer een ander woord, zoals ‘top 40’, ‘jaren 80’ of de naam van een artiest.</p>`;
-    }
-    const cards = search.items.map((it, i) => {
-      const saved = store.findBySource('deezer', String(it.id));
-      return `<li><button type="button" class="pl-card" data-act="open-result" data-i="${i}" data-testid="pl-result" data-id="${esc(it.id)}">
-          ${coverHtml(it.picture, 'cover-card')}
-          <span class="pl-card-text"><b>${esc(it.title)}</b><small>${esc(countLine(it.count, it.by))}</small>${saved ? '<span class="pill pill-saved">Bewaard</span>' : ''}</span>
-        </button></li>`;
-    }).join('');
-    return `<p class="pl-status small" role="status" data-testid="pl-search-status">${plural(search.total, 'playlist', 'playlists')} voor “${esc(search.q)}”</p>
-      <ul class="pl-cards" data-testid="pl-results">${cards}</ul>
-      ${search.next != null ? `<button class="btn btn-ghost btn-small music-more" type="button" data-act="more" data-testid="pl-results-more" ${search.more ? 'disabled' : ''}>${search.more ? 'Laden…' : 'Meer laden'}</button>` : ''}`;
-  }
-
-  function drawResults() {
-    const box = slot('results');
-    const a = document.activeElement;
-    const focusKey = a && box.contains(a) ? (a.dataset.testid === 'pl-result' ? `r${a.dataset.i}` : a.dataset.testid) : null;
-    box.innerHTML = resultsHtml();
-    if (focusKey) {
-      const el = focusKey.startsWith('r') && /^r\d+$/.test(focusKey) ? box.querySelector(`[data-testid="pl-result"][data-i="${focusKey.slice(1)}"]`) : box.querySelector(`[data-testid="${CSS.escape(focusKey)}"]`);
-      (el || box.querySelector('[data-testid="pl-result"]'))?.focus({ preventScroll: true });
-    }
-  }
-
-  function remember() { lastSearch = search.done && !search.error ? { q: search.q, items: search.items, total: search.total, next: search.next } : lastSearch; }
-
-  async function runSearch(raw, { append = false } = {}) {
-    clearTimeout(search.timer);
-    const q = String(raw ?? '').trim();
-    if (!append && isPlaylistLink(q)) {
-      const id = deezer.parsePlaylistId(q);
-      if (id) { sheet.openSource({ kind: 'deezer', id, name: '', count: null, by: '', picture: null }); return; }
-    }
-    if (!append) {
-      if (q.length < 2) { search.ctrl?.abort(); Object.assign(search, { q, items: [], total: 0, next: null, done: false, error: '', busy: false }); lastSearch = null; drawResults(); return; }
-      if (q === search.q && search.done && !search.error) return;
-    }
-    search.ctrl?.abort();
-    const ctrl = new AbortController();
-    search.ctrl = ctrl;
-    if (append) search.more = true;
-    else Object.assign(search, { q, busy: true, error: '', items: [], total: 0, next: null, done: false });
-    drawResults();
-    try {
-      if (globalThis.navigator?.onLine === false) throw new deezer.DeezerError('offline');
-      const r = await deezer.searchPlaylists(search.q, { index: append ? search.next : 0, limit: SEARCH_PAGE, signal: ctrl.signal });
-      if (!alive || ctrl !== search.ctrl) return;
-      const seen = new Set(search.items.map((x) => x.id));
-      search.items = append ? [...search.items, ...r.items.filter((x) => !seen.has(x.id))] : r.items;
-      search.total = Math.max(r.total, search.items.length);
-      search.next = r.next;
-      search.done = true;
-    } catch (e) {
-      if (!alive || ctrl !== search.ctrl || e?.code === 'aborted') return;
-      if (append) toast(deezer.errorMessage(e), { kind: 'warn', ms: 4000 });
-      else { search.error = deezer.errorMessage(e); search.done = false; }
-    } finally {
-      if (ctrl === search.ctrl) { search.busy = false; search.more = false; }
-    }
-    remember();
-    drawResults();
-  }
-
-  function quick(key) {
-    const f = deezer.FEATURED.find((x) => x.key === key);
-    if (!f) return;
-    if (f.playlistId) { sheet.openSource({ kind: 'deezer', id: f.playlistId, name: '', placeholder: f.label, count: null, by: '', picture: null }); return; }
-    const input = root.querySelector('[data-testid="pl-search-input"]');
-    input.value = f.query;
-    runSearch(f.query);
-  }
-
   /* ---------- Van Spotify ---------- */
   async function loadSpotify(force = false) {
     if (sp.busy || !spl.canRead()) return;
@@ -299,7 +194,6 @@ export function render(root, { params, navigate }) {
       <details class="sp-tip" data-testid="sp-tip">
         <summary>Staat de lijst die je zoekt er niet bij?</summary>
         <p class="small">Staat de lijst van iemand anders of van Spotify zelf (bv. Top 50 Nederland)? Spotify geeft apps alleen je eigen playlists. Zo maak je hem van jou: open de lijst in Spotify → ⋯ → <em>Toevoegen aan andere playlist</em> → <em>Nieuwe playlist</em>. Daarna staat hij hier${spl.canRead() ? ' (tik op Ververs)' : ''}.</p>
-        <p class="small muted">Of zoek hem hierboven in de catalogus: daar staan ook de hitlijsten.</p>
       </details>`;
     if (keep) (box.querySelector(`[data-testid="${CSS.escape(keep)}"]${keepId ? `[data-id="${CSS.escape(keepId)}"]` : ''}`) || box.querySelector(`[data-testid="${CSS.escape(keep)}"]`))?.focus({ preventScroll: true });
   }
@@ -335,7 +229,7 @@ export function render(root, { params, navigate }) {
       if (!r.timeline) warn = `Te weinig om te spelen (Tijdlijn ${MIN_TRACKS.timeline}, Bingo ${MIN_TRACKS.bingo})`;
       else if (!r.bingo) warn = `Genoeg voor Tijdlijn; Bingo vraagt er ${MIN_TRACKS.bingo}`;
       const status = workLine(enrich.status(p.id), { short: true, source: musicSource() });
-      // a catalogue list that is still being finished is not "too small": it is busy
+      // an imported list that is still being finished is not "too small": it is busy
       if (status && !r.timeline && p.source) warn = '';
       rows.push(deckRow({ id: p.id, title: p.name, active: active === p.id, sub: `${plural(p.tracks.length, 'nummer', 'nummers')} · ${sourceLabel(p) === 'eigen' ? 'eigen playlist' : sourceLabel(p)}`, warn, status, edit: true }));
     }
@@ -346,7 +240,6 @@ export function render(root, { params, navigate }) {
   function drawAll() {
     drawPick();
     drawCurrent();
-    drawResults();
     drawSpotify();
     drawSaved();
   }
@@ -404,14 +297,6 @@ export function render(root, { params, navigate }) {
         break;
       case 'pick-current': pickDone(store.getActiveId()); break;
       case 'play-current': sheet.openPlay(store.getActiveId()); break;
-      case 'quick': quick(a.dataset.key); break;
-      case 'more': if (search.next != null && !search.more) runSearch(search.q, { append: true }); break;
-      case 'search-retry': { const q = search.q; search.q = ''; runSearch(q); break; }
-      case 'open-result': {
-        const it = search.items[Number(a.dataset.i)];
-        if (it) sheet.openSource({ kind: 'deezer', id: it.id, name: it.title, count: it.count, by: it.by, picture: it.picture });
-        break;
-      }
       case 'open-sp': {
         const it = spCache?.items?.find((x) => x.id === a.dataset.id);
         if (it) sheet.openSource({ kind: 'spotify', id: it.id, name: it.name, count: it.count, by: '', picture: it.picture });
@@ -434,13 +319,6 @@ export function render(root, { params, navigate }) {
   }
 
   function onSubmit(e) {
-    if (e.target.matches('[data-testid="pl-find-form"]')) {
-      e.preventDefault();
-      const q = e.target.elements.q.value;
-      if (q.trim() === search.q && search.error) search.q = '';
-      runSearch(q);
-      return;
-    }
     if (!e.target.matches('[data-testid="playlist-new-form"]')) return;
     e.preventDefault();
     const nm = e.target.elements.name.value.trim();
@@ -448,14 +326,6 @@ export function render(root, { params, navigate }) {
     const p = store.create(nm);
     if (!p) { toast('Opslaan lukte niet: de opslag van de browser is vol of uitgeschakeld.', { kind: 'warn', ms: 5000 }); return; }
     navigate(`#/playlists/${p.id}`);
-  }
-
-  function onInput(e) {
-    if (!e.target.matches('[data-testid="pl-search-input"]')) return;
-    clearTimeout(search.timer);
-    const v = e.target.value;
-    // a pasted link opens at once; typing waits for a short pause
-    search.timer = setTimeout(() => runSearch(v), isPlaylistLink(v) ? 0 : SEARCH_DEBOUNCE_MS);
   }
 
   function onChange(e) {
@@ -469,12 +339,11 @@ export function render(root, { params, navigate }) {
   drawAll();
   root.addEventListener('click', onClick);
   root.addEventListener('submit', onSubmit);
-  root.addEventListener('input', onInput);
   root.addEventListener('change', onChange);
   root.addEventListener('error', onImgError, true);
   const unsub = store.subscribe(() => {
     if (!alive) return;
-    drawCurrent(); drawSaved(); drawResults(); drawSpotify();
+    drawCurrent(); drawSaved(); drawSpotify();
     sheet.refresh();
   });
   // the background work (years, fragments): the status lines follow, at most twice a second
@@ -490,9 +359,7 @@ export function render(root, { params, navigate }) {
 
   return () => {
     alive = false;
-    clearTimeout(search.timer);
     clearTimeout(bgTimer);
-    search.ctrl?.abort();
     sheet.destroy();
     unsub();
     unsubEnrich();
@@ -500,7 +367,6 @@ export function render(root, { params, navigate }) {
     offAccount();
     root.removeEventListener('click', onClick);
     root.removeEventListener('submit', onSubmit);
-    root.removeEventListener('input', onInput);
     root.removeEventListener('change', onChange);
     root.removeEventListener('error', onImgError, true);
   };

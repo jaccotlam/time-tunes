@@ -9,7 +9,7 @@ import * as enrich from '../enrich.js';
 import { RANGES, DEFAULT_RANGE, rangeLabel } from '../multi/mix.js';
 import {
   parseLines, rankSearch, matchLine, trackFromItunes, itunesYear, readiness, validYear, padN,
-  encodeShare, newShareId, exportPlaylist, MIN_TRACKS, MAX_TRACKS, NAME_MAX, parseSpotifyPlaylistId, FUN_MIN, yearPending,
+  encodeShare, newShareId, exportPlaylist, MIN_TRACKS, MAX_TRACKS, NAME_MAX, parseSpotifyPlaylistId, FUN_MIN, yearPending, playable,
 } from '../playlist-logic.js';
 import { icons, esc, toast } from '../ui.js';
 import { musicSource } from '../deck.js';
@@ -18,7 +18,6 @@ import { setupHintHtml } from './devices.js';
 import { accountNoteHtml } from './account-bits.js';
 import { readinessInfo, workLine, rowMark, sourceLabel } from './music-bits.js';
 import { fetchAndImport, importMessage } from './music-sheet.js';
-import { errorMessage as deezerMessage } from '../deezer.js';
 
 export const name = 'playlist';
 
@@ -139,7 +138,9 @@ export function render(root, { params, navigate }) {
   function counts() {
     const src = musicSource();
     const deck = store.deckCounts(pl, src);
-    const spOnly = pl.tracks.filter((t) => !t.itunesId && !t.deezerId && t.spotifyId && t.match !== 'pending').length;
+    // no Apple Music id (yet): plays through Spotify only (a Spotify id, an ISRC or title + artist;
+    // also a song imported from Deezer by v3-10 until the Apple Music match finds its fragment)
+    const spOnly = pl.tracks.filter((t) => !t.itunesId && t.match !== 'pending' && playable(t, 'spotify')).length;
     return { src, deck, playable: deck.inDeck, spOnly, total: pl.tracks.length, bg: enrich.status(id), spPlayable: store.deckCounts(pl, 'spotify').inDeck };
   }
 
@@ -213,7 +214,7 @@ export function render(root, { params, navigate }) {
   async function refreshSource() {
     const src = pl.source;
     if (!src || refresh.busy) return;
-    if (src.kind === 'spotify' && !spl.canRead()) {
+    if (!spl.canRead()) {
       refresh.status = 'Om de Spotify-playlist opnieuw op te halen moet de app je playlists mogen lezen: kies hieronder de tab Spotify en geef toestemming.';
       drawHeadKeep();
       return;
@@ -223,7 +224,7 @@ export function render(root, { params, navigate }) {
     refresh.status = 'Nummers ophalen…';
     drawHeadKeep();
     try {
-      const { res } = await fetchAndImport({ kind: src.kind, id: src.id, name: src.name || pl.name, count: null }, {
+      const { res } = await fetchAndImport({ id: src.id, name: src.name || pl.name }, {
         signal: refresh.ctrl.signal,
         onProgress: (read, total) => { refresh.status = `Nummers ophalen… ${read} van ${total}`; if (alive) drawHeadKeep(); },
       });
@@ -232,7 +233,7 @@ export function render(root, { params, navigate }) {
       if (!res.error) { toast(refresh.status, { ms: 3000 }); enrich.prioritise(id); }
     } catch (e) {
       if (!alive || e?.code === 'aborted') return;
-      refresh.status = src.kind === 'spotify' ? spl.errorMessage(e) : deezerMessage(e);
+      refresh.status = spl.errorMessage(e);
     } finally {
       refresh.busy = false;
     }

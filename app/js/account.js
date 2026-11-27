@@ -336,7 +336,7 @@ async function settle(remote, { tries = 3 } = {}) {
     let data = m.remote;
     if (m.remoteChanged) {
       const delta = deltaSaves();
-      // format: this app knows the playlist format of 2026-11 (2000 songs, Deezer, ISRC ...): the
+      // format: this app knows the playlist format of 2026-11 (2000 songs, ISRC, yearChecked ...): the
       // server lets only such an app overwrite playlists that need it (DATA_FORMAT in accounts.mjs)
       const body = delta ? { rev, data: deltaData(m.remote, rem.data), delta: true, format: DATA_FORMAT } : { rev, data: m.remote, format: DATA_FORMAT };
       lastSent = { at: Date.now(), bytes: JSON.stringify(body).length };

@@ -6,9 +6,11 @@
 //   4. send every song to the room as soon as it is ready (mix-add), not all at the end.
 // Progress is kept in localStorage, so a reload (or the Spotify login) goes on where it was,
 // and after a server restart the songs are sent again. Withdraw = mix-clear.
-// The other way in, "Kies een playlist" (public Deezer playlists, no login), is mix-lists.js:
-// it lives inside this object (api.lists), so the screens keep one mix object per room. A phone
-// takes part one way at a time: favourites or playlists (one withdraw takes out either).
+// The other way in, "Kies een playlist", is mix-lists.js: it lives inside this object
+// (api.lists), so the screens keep one mix object per room. A phone takes part one way at a
+// time: favourites or playlists (one withdraw takes out either). It needs a `listProvider`
+// (where the lists come from, see mix-lists.js) and a server with the 'mix-lists' feature;
+// the app passes no provider yet, so only the favourites are offered.
 import * as spotify from '../spotify.js';
 import * as top from '../spotify-top.js';
 import { appleMatch } from '../apple-match.js';
@@ -17,6 +19,7 @@ import { createListShare, forgetMixLists } from './mix-lists.js';
 import {
   pickTopSelection, contributionTrack, TOP_POOL, DEFAULT_RANGE, DEFAULT_SHARE_COUNT, SHARE_COUNTS, validRange, MIX_PER_MESSAGE,
 } from './mix.js';
+import { MIX_LISTS_FEATURE } from './server-protocol.js';
 
 /** { code, member, range, count, tracks (sent), todo (still to look up), skipped, at } */
 export const SHARE_KEY = 'timetunesr.mixShare.v1';
@@ -51,8 +54,9 @@ export function sharePrefs() {
  * session: the room session (server-session.js) with mixAdd(tracks), mixClear(), online.
  * memberId(): this phone's id in the room. returnHash: where Spotify sends us back to.
  * onChange(): redraw. inLobby(): is the room in the lobby (the playlists are only checked then).
+ * listProvider: the lists for "Kies een playlist" (mix-lists.js), or null (not offered).
  */
-export function createMixShare({ code, memberId, session, returnHash, onChange, inLobby = () => true }) {
+export function createMixShare({ code, memberId, session, returnHash, onChange, inLobby = () => true, listProvider = null }) {
   let alive = true;
   let ctrl = null;
   let lastSend = 0;
@@ -153,13 +157,13 @@ export function createMixShare({ code, memberId, session, returnHash, onChange, 
     lookUp(pickTopSelection(list, st.count));
   }
 
-  const lists = createListShare({ code, session, onChange: () => emit(), inLobby });
+  const lists = createListShare({ code, session, provider: listProvider, onChange: () => emit(), inLobby });
   const api = {
     get state() { return st; },
     /** "Kies een playlist" (mix-lists.js). */
     lists,
-    /** Does the room server take songs from playlists (feature 'mix-playlists')? */
-    listsOffered() { return !!session.supports?.('mix-playlists') || lists.active(); },
+    /** Is "Kies een playlist" offered: a provider here and a server that takes such songs ('mix-lists')? */
+    listsOffered() { return (lists.available() && !!session.supports?.(MIX_LISTS_FEATURE)) || lists.active(); },
     /** Which way this phone takes part: 'lists' | 'top' | null (not yet). */
     mode() {
       if (lists.active()) return 'lists';

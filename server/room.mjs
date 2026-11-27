@@ -62,10 +62,11 @@ const SPECTATOR = '!spectator';
 export function migrateState(state) {
   if (!state || typeof state !== 'object') return null;
   if (!state.mix || typeof state.mix !== 'object' || Array.isArray(state.mix)) state.mix = {};
-  // the mix takes Spotify favourites only: songs a v3-10 phone added from a public playlist
-  // (no Spotify id) go, a contribution left without songs goes too
+  // songs stored by a v3-10 server lose their deezerId (no Deezer any more): a song with a
+  // Spotify id or an ISRC stays (it was checked when it came in), one with only a Deezer id goes,
+  // and so does a contribution left without songs
   state.mix = Object.fromEntries(Object.entries(state.mix)
-    .map(([mid, c]) => [mid, { ...c, tracks: Array.isArray(c?.tracks) ? c.tracks.map(cleanMixTrack).filter(Boolean) : [] }])
+    .map(([mid, c]) => [mid, { ...c, tracks: Array.isArray(c?.tracks) ? c.tracks.map((t) => cleanMixTrack({ ...t, checked: true })).filter(Boolean) : [] }])
     .filter(([, c]) => c.tracks.length));
   if (!state.away || typeof state.away !== 'object' || Array.isArray(state.away)) state.away = {};
   // a Discobingo game stored before "Exact jaar" (protocol 4) goes back to the lobby (G.migrateRoom)
