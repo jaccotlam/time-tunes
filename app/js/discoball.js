@@ -28,7 +28,7 @@ const MAX_GLINTS = 72;
 const PULSE_MS = 950;
 
 const DEFAULT_CATEGORIES = [
-  { key: 'decade', label: 'Decennium', color: '#4fb3ff' },
+  { key: 'exact', label: 'Exact jaar', color: '#4fb3ff' },
   { key: 'artist', label: 'Artiest / band', color: '#ff5fa8' },
   { key: 'year', label: 'Jaartal (±2)', color: '#ffc649' },
   { key: 'title', label: 'Titel', color: '#2ed3c0' },

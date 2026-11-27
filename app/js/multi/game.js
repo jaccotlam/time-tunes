@@ -21,8 +21,9 @@ import {
 } from './quiz.js';
 import {
   CATEGORY_KEYS, CENTER_KEY, CELLS, DISCO_MIN_SONGS, categoryOf, uniqueDiscoCard, discoSignature, freshMarks,
-  stampedCount, reachedGoal, goalCells, openSquares, bestSquare, lateMarks, decadeOf, decadeLabel, decadesFor,
-  yearRight, drawCategory, freshBag, normalizeWin, isValidCard, CENTER, WINS, squaresToGo,
+  stampedCount, reachedGoal, goalCells, openSquares, bestSquare, lateMarks,
+  yearRight, exactRight, drawCategory, freshBag, normalizeWin, isValidCard, CENTER, WINS, squaresToGo,
+  nextGoals, AUTO_REVEAL_MS, SPIN_MS, OLD_CATEGORY_KEYS,
 } from './disco.js';
 import { orderSongs } from './order.js';
 import { isAvatar, avatarFor, avatarOf, JOKER_EVERY, JOKER_CAP, freshStats, cleanStats, discoAwards } from './party.js';
@@ -78,7 +79,9 @@ export function normalizeSettings(s = {}) {
     size: SIZES.includes(Number(s.size)) ? Number(s.size) : DEFAULT_SIZE,
     goal: Math.max(MIN_GOAL, Math.min(MAX_GOAL, Math.round(Number(s.goal) || DEFAULT_GOAL))),
     ...normalizeQuizSettings(s),
-    win: normalizeWin(s.win), // Discobingo: "Winnen met" 1 lijn / 2 lijnen / volle kaart
+    win: normalizeWin(s.win), // Discobingo: "Eerste bingo bij" 1 lijn / 2 lijnen / volle kaart (the first goal)
+    // Discobingo: everybody answered -> the reveal by itself after AUTO_REVEAL_MS (default on)
+    autoReveal: s.autoReveal !== false,
     // where the songs come from: the leader's own deck, or the "Mix van de groep" (room server only)
     music: s.music === 'mix' ? 'mix' : 'deck',
   };
@@ -154,7 +157,7 @@ export function removePlayer(room, id) {
     g.prev = drop(g.prev);
     g.results = drop(g.results);
     g.roundWinners = (g.roundWinners || []).filter((x) => x !== id);
-    if (g.disco) g.disco = { ...g.disco, choices: drop(g.disco.choices), times: drop(g.disco.times) };
+    if (g.disco) g.disco = { ...g.disco, choices: drop(g.disco.choices), times: drop(g.disco.times), placed: drop(g.disco.placed) };
     g.winners = (g.winners || []).filter((x) => x !== id);
     if (g.winLines) g.winLines = drop(g.winLines);
     next.game = g;
@@ -213,11 +216,13 @@ export function startGame(room, { cards, seed = Date.now(), now = Date.now(), po
   };
   if (kind === 'disco') {
     game.disco = {
-      win: room.settings.win,
-      decades: decadesFor(valid.map((c) => c.year)),
+      win: room.settings.win, // the goal that counts now; a bingo may raise it (continueGame)
+      stages: [], // goals already won: [{ win, winners: [ids], round }]
       ...freshBag(),
       cat: null, spunAt: null, choices: {},
       times: {}, seq: 0, judged: 0, fastest: null,
+      placed: {}, placeSeq: 0, // the order in which chips were laid this round (who called bingo first)
+      autoAt: null, hold: false, // the automatic reveal (server time) and "Wacht nog" for this round
     };
   }
   return startRound({ ...room, game, phase: 'answering' }, { now });
@@ -244,7 +249,10 @@ export function startRound(room, { now = Date.now() } = {}) {
 function spinBall(g, now) {
   const usable = (cat) => Object.values(g.per).some((s) => openSquares(s.card, s.marks, cat).length > 0);
   const { cat, state } = drawCategory(g.disco, g.seed, usable);
-  return { ...g.disco, bag: state.bag, last: state.last, fills: state.fills, drawn: state.drawn, cat, spunAt: now, choices: {}, times: {}, fastest: null };
+  return {
+    ...g.disco, bag: state.bag, last: state.last, fills: state.fills, drawn: state.drawn, cat, spunAt: now, choices: {}, times: {}, fastest: null,
+    placed: {}, placeSeq: 0, autoAt: null, hold: false,
+  };
 }
 
 /**
@@ -352,16 +360,11 @@ export function normalizeAnswer(room, pid, answer) {
 
 const cleanText = (v) => String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, MAX_TEXT);
 
-/** Discobingo: {pass: true}, or by the round's category {decade}, {guess} (a year) or {text}. */
+/** Discobingo: {pass: true}, or by the round's category {guess} (a year: Jaartal and Exact jaar) or {text}. */
 function normalizeDiscoAnswer(g, a) {
   if (a.pass === true) return { pass: true };
   const cat = g.disco.cat;
-  if (cat === 'decade') {
-    const decade = Number(a.decade);
-    if (!g.disco.decades.includes(decade)) throw new GameError('answer', 'Kies een decennium.');
-    return { decade };
-  }
-  if (cat === 'year') {
+  if (cat === 'year' || cat === 'exact') {
     const guess = parseYearGuess(a.guess);
     if (guess == null) throw new GameError('answer', 'Vul een jaartal in (vier cijfers).');
     return { guess };
@@ -441,7 +444,8 @@ function judgeDisco(game, song, answer) {
   const cat = game.disco.cat;
   let auto;
   const r = { cat };
-  if (cat === 'decade') { r.decade = answer.decade; auto = decadeOf(song.year) === answer.decade ? 'right' : 'wrong'; }
+  // Exact jaar: the machine decides, never a doubt (no margin at all)
+  if (cat === 'exact') { r.guess = answer.guess; auto = exactRight(answer.guess, song.year) ? 'right' : 'wrong'; }
   else if (cat === 'year') { r.guess = answer.guess; auto = yearRight(answer.guess, song.year) ? 'right' : 'wrong'; }
   else {
     r.text = answer.text;
@@ -500,10 +504,20 @@ function applyDisco(room) {
   for (const id of Object.keys(g.prev)) {
     const o = discoOutcome(g, id, fastest);
     per[id] = o.state;
-    if (o.stamped != null && reachedGoal(o.state.marks, g.disco.win)) { roundWinners.push(id); winLines[id] = goalCells(o.state.marks, g.disco.win); }
+    // Bingo stop: this round's chip brought the player to the goal that counts now (also right
+    // after continueGame raised it: a chip that made 2 lines at once is then the next bingo).
+    // A card that already met the goal before this round never counts again.
+    if (reachedGoal(o.state.marks, g.disco.win) && !reachedGoal(g.prev[id].marks, g.disco.win)) { roundWinners.push(id); winLines[id] = goalCells(o.state.marks, g.disco.win); }
   }
+  // the first chip that made bingo first (the tv shows that one at once and adds the others)
+  const placed = isObj(g.disco.placed) ? g.disco.placed : {};
+  const at = (id) => (Number.isFinite(own(placed, id)) ? placed[id] : 0);
+  roundWinners.sort((a, b) => at(a) - at(b));
   return { ...room, game: { ...g, per, roundWinners, winLines, disco: { ...g.disco, fastest } } };
 }
+
+/** Discobingo: is the game in a bingo stop (revealed, and somebody meets the goal that counts now)? */
+export const inBingoStop = (room) => room?.game?.kind === 'disco' && room.phase === 'revealed' && (room.game.roundWinners || []).length > 0;
 
 /**
  * Discobingo: one player's round, from the snapshot `g.prev[id]`. Right: the streak grows and
@@ -656,6 +670,8 @@ export function stampSquare(room, pid, index, { joker = false } = {}) {
   if (!r) throw new GameError('answer', 'Je doet niet mee aan dit spel.');
   if (r.verdict === 'doubt') throw new GameError('doubt', 'De spelleider kijkt nog naar je antwoord.');
   if (!r.correct) throw new GameError('answer', 'Alleen met een goed antwoord mag je een vakje afstempelen.');
+  // a chip that made bingo is final (only the leader's verdict can still undo it, see judgeResult)
+  if ((g.roundWinners || []).includes(pid)) throw new GameError('final', 'Je fiche maakte bingo: die ligt vast.');
   const choices = { ...g.disco.choices };
   if (index == null) delete choices[pid];
   else {
@@ -667,7 +683,9 @@ export function stampSquare(room, pid, index, { joker = false } = {}) {
     }
     choices[pid] = at;
   }
-  return applyResults({ ...room, game: { ...g, disco: { ...g.disco, choices } } });
+  const placeSeq = (g.disco.placeSeq || 0) + 1;
+  const placed = { ...(isObj(g.disco.placed) ? g.disco.placed : {}), [pid]: placeSeq };
+  return applyResults({ ...room, game: { ...g, disco: { ...g.disco, choices, placed, placeSeq } } });
 }
 
 /** Discobingo: players whose verdict the host still has to give. */
@@ -679,24 +697,145 @@ export const stillChoosing = (game) => (game?.kind === 'disco' && game.results
   ? Object.keys(game.results).filter((id) => game.results[id]?.correct && !Number.isInteger(own(game.disco.choices, id)) && choosableSquares(game, id).length)
   : []);
 
-/** After a reveal: to the winner screen when somebody won this round, otherwise the next song. */
+/**
+ * After a reveal: the next song (Bingo / Tijdlijn: the winner screen when somebody won this
+ * round). Discobingo: a bingo stop has to be decided first (continueGame / finishGame); the
+ * right answers without a chosen square get the best square automatically (the only moment
+ * the app places a chip for somebody), and when that makes bingo the game stops there.
+ */
 export function nextRound(room, { now = Date.now() } = {}) {
   if (room.phase !== 'revealed') throw new GameError('phase', 'Onthul eerst het nummer.');
-  let g = room.game;
+  const g = room.game;
   if (g.kind === 'quiz') return startQuizRound(room, now);
   if (g.kind === 'disco') {
-    const open = undecided(g);
-    if (open.length) throw new GameError('doubt', open.length === 1 ? 'Beslis eerst over het twijfelgeval.' : `Beslis eerst over de ${open.length} twijfelgevallen.`);
-    // right answers without a chosen square: the best square, automatically
-    const choices = { ...g.disco.choices };
-    for (const id of stillChoosing(g)) choices[id] = bestSquare(g.prev[id].card, g.prev[id].marks, g.disco.cat, g.disco.win);
-    room = applyResults({ ...room, game: { ...g, disco: { ...g.disco, choices } } });
-    g = room.game;
+    if (inBingoStop(room)) throw new GameError('bingo', 'Bingo! Kies eerst: doorgaan of stoppen.');
+    const next = autoPlace(room);
+    if (inBingoStop(next)) return next; // an automatic chip made bingo: the game stops here
+    return startRound(next, { now });
   }
   if (g.roundWinners.length) {
     return { ...room, phase: 'won', game: { ...g, winners: g.roundWinners.slice(), endedBy: 'goal' } };
   }
   return startRound(room, { now });
+}
+
+/** Discobingo: refuse while doubts are open; then the best square for everybody who still chooses. */
+function autoPlace(room) {
+  const g = room.game;
+  const open = undecided(g);
+  if (open.length) throw new GameError('doubt', open.length === 1 ? 'Beslis eerst over het twijfelgeval.' : `Beslis eerst over de ${open.length} twijfelgevallen.`);
+  const left = stillChoosing(g);
+  if (!left.length) return room;
+  const choices = { ...g.disco.choices };
+  const placed = { ...(isObj(g.disco.placed) ? g.disco.placed : {}) };
+  let placeSeq = g.disco.placeSeq || 0;
+  for (const id of left) {
+    choices[id] = bestSquare(g.prev[id].card, g.prev[id].marks, g.disco.cat, g.disco.win);
+    placed[id] = ++placeSeq;
+  }
+  return applyResults({ ...room, game: { ...g, disco: { ...g.disco, choices, placed, placeSeq } } });
+}
+
+/** Discobingo: the stage just won ({ win, winners, round }), for the list of stages. */
+const stageOf = (g) => ({ win: g.disco.win, winners: g.roundWinners.slice(), round: g.round });
+
+/**
+ * Discobingo, on a bingo stop: go on for a higher goal (`win`: 'line2' after 1 line, 'full'
+ * after 1 or 2 lines). Cards and chips stay; the stage is recorded ("1 lijn: Anouk"). Who
+ * still chooses gets the best square (as at the next round); when somebody then meets the
+ * new goal, that is the next bingo stop at once, otherwise the next song starts.
+ */
+export function continueGame(room, win, { now = Date.now() } = {}) {
+  const g = room.game;
+  if (g?.kind !== 'disco') throw new GameError('answer', 'Dit kan alleen bij Discobingo.');
+  if (!inBingoStop(room)) throw new GameError('phase', 'Er is geen bingo om op door te gaan.');
+  if (!nextGoals(g.disco.win).includes(win)) throw new GameError('answer', g.disco.win === 'full' ? 'Na een volle kaart is het spel uit.' : 'Kies 2 lijnen of een volle kaart.');
+  const open = undecided(g);
+  if (open.length) throw new GameError('doubt', open.length === 1 ? 'Beslis eerst over het twijfelgeval.' : `Beslis eerst over de ${open.length} twijfelgevallen.`);
+  const stages = [...(Array.isArray(g.disco.stages) ? g.disco.stages : []), stageOf(g)];
+  let next = applyResults({ ...room, game: { ...g, disco: { ...g.disco, win, stages } } });
+  next = autoPlace(next);
+  if (inBingoStop(next)) return next;
+  return startRound(next, { now });
+}
+
+/**
+ * Discobingo, on a bingo stop: stop, to the prize ceremony. Who still chooses gets the best
+ * square first (it may make them a winner of this bingo too); the winners are everybody who
+ * won a stage, in order.
+ */
+export function finishGame(room) {
+  if (room.game?.kind !== 'disco') throw new GameError('answer', 'Dit kan alleen bij Discobingo.');
+  if (!inBingoStop(room)) throw new GameError('phase', 'Er is geen bingo: het spel loopt nog.');
+  const next = autoPlace(room);
+  const g = next.game;
+  const stages = [...(Array.isArray(g.disco.stages) ? g.disco.stages : []), stageOf(g)];
+  const winners = [...new Set(stages.flatMap((s) => s.winners))].filter((id) => own(g.per, id));
+  return { ...next, phase: 'won', game: { ...g, winners, endedBy: 'goal', disco: { ...g.disco, stages } } };
+}
+
+/* ---------- Discobingo: the automatic reveal ---------- */
+
+/**
+ * Everybody who can answer has answered: the online players who take part (`online`
+ * {id: true}; the same "everybody" as "x van y hebben geantwoord"), at least one of them.
+ * Off when the lobby setting is off or the leader tapped "Wacht nog" this round.
+ */
+export function autoRevealDue(room, online = {}) {
+  const g = room?.game;
+  if (g?.kind !== 'disco' || room.phase !== 'answering' || room.settings?.autoReveal === false || g.disco?.hold) return false;
+  const here = Object.keys(g.per).filter((id) => own(online, id));
+  return here.length > 0 && here.every((id) => own(g.answers, id));
+}
+
+/**
+ * Start or stop the shared countdown: `disco.autoAt` = the server time of the automatic reveal
+ * (AUTO_REVEAL_MS after everybody answered, never before the ball has landed). Kept while the
+ * condition holds (a changed answer restarts nothing); cleared as soon as it does not.
+ */
+export function armAutoReveal(room, now, online = {}) {
+  const g = room?.game;
+  if (g?.kind !== 'disco' || !g.disco) return room;
+  const due = autoRevealDue(room, online);
+  const cur = Number.isFinite(g.disco.autoAt) ? g.disco.autoAt : null;
+  if (due && cur == null) {
+    const landed = (Number(g.disco.spunAt) || 0) + SPIN_MS;
+    return { ...room, game: { ...g, disco: { ...g.disco, autoAt: Math.max(now, landed) + AUTO_REVEAL_MS } } };
+  }
+  if (!due && cur != null) return { ...room, game: { ...g, disco: { ...g.disco, autoAt: null } } };
+  return room;
+}
+
+/** Is the automatic reveal of the running round due now? */
+export const autoRevealNow = (room, now, online = {}) => autoRevealDue(room, online) && Number.isFinite(room.game.disco.autoAt) && now >= room.game.disco.autoAt;
+
+/** "Wacht nog": no automatic reveal in this round any more (the leader reveals by hand). */
+export function holdAutoReveal(room) {
+  const g = room.game;
+  if (g?.kind !== 'disco' || room.phase !== 'answering') throw new GameError('phase', 'Er loopt geen vraag.');
+  if (g.disco.hold) return room;
+  return { ...room, game: { ...g, disco: { ...g.disco, hold: true, autoAt: null } } };
+}
+
+/** When the server must look at the room again for the automatic reveal, or null. */
+export function discoNextEvent(room) {
+  const g = room?.game;
+  return g?.kind === 'disco' && room.phase === 'answering' && Number.isFinite(g.disco?.autoAt) ? g.disco.autoAt : null;
+}
+
+/**
+ * A room stored before "Exact jaar" replaced "Decennium" (cards, the bag or the round with a
+ * 'decade'): a game in progress can not go on with the new rules, so it goes back to the lobby
+ * (players, settings and the room itself stay). Anything else comes back unchanged.
+ */
+export function migrateRoom(room) {
+  const g = room?.game;
+  if (!g || g.kind !== 'disco' || !isObj(g.disco)) return room;
+  const old = (k) => OLD_CATEGORY_KEYS.includes(k);
+  const cards = [...Object.values(isObj(g.per) ? g.per : {}), ...Object.values(isObj(g.prev) ? g.prev : {})];
+  const stale = old(g.disco.cat) || old(g.disco.last) || (Array.isArray(g.disco.bag) && g.disco.bag.some(old))
+    || cards.some((s) => Array.isArray(s?.card) && s.card.some(old));
+  return stale ? { ...room, phase: 'lobby', game: null } : room;
 }
 
 export function scoreOf(game, pid) {
@@ -853,8 +992,7 @@ export function describeAnswer(game, pid, answer, { forOwner = true } = {}) {
   if (answer.pass) return 'gepast';
   if (game.kind === 'quiz') return answer.choice != null ? `${LETTERS[answer.choice]}: ${game.quiz?.q?.options?.[answer.choice] ?? '?'}` : 'geen antwoord';
   if (game.kind === 'disco') {
-    if (answer.decade != null) return decadeLabel(answer.decade).label;
-    if (answer.guess != null) return `Jaartal: ${answer.guess}`;
+    if (answer.guess != null) return `${game.disco?.cat === 'exact' ? 'Exact jaar' : 'Jaartal'}: ${answer.guess}`;
     const cat = categoryOf(game.disco?.cat);
     return answer.text != null ? `${cat ? cat.short : 'Antwoord'}: “${answer.text}”` : '?';
   }
@@ -878,7 +1016,8 @@ const isObj = (o) => !!o && typeof o === 'object' && !Array.isArray(o);
  */
 function isValidDisco(r, g) {
   const d = g.disco;
-  if (!isObj(d) || !WINS.includes(d.win) || !Array.isArray(d.decades) || !d.decades.every(Number.isInteger)) return false;
+  if (!isObj(d) || !WINS.includes(d.win)) return false;
+  if (d.stages != null && !(Array.isArray(d.stages) && d.stages.every((x) => isObj(x) && WINS.includes(x.win) && Array.isArray(x.winners)))) return false;
   if (!Array.isArray(d.bag) || !d.bag.every((k) => CATEGORY_KEYS.includes(k))) return false;
   if ((r.phase === 'answering' || r.phase === 'revealed') && !CATEGORY_KEYS.includes(d.cat)) return false;
   const ids = new Set(r.players.map((p) => p.id));

@@ -1,14 +1,14 @@
 /* TimeTunesr "Samen spelen": Discobingo (the disco ball, the 5×5 card, the answer forms, the regie). */
 :root {
   /* mirror of CATEGORIES in js/multi/disco.js (room-disco.js sets them from there at start-up) */
-  --cat-decade: #4fb3ff;
+  --cat-exact: #4fb3ff;
   --cat-artist: #ff5fa8;
   --cat-year: #ffc649;
   --cat-title: #2ed3c0;
   /* dark ink on every category colour: contrast 6.7:1 (pink) up to 11:1 (yellow) */
   --cat-ink: #170b24;
 }
-.cat-decade { --c: var(--cat-decade); }
+.cat-exact { --c: var(--cat-exact); }
 .cat-artist { --c: var(--cat-artist); }
 .cat-year { --c: var(--cat-year); }
 .cat-title { --c: var(--cat-title); }
@@ -26,7 +26,7 @@
 .room-disco-opt .size-box { min-height: 76px; }
 .room-disco-opt .size-box b {
   font-size: 1.55rem; color: var(--mustard);
-  background: linear-gradient(90deg, var(--cat-decade), var(--cat-artist) 38%, var(--cat-year) 66%, var(--cat-title));
+  background: linear-gradient(90deg, var(--cat-exact), var(--cat-artist) 38%, var(--cat-year) 66%, var(--cat-title));
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
 }
 .room-disco-opt input:disabled + .size-box { opacity: .5; }
@@ -149,19 +149,6 @@ button.dq:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 
 /* ---------- answer forms ---------- */
 .disco-answer .ra-state { border-left: 5px solid var(--c); }
-.disco-decades { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.disco-dec {
-  min-height: 64px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0;
-  border-radius: 16px; border: 2px solid var(--line); background: rgba(0, 0, 0, .22); color: var(--text);
-  font: inherit; cursor: pointer; touch-action: manipulation;
-}
-.disco-dec b { font-family: var(--font-display); font-size: 1.3rem; line-height: 1.1; }
-.disco-dec small { color: var(--muted); font-size: .8rem; }
-.disco-dec:hover { border-color: rgba(79, 179, 255, .6); }
-.disco-dec:focus-visible { outline: 3px solid var(--cat-decade); outline-offset: 2px; }
-.disco-dec.is-on { border-color: var(--cat-decade); background: var(--cat-decade); color: var(--cat-ink); }
-.disco-dec.is-on small { color: var(--cat-ink); }
-.disco-dec:disabled { opacity: .6; cursor: default; }
 .disco-field { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); }
 .disco-field label { font-weight: 700; }
 .disco-field input {
@@ -187,7 +174,7 @@ button.dq:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .disco-bingo {
   margin: 0; text-align: center; font-family: var(--font-display); font-weight: 900; line-height: 1; letter-spacing: .04em;
   font-size: clamp(3.4rem, 19vw, 5.5rem);
-  background: linear-gradient(90deg, var(--cat-decade), var(--cat-artist), var(--cat-year), var(--cat-title));
+  background: linear-gradient(90deg, var(--cat-exact), var(--cat-artist), var(--cat-year), var(--cat-title));
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: var(--mustard);
   animation: disco-bingo .7s cubic-bezier(.2, 1.6, .4, 1);
 }
@@ -260,7 +247,7 @@ button.dq:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .dp-bingo { color: var(--cat-ink) !important; background: var(--mustard); border-radius: 999px; padding: 0 8px; font-size: .85rem !important; margin-right: 4px; }
 .dp-almost { color: var(--mustard); font-style: normal; font-weight: 800; }
 .dp-bar { grid-area: bar; height: 6px; border-radius: 999px; background: rgba(0, 0, 0, .35); overflow: hidden; }
-.dp-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--cat-decade), var(--cat-artist), var(--cat-year), var(--cat-title)); }
+.dp-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--cat-exact), var(--cat-artist), var(--cat-year), var(--cat-title)); }
 
 /* ---------- the spelleider's screen ---------- */
 .disco-host, .disco-host-show, .disco-host-ctl { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -327,3 +314,60 @@ button.dq:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 /* rules screen */
 .rule .disco-legend { display: grid; padding: 0; margin: 2px 0 12px; }
 .rule-disco ol + p { margin-top: 10px; }
+
+/* ---------- round 3: the automatic reveal, chips, the bingo stop ---------- */
+/* the shared countdown: a thin bar and a quiet line, never a big number */
+.disco-auto { display: flex; flex-direction: column; gap: 5px; min-width: 0; color: var(--muted); font-size: .92rem; }
+.disco-auto-bar { display: block; height: 4px; border-radius: 4px; background: rgba(255, 255, 255, .12); overflow: hidden; }
+.disco-auto-bar i { display: block; height: 100%; border-radius: inherit; transform-origin: left center; transition: transform .25s linear;
+  background: linear-gradient(90deg, var(--cat-exact), var(--cat-artist), var(--cat-year), var(--cat-title)); }
+.disco-auto-text b { color: var(--text); font-variant-numeric: tabular-nums; }
+.disco-auto-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.disco-auto-row .disco-auto { flex: 1; }
+.disco-auto-held { margin: 0 0 8px; text-align: center; }
+
+/* who has laid a chip */
+.disco-chips { margin: 10px 0 4px; display: flex; flex-direction: column; gap: 8px; }
+.disco-chips-sum { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 12px; border-radius: 12px; font-weight: 800;
+  background: rgba(255, 198, 73, .12); border: 1px solid rgba(255, 198, 73, .45); }
+.disco-chips-sum small { font-weight: 600; color: var(--muted); }
+.disco-chips-sum.is-all { background: rgba(61, 220, 143, .14); border-color: rgba(61, 220, 143, .6); color: var(--good); }
+.disco-chips-sum.is-all .ico { width: 1.2em; height: 1.2em; flex: none; }
+.disco-chips-sum.is-none { background: transparent; border-color: var(--line); color: var(--muted); font-weight: 600; }
+.disco-chips-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--mustard); flex: none; animation: disco-dot 1.2s ease-in-out infinite; }
+@keyframes disco-dot { 50% { opacity: .35; transform: scale(.8); } }
+.disco-chips-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.dc { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 10px; background: var(--surface); min-width: 0; }
+.dc-av { flex: none; }
+.dc-name { flex: 1; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dc-state { flex: none; font-size: .88rem; font-weight: 700; }
+.dc.is-placed .dc-state { color: var(--good); }
+.dc.is-choosing .dc-state { color: var(--mustard); }
+.dc.is-away { opacity: .7; }
+.dc.is-away .dc-state, .dc.is-doubt .dc-state { color: var(--muted); }
+
+/* the confirmation before going on without everybody's chip */
+.disco-confirm-wrap { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 16px; background: rgba(10, 4, 20, .62); }
+.disco-confirm { width: min(440px, 100%); padding: 20px; border-radius: 18px; background: var(--bg-2); border: 1px solid var(--line); box-shadow: 0 24px 60px rgba(0, 0, 0, .5); }
+.disco-confirm-h { margin: 0 0 8px; font-size: 1.2rem; }
+.disco-confirm p { margin: 0 0 16px; line-height: 1.45; }
+.disco-confirm-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+.disco-confirm-actions .btn { flex: 1 1 140px; }
+
+/* the bingo stop on the leader's screen */
+.disco-stop { position: relative; text-align: center; padding: 14px 12px 16px; margin-bottom: 12px; border-radius: 20px;
+  background: radial-gradient(120% 90% at 50% 0%, rgba(255, 198, 73, .22), rgba(255, 95, 168, .1) 60%, transparent); border: 2px solid rgba(255, 198, 73, .55); }
+.disco-stop-word { margin: 0; font-family: var(--font-display); font-size: clamp(2.6rem, 9vw, 4.2rem); line-height: 1; letter-spacing: .04em;
+  background: linear-gradient(90deg, var(--cat-exact), var(--cat-artist), var(--cat-year), var(--cat-title)); -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: disco-stop-pop .7s cubic-bezier(.2, 1.6, .4, 1) both; }
+@keyframes disco-stop-pop { from { transform: scale(.4); opacity: 0; } }
+.disco-stop-who { margin: 6px 0 2px; font-size: 1.35rem; }
+.disco-stop-sub { margin: 0 0 10px; color: var(--muted); }
+.disco-stop-cards { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+.disco-stop-card { margin: 0; width: min(220px, 100%); }
+.disco-stop-card figcaption { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 6px; font-weight: 800; }
+.disco-choices { display: flex; flex-direction: column; gap: 8px; }
+.disco-stages { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.disco-stages li { display: inline-flex; gap: 6px; align-items: baseline; padding: 4px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-size: .92rem; }
+.disco-stages b { color: var(--mustard); }
+@media (prefers-reduced-motion: reduce) { .disco-stop-word, .disco-chips-dot { animation: none; } .disco-auto-bar i { transition: none; } }

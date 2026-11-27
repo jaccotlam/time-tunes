@@ -60,11 +60,11 @@ async function back(core, code, id, token) {
 }
 function rightAnswer(view, song) {
   const cat = view.game.disco.cat;
-  return cat === 'decade' ? { decade: Math.floor(song.year / 10) * 10 } : cat === 'year' ? { guess: song.year } : { text: cat === 'artist' ? song.artist : song.title };
+  return cat === 'exact' || cat === 'year' ? { guess: song.year } : { text: cat === 'artist' ? song.artist : song.title };
 }
 const wrongAnswer = (view) => {
   const d = view.game.disco;
-  return d.cat === 'decade' ? { pass: true } : d.cat === 'year' ? { guess: 1800 + 1 } : { text: 'Zzzqqq onzin' };
+  return d.cat === 'exact' ? { pass: true } : d.cat === 'year' ? { guess: 1800 + 1 } : { text: 'Zzzqqq onzin' };
 };
 const seatOf = (hub, id) => JSON.stringify(hub.state.room.game.per[id]);
 const onlineIn = (p, id) => p.view().players.find((x) => x.id === id)?.online;
@@ -209,6 +209,8 @@ test('Discobingo: weg op het winnaarsscherm; volgende spel krijgt ook hij een ka
     await flush();
     host.send({ t: 'next' });
     await flush();
+    // the automatic chip made bingo: the game stops; the leader ends it (the prize ceremony)
+    if (host.view().game?.disco?.bingo) { host.send({ t: 'finish' }); await flush(); }
   }
   assert.equal(host.view().phase, 'won');
   const seat = seatOf(hub, 'playerC1');

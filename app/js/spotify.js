@@ -482,6 +482,30 @@ export function seek(positionMs) {
   return api('/me/player/seek', { method: 'PUT', query: { position_ms: Math.max(0, Math.round(positionMs)), ...(d ? { device_id: d.id } : {}) } });
 }
 
+/**
+ * The volume of the device that plays (or the chosen one): { volume, supports } or null.
+ * `supports` is Spotify's supports_volume: only then may fade.js change it.
+ */
+export async function volumeInfo() {
+  const j = await api('/me/player');
+  let d = j?.device || null;
+  if (!d) {
+    const id = getDevice()?.id;
+    const list = (await api('/me/player/devices'))?.devices || [];
+    d = list.find((x) => x?.id === id) || list.find((x) => x?.is_active) || null;
+  }
+  if (!d) return null;
+  const volume = Number(d.volume_percent);
+  return { volume, supports: d.supports_volume !== false && Number.isFinite(volume) };
+}
+
+/** Set the device volume (0-100). Used for the fades of fade.js, which always puts the user's volume back. */
+export function setVolume(percent, { keepalive = false } = {}) {
+  const d = getDevice();
+  const v = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+  return api('/me/player/volume', { method: 'PUT', query: { volume_percent: v, ...(d ? { device_id: d.id } : {}) }, keepalive });
+}
+
 /** Current playback: { isPlaying, progressMs, uri, durationMs, deviceId } or null. */
 export async function playbackState() {
   const j = await api('/me/player');

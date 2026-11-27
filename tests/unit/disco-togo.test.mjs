@@ -89,7 +89,7 @@ function rightAnswer(room) {
   const g = room.game;
   const song = g.songs[g.current];
   const cat = g.disco.cat;
-  return cat === 'decade' ? { decade: Math.floor(song.year / 10) * 10 } : cat === 'year' ? { guess: song.year } : { text: cat === 'artist' ? song.artist : song.title };
+  return cat === 'exact' || cat === 'year' ? { guess: song.year } : { text: cat === 'artist' ? song.artist : song.title };
 }
 
 test('afwezig: een goed antwoord zonder gekozen vakje wordt bij "volgende" automatisch geplaatst', () => {

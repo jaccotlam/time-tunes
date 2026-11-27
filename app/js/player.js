@@ -233,6 +233,9 @@ export function stop() {
   update({ status: 'idle', error: null, cardId: null, currentTime: 0, device: null, devices: [] });
 }
 
+/** The <audio> element of the fragments (fade.js fades its volume). */
+export const audioElement = () => el();
+
 /** Skip Spotify for the current card and play its 30-second preview instead. */
 export function usePreview() {
   if (!currentCard) return Promise.resolve(false);

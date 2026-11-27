@@ -2,7 +2,7 @@
 // Used by room-host.js (the spelleider's screen, also on a laptop / tv) and room-player.js
 // (the phones). Everything works on a view from multi/protocol.js (viewFor); the rules live
 // in multi/disco.js and game.js, the 3D ball in discoball.js.
-import { CATEGORIES, categoryOf, CENTER, WIN_LABELS, DISCO_MIN_SONGS, decadeLabel } from '../multi/disco.js';
+import { CATEGORIES, categoryOf, CENTER, WIN_LABELS, DISCO_MIN_SONGS } from '../multi/disco.js';
 import { parseYearGuess } from '../bingo.js';
 import { createDiscoBall } from '../discoball.js';
 import { icons, esc } from '../ui.js';
@@ -17,8 +17,8 @@ if (typeof document !== 'undefined') {
 /* ---------- the four figures (own drawings: a filled mass plus 2.2 strokes on a 24 grid) ---------- */
 const S = 'fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"';
 const FIGURES = {
-  // calendar: rings, header bar, two days
-  decade: `<rect x="3.5" y="5" width="17" height="15.5" rx="2.6" ${S}/><path d="M3.5 10.2h17M8 3v4M16 3v4" ${S}/><rect x="6.6" y="12.9" width="4.2" height="4.4" rx="1" fill="currentColor"/><rect x="13.2" y="12.9" width="4.2" height="4.4" rx="1" fill="currentColor"/>`,
+  // a target with a dart in the bull's eye: exactly right (Jaartal ±2 is the hourglass)
+  exact: `<circle cx="10.6" cy="13.4" r="7.9" ${S}/><circle cx="10.6" cy="13.4" r="3.9" ${S}/><circle cx="10.6" cy="13.4" r="1.5" fill="currentColor"/><path d="M11.4 12.6l8-8" ${S}/><path d="M16.2 3.4l3.4.9.9 3.4-2.1.2-.2-2.2-2.2-.2z" fill="currentColor"/>`,
   // microphone on a stand
   artist: `<rect x="8.6" y="2.6" width="6.8" height="11.6" rx="3.4" fill="currentColor"/><path d="M5.4 10.8a6.6 6.6 0 0 0 13.2 0M12 17.4v3.6M8.4 21h7.2" ${S}/>`,
   // hourglass with sand running down
@@ -35,11 +35,21 @@ export function catIcon(key, cls = '') {
 
 /** What to do for a category, in one line. */
 export const INSTRUCTION = {
-  decade: 'Kies het decennium',
+  exact: 'Typ het jaartal: precies goed',
   artist: 'Typ de artiest of band',
   year: 'Typ het jaartal: 2 jaar ernaast mag',
   title: 'Typ de titel van het nummer',
 };
+/** The one question per category (the two year categories say plainly how exact it must be). */
+export const QUESTION = {
+  exact: 'In welk jaar kwam dit uit? Precies goed!',
+  artist: 'Wie zingt of speelt dit?',
+  year: 'Uit welk jaar? 2 jaar ernaast mag',
+  title: 'Hoe heet dit nummer?',
+};
+/** The hint under the question. */
+export const HINT = { exact: 'Precies het jaar: geen marge', year: '2 jaar ernaast mag', artist: 'Kleine typefouten mogen', title: 'Kleine typefouten mogen' };
+const yearCat = (cat) => cat === 'year' || cat === 'exact';
 const catName = (key) => categoryOf(key)?.label || '';
 const catShort = (key) => categoryOf(key)?.short || '';
 
@@ -56,18 +66,23 @@ export function legendHtml(testid = 'room-disco-legend') {
 }
 
 export const winText = (win) => (win === 'full' ? 'een volle kaart' : win === 'line2' ? '2 lijnen' : '1 lijn');
+/** "1 lijn", "2 lijnen", "Volle kaart" (labels of the stages). */
+export const winLabel = (win) => WIN_LABELS[win] || WIN_LABELS.line1;
+/** "Anouk", "Anouk en Bram", "Anouk, Bram en Cas". */
+export const namesText = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} en ${names[names.length - 1]}`);
 
 /* ---------- lobby ---------- */
 
-/** "Winnen met", the explanation and the legend; `need` = songs still missing (own music). */
+/** "Eerste bingo bij", the automatic reveal, the explanation and the legend; `need` = songs still missing (own music). */
 export function discoLobbyHtml(settings, { have = 0, mix = false } = {}) {
   const missing = Math.max(0, DISCO_MIN_SONGS - have);
   return `<div class="room-sub room-disco-settings" data-testid="room-disco-settings">
     <p class="disco-explain" data-testid="room-disco-explain">Een discobal kiest per nummer de vraag. Goed? Dan stempel je zelf een vakje van die kleur af op je 5×5-kaart.</p>
     ${legendHtml()}
-    <p class="room-label">Winnen met</p>
-    <div class="seg room-seg" role="radiogroup" aria-label="Winnen met">${Object.keys(WIN_LABELS).map((w) => `<label class="seg-opt"><input type="radio" name="win" value="${w}" ${settings.win === w ? 'checked' : ''} data-testid="room-disco-win-${w}"><span>${esc(WIN_LABELS[w])}</span></label>`).join('')}</div>
-    <p class="muted small">Een lijn is een rij, kolom of diagonaal; de ster in het midden telt mee.</p>
+    <p class="room-label">Eerste bingo bij</p>
+    <div class="seg room-seg" role="radiogroup" aria-label="Eerste bingo bij">${Object.keys(WIN_LABELS).map((w) => `<label class="seg-opt"><input type="radio" name="win" value="${w}" ${settings.win === w ? 'checked' : ''} data-testid="room-disco-win-${w}"><span>${esc(WIN_LABELS[w])}</span></label>`).join('')}</div>
+    <p class="muted small">Een lijn is een rij, kolom of diagonaal; de ster in het midden telt mee. Bij een bingo stopt het spel; jij kiest dan: doorgaan voor 2 lijnen of een volle kaart, of stoppen.</p>
+    <label class="check-row room-disco-auto"><input type="checkbox" name="autoReveal" ${settings.autoReveal !== false ? 'checked' : ''} data-testid="room-disco-auto"><span>Automatisch naar het resultaat als iedereen geantwoord heeft <small class="muted">(na 4 seconden)</small></span></label>
     ${!mix && missing ? `<p class="warn small" data-testid="room-disco-need" data-missing="${missing}">Voor Discobingo zijn minstens ${DISCO_MIN_SONGS} nummers nodig: nog ${missing} (${have} van ${DISCO_MIN_SONGS}). Kies een grotere playlist of de Mix van de groep.</p>` : ''}
   </div>`;
 }
@@ -124,6 +139,8 @@ export function createDiscoStage(el, { big = false, onLand = null } = {}) {
       if (!d?.cat) return;
       const key = `${round}:${d.cat}`;
       root.dataset.phase = phase;
+      // revealed while the ball still spun (an early Onthul): it lands at once
+      if (key === doneFor && phase !== 'answering' && !landed) { clear(); ball.show(d.cat); setLanded(d.cat, { quiet: true }); return; }
       if (key === doneFor) return;
       doneFor = key;
       landed = false;
@@ -196,11 +213,10 @@ export function cardStatsHtml(mine, win) {
 
 /* ---------- answering ---------- */
 
-/** Literal text of an answer ({decade} | {guess} | {text} | {pass}). */
+/** Literal text of an answer ({guess} | {text} | {pass}). */
 export function answerWords(a) {
   if (!a) return '';
   if (a.pass) return 'Weet ik niet';
-  if (a.decade != null) return `${decadeLabel(a.decade).label} (${decadeLabel(a.decade).sub})`;
   if (a.guess != null) return String(a.guess);
   if (a.text != null) return `“${a.text}”`;
   return '';
@@ -211,7 +227,7 @@ const cleanTyped = (v) => String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, '').
 
 export function proposedAnswer(cat, value) {
   const v = String(value ?? '');
-  if (cat === 'year') { const g = parseYearGuess(v); return g == null ? null : { guess: g }; }
+  if (yearCat(cat)) { const g = parseYearGuess(v); return g == null ? null : { guess: g }; }
   if (cat === 'artist' || cat === 'title') { const t = cleanTyped(v); return t ? { text: t } : null; }
   return null;
 }
@@ -227,8 +243,8 @@ export function discoAnswerHtml(view, local, { sending = false } = {}) {
   const d = g.disco;
   const cat = d.cat;
   const sent = g.answer || null;
-  const typed = cat === 'year' || cat === 'artist' || cat === 'title';
-  const value = local.value != null ? local.value : sent && !sent.pass ? (cat === 'year' ? String(sent.guess ?? '') : sent.text ?? '') : '';
+  const typed = yearCat(cat) || cat === 'artist' || cat === 'title';
+  const value = local.value != null ? local.value : sent && !sent.pass ? (yearCat(cat) ? String(sent.guess ?? '') : sent.text ?? '') : '';
   const proposed = typed ? proposedAnswer(cat, value) : null;
   const changed = !!proposed && !sameAnswer(proposed, sent);
   const state = sent?.pass && !changed ? 'pass' : sent && !changed ? 'locked' : changed ? 'changed' : 'none';
@@ -237,21 +253,16 @@ export function discoAnswerHtml(view, local, { sending = false } = {}) {
       : state === 'changed' && sent && !sent.pass ? `Nog vastgezet: ${esc(answerWords(sent))}. <span class="muted">Tik op <em>Wijzig mijn antwoord</em> om dit te vervangen.</span>`
         : esc(INSTRUCTION[cat] || '');
   let body = '';
-  if (cat === 'decade') {
-    body = `<div class="disco-decades" role="group" aria-label="Decennium">${d.decades.map((x) => {
-      const on = sent?.decade === x.decade;
-      return `<button type="button" class="disco-dec${on ? ' is-on' : ''}" data-action="disco-decade" data-decade="${x.decade}" data-testid="disco-decade-${x.decade}" aria-pressed="${on}" ${sending ? 'disabled' : ''}><b>${esc(x.label)}</b><small>${esc(x.sub)}</small></button>`;
-    }).join('')}</div>`;
-  } else if (cat === 'year') {
-    body = `<div class="disco-field"><label for="disco-year">Uit welk jaar is dit nummer?</label>
+  if (yearCat(cat)) {
+    body = `<div class="disco-field"><label for="disco-year">${esc(QUESTION[cat])}</label>
       <input id="disco-year" class="disco-year-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="bv. 1987" value="${esc(value)}" data-testid="disco-year-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done">
-      <small class="muted" data-testid="disco-hint">2 jaar ernaast mag.</small></div>`;
+      <small class="muted" data-testid="disco-hint">${esc(HINT[cat])}.</small></div>`;
   } else {
     body = `<div class="disco-field"><label for="disco-text">${cat === 'artist' ? 'Wie zingt of speelt dit?' : 'Hoe heet dit nummer?'}</label>
       <input id="disco-text" type="text" maxlength="60" placeholder="${cat === 'artist' ? 'Typ de artiest of band' : 'Typ de titel'}" value="${esc(value)}" data-testid="disco-text-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done">
       <small class="muted" data-testid="disco-hint">Kleine typefouten zijn niet erg. Twijfelgeval? Dan beslist de spelleider.</small></div>`;
   }
-  const lockLabel = sending ? 'Versturen…' : state === 'locked' ? 'Vastgezet' : !proposed ? (cat === 'year' ? 'Vul een jaartal in' : 'Typ je antwoord') : sent && !sent.pass ? 'Wijzig mijn antwoord' : 'Zet vast';
+  const lockLabel = sending ? 'Versturen…' : state === 'locked' ? 'Vastgezet' : !proposed ? (yearCat(cat) ? 'Vul een jaartal in' : 'Typ je antwoord') : sent && !sent.pass ? 'Wijzig mijn antwoord' : 'Zet vast';
   return `<div class="ra disco-answer cat-${esc(cat)}" data-testid="disco-answer" data-cat="${esc(cat)}">
     <p class="ra-state" data-testid="disco-answer-state" data-state="${state}">${state === 'locked' ? icons.check : ''}<span>${stateText}</span></p>
     ${body}
@@ -279,7 +290,7 @@ export function discoController({ getView, send, refresh, sending = () => false 
     key() {
       const v = getView();
       const g = v?.game;
-      return JSON.stringify([v?.phase, g?.round, g?.disco?.cat, g?.disco?.decades, g?.answer, !!g?.mine, g?.mine?.marks]);
+      return JSON.stringify([v?.phase, g?.round, g?.disco?.cat, g?.answer, !!g?.mine, g?.mine?.marks]);
     },
     onClick(e) {
       const a = e.target.closest('[data-action]');
@@ -287,7 +298,6 @@ export function discoController({ getView, send, refresh, sending = () => false 
       const v = getView();
       if (v?.game?.kind !== 'disco' || v.phase !== 'answering' || !v.game.mine) return false;
       const act = a.dataset.action;
-      if (act === 'disco-decade') { if (!a.disabled) send({ decade: Number(a.dataset.decade) }); return true; }
       if (act === 'disco-pass') { local = { value: null }; send({ pass: true }); return true; }
       if (act === 'disco-lock') {
         const ans = proposedAnswer(v.game.disco.cat, local.value ?? '');
@@ -345,7 +355,6 @@ const VERDICT = {
 export function resultWords(r) {
   if (r.none) return 'geen antwoord';
   if (r.pass) return 'weet ik niet';
-  if (r.decade != null) return decadeLabel(r.decade).label;
   if (r.guess != null) return String(r.guess);
   if (r.text != null) return `“${r.text}”`;
   return r.label || '';
@@ -382,13 +391,178 @@ function chooseHtml(view) {
   const r = g.reveal?.mine;
   if (!r?.correct || d.waitingForHost) return '';
   const cat = d.cat;
-  if (g.mine.bingo) {
+  if (isWinner(view)) {
     return `<p class="disco-bingo" data-testid="disco-bingo" role="status">BINGO!</p>
-      <p class="disco-choose" data-testid="disco-choose" data-state="bingo">Je hebt ${esc(winText(d.win))}. ${d.choice != null && d.choosable.length > 1 ? 'Verplaatsen kan nog.' : ''} De spelleider gaat zo naar de uitslag.</p>`;
+      <p class="disco-choose" data-testid="disco-choose" data-state="bingo">Je hebt ${esc(winText(d.win))}. Je fiche ligt vast; het spel staat stil tot de spelleider kiest.</p>`;
   }
   if (d.noSquare) return `<p class="disco-choose is-none" data-testid="disco-choose" data-state="nosquare">${catChip(cat)} <span>Geen open vakje van deze kleur meer: je hoeft niets af te stempelen.</span></p>`;
-  if (d.choice == null) return `<p class="disco-choose is-todo" data-testid="disco-choose" data-state="choose"><span>Kies een</span> ${catChip(cat)} <span>vakje op je kaart</span></p>`;
-  return `<p class="disco-choose is-done" data-testid="disco-choose" data-state="chosen">${icons.check}<span>Afgestempeld. Liever een ander ${esc(catShort(cat).toLowerCase())}-vakje? Tik erop.</span></p>`;
+  if (d.choice == null) return `<p class="disco-choose is-todo" data-testid="disco-choose" data-state="choose"><span>Kies zelf een</span> ${catChip(cat)} <span>vakje op je kaart</span></p>`;
+  return `<p class="disco-choose is-done" data-testid="disco-choose" data-state="chosen">${icons.check}<span>Fiche gelegd. Liever een ander ${esc(catShort(cat).toLowerCase())}-vakje? Tik erop.</span></p>`;
+}
+
+/** Is the viewer one of the winners of the running bingo stop? */
+export const isWinner = (view) => !!view.you && !!(view.game?.disco?.bingo?.winners || []).some((w) => w.id === view.you.id);
+
+/* ---------- chips after the reveal: who has laid one ---------- */
+
+const CHIP_WORD = { placed: 'fiche gelegd ✓', choosing: 'kiest nog…', away: 'weg: wordt automatisch gelegd', doubt: 'spelleider beslist' };
+
+/**
+ * Who may still lay a chip, from view.game.disco.chips: { total, waiting (names of online
+ * players still choosing), away, doubts, all (nobody online left to wait for) }.
+ */
+export function chipSummary(d) {
+  const chips = d?.chips || [];
+  const waiting = chips.filter((c) => c.state === 'choosing').map((c) => c.name);
+  const away = chips.filter((c) => c.state === 'away').map((c) => c.name);
+  const doubts = chips.filter((c) => c.state === 'doubt').length;
+  return { total: chips.length, waiting, away, doubts, all: waiting.length === 0 && doubts === 0 };
+}
+
+/** The summary line: green "Iedereen heeft een fiche gelegd" or "2 van 5 kiezen nog". */
+export function chipSummaryHtml(d, { testid = 'disco-chips-summary' } = {}) {
+  const s = chipSummary(d);
+  if (!s.total) return `<p class="disco-chips-sum is-none" data-testid="${testid}" data-waiting="0" data-total="0">Niemand hoeft deze ronde een fiche te leggen.</p>`;
+  const text = s.waiting.length
+    ? `${s.waiting.length} van ${s.total} ${s.waiting.length === 1 ? 'kiest' : 'kiezen'} nog`
+    : s.doubts ? (s.doubts === 1 ? 'Nog één twijfelgeval' : `Nog ${s.doubts} twijfelgevallen`) : 'Iedereen heeft een fiche gelegd';
+  const extra = s.away.length && !s.waiting.length ? ` <small>(${esc(namesText(s.away))} ${s.away.length === 1 ? 'is' : 'zijn'} weg: automatisch)</small>` : '';
+  return `<p class="disco-chips-sum${s.all ? ' is-all' : ' is-wait'}" data-testid="${testid}" data-waiting="${s.waiting.length}" data-total="${s.total}" role="status">${s.all ? icons.check : '<span class="disco-chips-dot" aria-hidden="true"></span>'}<span>${esc(text)}${extra}</span></p>`;
+}
+
+/** For the leader: everybody who lays a chip this round with their state, and the summary. */
+export function chipsHtml(view, { testid = 'disco-chips' } = {}) {
+  const d = view.game.disco;
+  const chips = d.chips || [];
+  if (!chips.length) return '';
+  return `<section class="disco-chips" data-testid="${testid}" aria-label="Fiches">
+    ${chipSummaryHtml(d)}
+    <ul class="disco-chips-list">${chips.map((c) => `<li class="dc is-${esc(c.state)}" data-testid="disco-chip-row" data-name="${esc(c.name)}" data-state="${esc(c.state)}">
+      ${avatarHtml(c, { cls: 'dc-av' })}<span class="dc-name">${esc(c.name)}</span><span class="dc-state">${esc(CHIP_WORD[c.state] || '')}</span>
+    </li>`).join('')}</ul>
+  </section>`;
+}
+
+/**
+ * The confirmation before going on while online players still choose (an in-app dialog,
+ * keyboard friendly: focus on "Wacht nog", Escape = Wacht nog, Tab stays inside).
+ * Resolves true for "Toch doorgaan".
+ */
+export function confirmGoOn(names, { host = document.body } = {}) {
+  return new Promise((resolve) => {
+    const prev = document.activeElement;
+    const wrap = document.createElement('div');
+    wrap.className = 'disco-confirm-wrap';
+    wrap.innerHTML = `<div class="disco-confirm" role="alertdialog" aria-modal="true" aria-labelledby="disco-confirm-t" aria-describedby="disco-confirm-d" data-testid="disco-confirm">
+      <h2 id="disco-confirm-t" class="disco-confirm-h">Nog niet iedereen heeft een fiche gelegd</h2>
+      <p id="disco-confirm-d" data-testid="disco-confirm-text">${esc(namesText(names))} ${names.length === 1 ? 'heeft' : 'hebben'} nog geen fiche gelegd. Toch doorgaan? ${names.length === 1 ? 'Die wordt' : 'Hun fiche wordt'} dan automatisch gelegd.</p>
+      <div class="disco-confirm-actions">
+        <button type="button" class="btn btn-primary" data-testid="disco-confirm-wait">Wacht nog</button>
+        <button type="button" class="btn btn-ghost" data-testid="disco-confirm-go">Toch doorgaan</button>
+      </div>
+    </div>`;
+    const done = (ok) => {
+      wrap.remove();
+      document.removeEventListener('keydown', onKey, true);
+      try { prev?.focus?.({ preventScroll: true }); } catch { /* gone */ }
+      resolve(ok);
+    };
+    const btns = () => [...wrap.querySelectorAll('button')];
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(false); return; }
+      if (e.key === 'Tab') {
+        const [a, b] = btns();
+        e.preventDefault();
+        (document.activeElement === a ? b : a).focus();
+      }
+    };
+    wrap.addEventListener('click', (e) => {
+      if (e.target === wrap) { done(false); return; }
+      const t = e.target.closest('button');
+      if (t) done(t.dataset.testid === 'disco-confirm-go');
+    });
+    document.addEventListener('keydown', onKey, true);
+    host.appendChild(wrap);
+    btns()[0].focus();
+  });
+}
+
+/* ---------- the automatic reveal: a subtle shared countdown ---------- */
+
+/** "Resultaat over 4…" with a thin bar, timed by the server's autoAt (tickAutoTimers keeps it running). */
+export function autoTimerHtml(d, now, { testid = 'disco-auto' } = {}) {
+  if (!Number.isFinite(d?.autoAt)) return '';
+  const ms = d.autoMs || 4000;
+  const left = Math.max(0, d.autoAt - now);
+  return `<div class="disco-auto" data-testid="${testid}" data-auto-at="${d.autoAt}" data-auto-ms="${ms}" role="timer" aria-live="off">
+    <span class="disco-auto-bar" aria-hidden="true"><i style="transform:scaleX(${(left / ms).toFixed(3)})"></i></span>
+    <span class="disco-auto-text">${autoText(left)}</span>
+  </div>`;
+}
+const autoText = (left) => (left > 0 ? `Resultaat over <b>${Math.min(9, Math.ceil(left / 1000))}</b>…` : 'Resultaat…');
+
+/** Move every countdown in `root` on to `now` (server time). */
+export function tickAutoTimers(root, now) {
+  for (const el of root.querySelectorAll('[data-auto-at]')) {
+    const at = Number(el.dataset.autoAt);
+    const ms = Number(el.dataset.autoMs) || 4000;
+    const left = Math.max(0, at - now);
+    const bar = el.querySelector('.disco-auto-bar i');
+    if (bar) bar.style.transform = `scaleX(${(left / ms).toFixed(3)})`;
+    const t = el.querySelector('.disco-auto-text');
+    const html = autoText(left);
+    if (t && t.innerHTML !== html) t.innerHTML = html;
+  }
+}
+
+/* ---------- the bingo stop ---------- */
+
+/** A winner's card from view.game.disco.bingo.winners[] (the winning cells lit). */
+export function winnerCardHtml(w, { testid = 'disco-winner-card' } = {}) {
+  const stamped = w.marks.filter((m, i) => i !== CENTER && m != null).length;
+  return discoCardHtml({ card: w.card, marks: w.marks, goalCells: w.cells, stamped, lines: 0, bingo: true }, { testid, name: w.name });
+}
+
+/** "Anouk heeft 1 lijn" / "Anouk en Bram hebben 2 lijnen". */
+export function bingoWhoText(b) {
+  const names = (b?.winners || []).map((w) => w.name);
+  return `${namesText(names)} ${names.length === 1 ? 'heeft' : 'hebben'} ${winText(b?.win)}`;
+}
+
+/** The leader's bingo stop: who, which goal, their card(s), and what may still happen this round. */
+export function bingoStopHtml(view) {
+  const d = view.game.disco;
+  const b = d.bingo;
+  if (!b) return '';
+  return `<section class="disco-stop" data-testid="disco-bingo-stop" data-win="${esc(b.win)}" data-n="${b.winners.length}" role="status">
+    <p class="disco-stop-word" aria-hidden="true">BINGO!</p>
+    <h2 class="disco-stop-who" data-testid="disco-bingo-names">${esc(bingoWhoText(b))}!</h2>
+    <p class="disco-stop-sub">Het spel staat stil. ${b.next.length ? 'Kies hieronder: doorgaan of stoppen.' : 'De hele kaart is vol: naar de prijsuitreiking.'}</p>
+    <div class="disco-stop-cards">${b.winners.map((w, i) => `<figure class="disco-stop-card" data-testid="disco-bingo-winner" data-name="${esc(w.name)}">${winnerCardHtml(w, { testid: `disco-winner-card-${i}` })}<figcaption>${avatarHtml(w, { cls: 'dsc-av' })}<span>${esc(w.name)}</span></figcaption></figure>`).join('')}</div>
+  </section>`;
+}
+
+/** The leader's choices on a bingo stop (only those that make sense). */
+export function bingoChoicesHtml(view) {
+  const d = view.game.disco;
+  const b = d.bingo;
+  const doubts = (d.doubts || []).length;
+  if (doubts) {
+    return `<div class="sticky-cta"><button class="btn btn-primary btn-xl is-doubts" type="button" data-action="disco-doubts" data-testid="room-next" data-state="doubts" data-doubts="${doubts}">${icons.eye}<span>${esc(`Beslis eerst (${doubts})`)}</span></button></div>`;
+  }
+  const go = (win, label) => `<button class="btn btn-primary btn-xl" type="button" data-action="disco-continue" data-win="${win}" data-testid="disco-go-${win}">${icons.restart}<span>${esc(label)}</span></button>`;
+  return `<div class="sticky-cta disco-choices" data-testid="disco-bingo-choices">
+    ${b.next.includes('line2') ? go('line2', 'Ga door voor 2 lijnen') : ''}
+    ${b.next.includes('full') ? go('full', 'Ga door voor een volle kaart') : ''}
+    <button class="btn ${b.next.length ? 'btn-ghost' : 'btn-primary btn-xl'}" type="button" data-action="disco-finish" data-testid="disco-finish">${icons.trophy}<span>Stop: naar de prijsuitreiking</span></button>
+  </div>`;
+}
+
+/** The stages won so far ("1 lijn: Anouk · 2 lijnen: Bram"); empty before the first bingo. */
+export function stagesHtml(d, { testid = 'disco-stages' } = {}) {
+  const st = d?.stages || [];
+  if (!st.length) return '';
+  return `<ol class="disco-stages" data-testid="${testid}" aria-label="Gewonnen etappes">${st.map((s) => `<li data-win="${esc(s.win)}"><b>${esc(winLabel(s.win))}</b><span>${esc(namesText(s.names))}</span></li>`).join('')}</ol>`;
 }
 
 /** What everybody answered (the typed text too: part of the fun). */
@@ -421,7 +595,6 @@ export function regieHtml(view) {
   const doubts = rs.filter((r) => r.verdict === 'doubt');
   const others = rs.filter((r) => r.verdict !== 'doubt' && !r.none && !r.pass);
   const empty = rs.filter((r) => r.none || r.pass);
-  const pendingNames = (d.pending || []).map((id) => rs.find((r) => r.id === id)?.name).filter(Boolean);
   const doubtRow = (r) => `<li class="rg is-doubt" data-testid="disco-regie-row" data-row="${r.i}" data-id="${esc(r.id)}" data-name="${esc(r.name)}" data-verdict="doubt">
       <div class="rg-who"><b class="rg-name">${avatarHtml(r, { cls: 'rg-av' })}<span class="rg-name-t">${esc(r.name)}</span>${resultMarks(r)}</b><span class="rg-answer">${esc(resultWords(r))}</span></div>
       <div class="rg-judge">
@@ -448,9 +621,7 @@ export function regieHtml(view) {
     ${others.length ? `<ul class="regie-list" data-testid="disco-regie-list">${others.map(row).join('')}</ul>` : ''}
     ${empty.length ? `<p class="regie-empty muted small" data-testid="disco-regie-empty">${empty.map((r) => `${esc(r.name)} (${r.pass ? 'weet ik niet' : 'geen antwoord'})`).join(', ')}</p>` : ''}
     ${!rs.length ? '<p class="muted">Niemand deed mee deze ronde.</p>' : ''}
-    <p class="regie-pending small" data-testid="disco-pending" data-count="${pendingNames.length}">${pendingNames.length
-    ? `Kiest een vakje: <b>${pendingNames.map(esc).join(', ')}</b>. Tik je op <em>Draai de discobal</em>, dan kiest de app het beste vakje voor wie nog niet koos.`
-    : doubts.length ? '' : 'Iedereen met een goed antwoord heeft gestempeld.'}</p>
+    ${chipsHtml(view)}
     <p class="muted small">Tik op <em>Toch goed</em> of <em>Toch fout</em> om een oordeel om te draaien; dat kan tot de volgende ronde.</p>
   </section>`;
 }
@@ -472,16 +643,16 @@ export function discoProgressHtml(view, { testid = 'disco-progress' } = {}) {
 /** Round title on a phone. */
 export function discoRoundTitle(view) {
   const g = view.game;
-  return `<p class="room-round" data-testid="room-round"><b>Discobingo</b> · ronde ${g.round} · winnen met ${esc(winText(g.disco.win))}</p>`;
+  return `<p class="room-round" data-testid="room-round"><b>Discobingo</b> · ronde ${g.round} · doel: ${esc(winText(g.disco.win))}</p>`;
 }
 
-/** The main button after the reveal: draai / beslis eerst (n) / naar de uitslag. */
+/** The main button after the reveal: draai / beslis eerst (n) / nummers op (a bingo stop has its own choices). */
 export function nextButtonHtml(view, { left = 1 } = {}) {
   const d = view.game.disco;
+  if (d.bingo) return bingoChoicesHtml(view);
   const doubts = (d.doubts || []).length;
-  const won = (view.game.reveal?.roundWinners || []).length > 0 || (d.progress || []).some((p) => p.bingo);
-  const state = doubts ? 'doubts' : won ? 'won' : left ? 'spin' : 'pile';
-  const label = { doubts: `Beslis eerst (${doubts})`, won: 'Naar de uitslag', spin: 'Draai de discobal', pile: 'Nummers op: naar de uitslag' }[state];
+  const state = doubts ? 'doubts' : left ? 'spin' : 'pile';
+  const label = { doubts: `Beslis eerst (${doubts})`, spin: 'Draai de discobal', pile: 'Nummers op: naar de uitslag' }[state];
   const icon = state === 'doubts' ? icons.eye : state === 'spin' ? icons.restart : icons.trophy;
   return `<div class="sticky-cta">
     <button class="btn btn-primary btn-xl${state === 'doubts' ? ' is-doubts' : ''}" type="button" data-action="${state === 'doubts' ? 'disco-doubts' : 'next'}" data-testid="room-next" data-state="${state}" data-doubts="${doubts}">${icon}<span>${esc(label)}</span></button>
@@ -492,5 +663,7 @@ export function nextButtonHtml(view, { left = 1 } = {}) {
 export function discoWhy(view) {
   const g = view.game;
   if (g.endedBy === 'pile') return 'De nummers zijn op: wie de meeste vakjes heeft afgestempeld, wint.';
+  const st = g.disco?.stages || [];
+  if (st.length > 1) return st.map((s) => `${winLabel(s.win)}: ${namesText(s.names)}`).join(' · ');
   return g.disco?.win === 'full' ? 'Als eerste de hele kaart vol.' : `Als eerste ${winText(g.disco?.win)} vol.`;
 }

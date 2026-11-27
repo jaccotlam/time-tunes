@@ -72,11 +72,11 @@ export function render(root) {
         <p>Bingo met een discobal. Ieder speelt op een eigen telefoon. Iedereen heeft een eigen 5×5-kaart met vier soorten vakjes en een ster in het midden.</p>
         ${legendHtml('rules-disco-legend')}
         <ol>
-          <li>Per nummer draait de discobal en kiest de vraag: <em>decennium</em>, <em>artiest of band</em>, <em>jaartal</em> (2 jaar ernaast mag) of <em>titel</em>. Alle vier komen even vaak aan de beurt.</li>
-          <li>Pas als de bal stilstaat, begint de muziek. Iedereen antwoordt op zijn eigen telefoon; wijzigen mag tot de onthulling. Weet je het niet? Tik op <em>Weet ik niet</em>.</li>
+          <li>Per nummer draait de discobal en kiest de vraag: <em>exact jaar</em> (precies goed, geen marge), <em>artiest of band</em>, <em>jaartal</em> (2 jaar ernaast mag) of <em>titel</em>. Alle vier komen even vaak aan de beurt.</li>
+          <li>De muziek komt zacht op terwijl de bal draait. Iedereen antwoordt op zijn eigen telefoon; wijzigen mag tot de onthulling. Weet je het niet? Tik op <em>Weet ik niet</em>. Heeft iedereen geantwoord, dan volgt het resultaat vanzelf na 4 seconden (de spelleider kan ook meteen onthullen of <em>Wacht nog</em> kiezen).</li>
           <li>Een kleine typefout is gewoon goed. Twijfelgeval? Dan beslist de spelleider met <em>Goed</em> of <em>Fout</em>. Elk oordeel draait hij met één tik om.</li>
-          <li>Goed? Dan kies je zelf een open vakje van die kleur en stempel je het af. Verplaatsen mag tot de bal weer draait; wie niets kiest, krijgt het beste vakje.</li>
-          <li>Je wint met 1 lijn, 2 lijnen of een volle kaart; de spelleider kiest dat. Een lijn is een rij, kolom of diagonaal; de ster telt mee. Halen meerdere spelers het tegelijk, dan delen ze de winst.</li>
+          <li>Goed? Dan kies je zelf een open vakje van die kleur en leg je er je fiche op. Verplaatsen mag tot de bal weer draait. De spelleider ziet wie er nog kiest; gaat hij toch door, of ben je even weg, dan krijg je het beste vakje.</li>
+          <li>Bingo! Wie met zijn fiche het doel haalt (eerst 1 lijn, 2 lijnen of een volle kaart: de spelleider kiest dat), legt het spel meteen stil; dat fiche ligt vast. Wie die ronde ook goed had, mag zijn fiche nog leggen en wint mee. Daarna kiest de spelleider: doorgaan voor 2 lijnen of een volle kaart, of stoppen voor de prijsuitreiking. Een lijn is een rij, kolom of diagonaal; de ster telt mee.</li>
         </ol>
         <p>Discobingo werkt alleen met de kamerserver en heeft minstens 25 nummers nodig. Wie later instapt, krijgt een nieuwe kaart met evenveel gratis vakjes als de speler die er het minst heeft.</p>
       </section>

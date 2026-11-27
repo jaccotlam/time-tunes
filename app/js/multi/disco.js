@@ -10,7 +10,8 @@ import { YEAR_MARGIN } from '../bingo.js';
 
 /** The categories, in this order everywhere. `color` is the single source of truth (CSS mirrors it as `cssVar`). */
 export const CATEGORIES = [
-  { key: 'decade', label: 'Decennium', short: 'Decennium', color: '#4fb3ff', cssVar: '--cat-decade' },
+  // the two year categories must never be confused: other colour, figure, name and hint
+  { key: 'exact', label: 'Exact jaar', short: 'Exact jaar', color: '#4fb3ff', cssVar: '--cat-exact' },
   { key: 'artist', label: 'Artiest / band', short: 'Artiest', color: '#ff5fa8', cssVar: '--cat-artist' },
   { key: 'year', label: 'Jaartal (±2)', short: 'Jaartal', color: '#ffc649', cssVar: '--cat-year' },
   { key: 'title', label: 'Titel', short: 'Titel', color: '#2ed3c0', cssVar: '--cat-title' },
@@ -30,7 +31,7 @@ export const MAX_SAME_PER_LINE = 2;
 export const DISCO_MIN_SONGS = 25;
 /** How long the ball spins on the phones (ms); a phone that loads later than this skips the animation. */
 export const SPIN_MS = 4000;
-/** "Winnen met": 1 line (default), 2 lines, full card. */
+/** "Eerste bingo bij": 1 line (default), 2 lines, full card; after a bingo the leader may go on to a higher goal. */
 export const WINS = ['line1', 'line2', 'full'];
 export const DEFAULT_WIN = 'line1';
 export const WIN_LABELS = { line1: '1 lijn', line2: '2 lijnen', full: 'Volle kaart' };
@@ -51,6 +52,12 @@ export const LINES = (() => {
 const CELL_LINES = Array.from({ length: CELLS }, (_, i) => LINES.filter((l) => l.includes(i)));
 
 export const normalizeWin = (w) => (WINS.includes(w) ? w : DEFAULT_WIN);
+/** After a bingo on goal `win`: the goals the game may go on with (2 lines after 1, a full card after 1 or 2). */
+export const nextGoals = (win) => WINS.slice(WINS.indexOf(normalizeWin(win)) + 1);
+/** How long "everybody answered" waits before the reveal happens by itself (ms, server clock). */
+export const AUTO_REVEAL_MS = 4000;
+/** Keys of categories that no longer exist (a room stored before "Exact jaar" replaced "Decennium"). */
+export const OLD_CATEGORY_KEYS = ['decade'];
 
 /* ---------- card ---------- */
 
@@ -204,30 +211,12 @@ export function lateMarks(count, rand) {
   return marks;
 }
 
-/* ---------- decades and years ---------- */
+/* ---------- years ---------- */
 
-export const decadeOf = (year) => Math.floor(Number(year) / 10) * 10;
-
-/**
- * "Jaren 80", "Jaren 00"; the sub line "1980–1989". Before 1930 the short name would clash
- * with a later decade ("Jaren 00" = 1900 or 2000), so those get the years as label and no sub.
- */
-export function decadeLabel(decade) {
-  const d = Number(decade);
-  if (d < 1930) return { decade: d, label: `${d}–${d + 9}`, sub: '' };
-  return { decade: d, label: `Jaren ${String(d % 100).padStart(2, '0')}`, sub: `${d}–${d + 9}` };
-}
-
-/** The decades spanned by the songs of a game (from the oldest to the newest, none skipped). */
-export function decadesFor(years) {
-  const ys = (years || []).map(Number).filter(Number.isFinite);
-  if (!ys.length) return [];
-  const out = [];
-  for (let d = decadeOf(Math.min(...ys)); d <= decadeOf(Math.max(...ys)); d += 10) out.push(d);
-  return out;
-}
-
+/** Jaartal: 2 years either side is still right. */
 export const yearRight = (guess, year) => Number.isInteger(guess) && Math.abs(guess - Number(year)) <= YEAR_MARGIN;
+/** Exact jaar: the release year itself, no margin. */
+export const exactRight = (guess, year) => Number.isInteger(guess) && guess === Number(year);
 
 /* ---------- balanced choice of the category ---------- */
 

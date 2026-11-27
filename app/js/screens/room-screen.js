@@ -15,7 +15,10 @@ import {
   patch, qrSvg, roomLink, appBase, keepAwake, diagHtml, diagKey, diagVisible, confettiHtml, songHtml, gameName,
   quizQuestionHtml, quizRevealHtml, quizPodiumHtml, tickQuizClocks, quizSettingsText, standingsHtml, winnerHtml,
 } from './room-ui.js';
-import { createDiscoStage, catChip, catIcon, resultWords, winText } from './room-disco.js';
+import {
+  createDiscoStage, catChip, catIcon, resultWords, winText, chipSummary, chipSummaryHtml, autoTimerHtml, tickAutoTimers,
+  bingoWhoText, winnerCardHtml, stagesHtml,
+} from './room-disco.js';
 import { avatarOf } from '../multi/party.js';
 import { avatarHtml, resultMarks, streakMark, jokerMark, createFloatLayer, awardsListHtml, awardSpotHtml } from './party-ui.js';
 
@@ -53,10 +56,10 @@ function colorFor(nm) {
 const CEREMONY_WINNER_MS = 6000;
 const CEREMONY_AWARD_MS = 4800;
 
-/** What the settings of a game read like: "winnen met 1 lijn", "4×4", "doel 10 kaarten", "10 vragen, …". */
+/** What the settings of a game read like: "eerste bingo bij 1 lijn", "4×4", "doel 10 kaarten", "10 vragen, …". */
 function settingsText(s) {
   if (!s) return '';
-  if (s.game === 'disco') return `winnen met ${winText(s.win)}`;
+  if (s.game === 'disco') return `eerste bingo bij ${winText(s.win)}`;
   if (s.game === 'bingo') return `kaart van ${s.size}×${s.size}, eerst een volle rij`;
   if (s.game === 'quiz') return quizSettingsText(s);
   return `doel ${s.goal} kaarten op je tijdlijn`;
@@ -122,9 +125,8 @@ function discoAnswersHtml(v, { flash = true } = {}) {
   const g = v.game;
   const d = g.disco;
   const rs = g.reveal?.results || [];
-  // an away player with a right answer may still be listed as choosing: the host's next round places it
-  const away = new Set(v.players.filter((p) => !p.online).map((p) => p.id));
-  const pending = new Set((d.pending || []).filter((id) => !away.has(id)));
+  // the chip states as the leader sees them (an away player's chip is placed automatically)
+  const chip = new Map((d.chips || []).map((c) => [c.id, c.state]));
   const doubts = rs.filter((r) => verdictOf(r) === 'doubt').length;
   const rows = rs.map((r) => {
     const vd = verdictOf(r);
@@ -132,8 +134,9 @@ function discoAnswersHtml(v, { flash = true } = {}) {
     let stamp = '';
     if (vd === 'doubt') note = 'de spelleider beslist…';
     else if (vd === 'right') {
-      stamp = r.noSquare ? 'nosquare' : r.stamped != null ? 'stamped' : pending.has(r.id) ? 'choosing' : '';
-      note = { nosquare: 'geen vakje meer', stamped: 'afgestempeld', choosing: 'kiest een vakje…' }[stamp] || '';
+      const cs = chip.get(r.id);
+      stamp = r.noSquare && cs !== 'placed' ? 'nosquare' : cs === 'placed' || r.stamped != null ? 'stamped' : cs === 'choosing' ? 'choosing' : cs === 'away' ? 'away' : '';
+      note = { nosquare: 'geen vakje meer', stamped: 'fiche gelegd ✓', choosing: 'kiest nog…', away: 'weg: automatisch' }[stamp] || '';
     }
     const judged = r.overridden || (r.decided && r.auto === 'doubt');
     const icon = vd === 'right' ? icons.check : vd === 'wrong' ? icons.cross : vd === 'doubt' ? '?' : '–';
@@ -144,12 +147,27 @@ function discoAnswersHtml(v, { flash = true } = {}) {
       <span class="sr-verdict">${VERDICT_WORD[vd]}${judged ? ' <small>door de spelleider</small>' : ''}${note ? `<small class="sr-note">${esc(note)}</small>` : ''}</span>
     </li>`;
   }).join('');
-  const pendingNames = [...pending].map((id) => rs.find((r) => r.id === id)?.name).filter(Boolean);
+  const sum = chipSummary(d);
   return `<section class="sa${rs.length > 6 ? ' is-two' : ''}" data-testid="screen-results" data-doubts="${doubts}" data-n="${rs.length}">
     <h2 class="sa-h">Wie zat goed? ${catChip(d.cat, { short: true })}</h2>
     ${rs.length ? `<ul class="sa-list">${rows}</ul>` : '<p class="sa-empty">Niemand deed mee deze ronde.</p>'}
-    <p class="sa-foot" data-testid="screen-pending" data-count="${pendingNames.length}">${doubts ? `${icons.eye}<span>De spelleider beslist over ${doubts === 1 ? 'een twijfelgeval' : `${doubts} twijfelgevallen`}…</span>`
-    : pendingNames.length ? `<span>Kiest nog een vakje: ${namesList(pendingNames)}</span>` : rs.some((r) => verdictOf(r) === 'right') ? `${icons.check}<span>Iedereen met een goed antwoord heeft gestempeld.</span>` : ''}</p>
+    <div class="sa-foot" data-testid="screen-pending" data-count="${sum.waiting.length}">${doubts ? `<p class="disco-chips-sum">${icons.eye}<span>De spelleider beslist over ${doubts === 1 ? 'een twijfelgeval' : `${doubts} twijfelgevallen`}…</span></p>`
+    : sum.total ? `${chipSummaryHtml(d, { testid: 'screen-chips-summary' })}${sum.waiting.length ? `<p class="sa-wait">Kiest nog: ${namesList(sum.waiting)}</p>` : ''}` : ''}</div>
+  </section>`;
+}
+
+/** The bingo stop on the big screen: BINGO, who, the winning line(s) on their card, what comes next. */
+function bingoTvHtml(v) {
+  const d = v.game.disco;
+  const b = d.bingo;
+  const sum = chipSummary(d);
+  const nextText = b.next.length === 2 ? 'doorgaan voor 2 lijnen of een volle kaart, of stoppen' : b.next.length ? 'doorgaan voor een volle kaart, of stoppen' : 'naar de prijsuitreiking';
+  return `${confettiHtml()}<section class="sb" data-testid="screen-bingo" data-win="${esc(b.win)}" data-n="${b.winners.length}" role="status">
+    <p class="sb-word" aria-hidden="true">BINGO!</p>
+    <h2 class="sb-who" data-testid="screen-bingo-who">${esc(bingoWhoText(b))}!</h2>
+    <div class="sb-cards${b.winners.length > 1 ? ' is-more' : ''}">${b.winners.map((w, i) => `<figure class="sb-card" data-testid="screen-bingo-winner" data-name="${esc(w.name)}" style="--i:${i}">${winnerCardHtml(w, { testid: `screen-bingo-card-${i}` })}<figcaption>${avatarHtml(w, { cls: 'sb-av' })}<span>${esc(w.name)}</span></figcaption></figure>`).join('')}</div>
+    <p class="sb-next" data-testid="screen-bingo-next">Het spel staat stil. De spelleider kiest: ${esc(nextText)}.</p>
+    ${sum.waiting.length ? `<p class="sb-wait">Wie ook goed had, legt nog een fiche: ${namesList(sum.waiting)}</p>` : ''}
   </section>`;
 }
 
@@ -203,7 +221,7 @@ function titleHtml(v) {
   let rest = '';
   if (v.phase === 'won') rest = 'uitslag';
   else if (k === 'quiz') rest = `vraag ${g.round} van ${g.quiz?.total ?? '?'}`;
-  else if (k === 'disco') rest = `ronde ${g.round} · winnen met ${esc(winText(g.disco?.win))}`;
+  else if (k === 'disco') rest = `ronde ${g.round} · doel: ${esc(winText(g.disco?.win))}`;
   else if (k === 'bingo') rest = `ronde ${g.round} · ${g.size}×${g.size}`;
   else rest = `ronde ${g.round} · doel ${g.goal}`;
   return `<p class="s-title" data-testid="screen-game" data-game="${esc(k)}"><b class="s-title-game${k === 'disco' ? ' is-disco' : ''}">${esc(gameName(k))}</b><span>${rest}</span></p>`;
@@ -446,6 +464,7 @@ export function render(root, { params, navigate }) {
     if (v.phase === 'answering') return stage && !stage.landed ? 'spin' : 'listen';
     const k = `${v.game.round}:${d.cat}`;
     if (reveal.key !== k) reveal = { key: k, at: Date.now(), loaded: k === loadedKey };
+    if (d.bingo) return 'bingo'; // the game stops: BINGO on the big screen at once
     const doubts = (d.doubts || []).length;
     const bingo = (d.progress || []).some((p) => p.bingo) || (v.game.reveal?.roundWinners || []).length > 0;
     const reason = bingo ? 'bingo' : closeOnes(d).length ? 'close' : v.game.round % RANKING_EVERY === 0 ? 'round' : '';
@@ -576,8 +595,8 @@ export function render(root, { params, navigate }) {
     if (v.phase === 'answering') {
       region('song', '', () => '');
       region('after', '', () => '');
-      region('listen', JSON.stringify([moment, g.round, v.players.map((p) => [p.answered, p.playing, p.online])]), () => (moment === 'spin'
-        ? '' : `${listenHtml()}${answeredHtml(v)}`));
+      region('listen', JSON.stringify([moment, g.round, v.players.map((p) => [p.answered, p.playing, p.online]), g.disco.autoAt]), () => (moment === 'spin'
+        ? '' : `${listenHtml()}${answeredHtml(v)}${autoTimerHtml(g.disco, session.serverNow(), { testid: 'screen-auto' })}`));
       syncTiles(tiles, v.players, { game: true, burst: true });
       return;
     }
@@ -587,6 +606,7 @@ export function render(root, { params, navigate }) {
     // "⚡ Snelste" flashes once, when the answers of a round first appear (not on every later stamp)
     const fk = `${g.round}:${g.disco.cat}`;
     region('after', JSON.stringify([moment, g.reveal, g.disco]), () => {
+      if (moment === 'bingo') return bingoTvHtml(v);
       const flash = !reason && flashFor !== fk;
       if (!reason) flashFor = fk;
       return reason ? rankingHtml(v, { reason }) : discoAnswersHtml(v, { flash });
@@ -656,7 +676,7 @@ export function render(root, { params, navigate }) {
       const win = names.length ? winnerHtml(v) : '<div class="winner" data-testid="room-winner"><h2 class="winner-name" data-testid="room-winner-name">Het spel is afgelopen</h2></div>';
       const rank = g.kind === 'disco' ? rankingHtml(v, { reason: 'won', limit: 10 }) : `<section class="sa-stand" data-testid="screen-standings"><h2 class="sa-h">Eindstand</h2>${standingsHtml(v)}</section>`;
       return `<div class="sw-in${c ? ' has-cer' : ''}" data-testid="screen-winner" data-names="${esc(names.join('|'))}"${c ? ` data-step="${c.step}"` : ''}>
-        <div class="sw-hero">${g.kind === 'disco' && names.length && g.endedBy !== 'pile' ? '<p class="sw-bingo" aria-hidden="true">BINGO!</p>' : ''}${win}<p class="sw-next">Nog een potje? De spelleider start zo.</p></div>
+        <div class="sw-hero">${g.kind === 'disco' && names.length && g.endedBy !== 'pile' ? '<p class="sw-bingo" aria-hidden="true">BINGO!</p>' : ''}${win}${g.kind === 'disco' && (g.disco?.stages || []).length > 1 ? stagesHtml(g.disco, { testid: 'screen-stages' }) : ''}<p class="sw-next">Nog een potje? De spelleider start zo.</p></div>
         <div class="sw-rank">${rank}</div>
         ${c ? `<div class="sw-cer" data-testid="screen-ceremony" data-step="${c.step}" data-award="${c.idx}" data-n="${c.awards.length}"><div class="sw-cer-in"></div></div>` : ''}
       </div>`;
@@ -716,6 +736,7 @@ export function render(root, { params, navigate }) {
   }, 1000);
   const quizTicker = setInterval(() => {
     if (mode === 'quiz' && session.view?.phase === 'answering') tickQuizClocks(root, session.serverNow());
+    if (mode === 'disco' && session.view?.phase === 'answering') tickAutoTimers(root, session.serverNow());
   }, 250);
 
   window.__ttScreen = { get session() { return session; } };

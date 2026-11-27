@@ -210,7 +210,7 @@ export default async function run() {
     const dright = async () => {
       const { song } = await serverHost(DH);
       const cat = (await DP.evaluate(() => window.__ttRoom.session.view.game.disco.cat));
-      const ans = cat === 'decade' ? { decade: Math.floor(song.year / 10) * 10 } : cat === 'year' ? { guess: String(song.year) } : { text: cat === 'artist' ? song.artist : song.title };
+      const ans = cat === 'exact' || cat === 'year' ? { guess: String(song.year) } : { text: cat === 'artist' ? song.artist : song.title };
       await DP.evaluate((a) => window.__ttRoom.session.answer(a), ans); // no waiting for the ball: the server takes the answer
       await DP.waitForFunction(() => window.__ttRoom.session.view.game.answer != null);
     };
@@ -236,10 +236,10 @@ export default async function run() {
     assert(afterRestart.cat === before.cat && afterRestart.card.join() === before.card.join() && afterRestart.marks.join() === before.marks.join(), 'after the restart: same round, same category, same card, same stamp');
     await DH.waitForFunction(() => window.__ttHost.session.currentSong(), null, { timeout: 60000 });
     await dright();
-    await DH.locator('[data-testid="room-reveal"][data-ready="true"]').waitFor({ timeout: 15000 });
-    await DH.getByTestId('room-reveal').click();
-    await DP.waitForFunction(() => window.__ttRoom.session.view.phase === 'revealed' && window.__ttRoom.session.view.game.reveal.mine.verdict === 'right');
-    assert(true, 'discobingo on Cloudflare: round 2 survived the restart and was revealed');
+    // everybody answered: the Durable Object's alarm reveals by itself after the shared countdown
+    await DP.waitForFunction(() => Number.isFinite(window.__ttRoom.session.view.game.disco.autoAt), null, { timeout: 15000 });
+    await DP.waitForFunction(() => window.__ttRoom.session.view.phase === 'revealed' && window.__ttRoom.session.view.game.reveal.mine.verdict === 'right', null, { timeout: 30000 });
+    assert(true, 'discobingo on Cloudflare: round 2 survived the restart and was revealed by itself (the alarm), nobody tapped Onthul');
     assert(DH.errors.length === 0 && DP.errors.length === 0, `no page errors in discobingo (${[...DH.errors, ...DP.errors].join('; ')})`);
     // ---------- Mix van de groep: contributions survive a restart (Durable Object storage) ----------
     const mh = await mixPhone(browser, local, `${URL_}/`, ACCOUNTS.ilse, { seed: 7, token: `${PLAYBACK} ${TOP}` });

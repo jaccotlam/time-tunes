@@ -63,7 +63,8 @@ export function migrateState(state) {
   if (!state || typeof state !== 'object') return null;
   if (!state.mix || typeof state.mix !== 'object' || Array.isArray(state.mix)) state.mix = {};
   if (!state.away || typeof state.away !== 'object' || Array.isArray(state.away)) state.away = {};
-  if (state.room && typeof state.room === 'object') state.room = withSettings(state.room);
+  // a Discobingo game stored before "Exact jaar" (protocol 4) goes back to the lobby (G.migrateRoom)
+  if (state.room && typeof state.room === 'object') state.room = G.migrateRoom(withSettings(state.room));
   // the songs played in this room's earlier games (order.js): fresh songs come first in a new game
   state.played = cleanHistory(state.played);
   return state;
@@ -164,6 +165,8 @@ export class RoomHub {
       if (ok(this.state)) return { code: this.code, restored: false };
       throw Object.assign(new Error('taken'), { code: 'taken' });
     }
+    // an owner's backup of a Discobingo game from before "Exact jaar": the room comes back in the lobby
+    if (snap && typeof snap === 'object' && snap.room && typeof snap.room === 'object') snap = { ...snap, room: G.migrateRoom(snap.room) };
     if (!validSnapshot(snap, this.code) || !ok(snap)) throw Object.assign(new Error('bad snapshot'), { code: 'bad' });
     const t = this.now();
     const members = Object.fromEntries(Object.entries(snap.members).map(([k, m]) => [k, { th: m.th }]));
@@ -258,6 +261,31 @@ export class RoomHub {
     if (!quizRoundOver(s.room, this.now(), this.presence())) return false;
     s.room = G.reveal(s.room, { now: this.now() });
     return true;
+  }
+
+  /**
+   * Discobingo: start or stop the shared countdown to the automatic reveal (everybody online
+   * answered) and reveal when it has run out. The moment lives in the stored room
+   * (game.disco.autoAt), so the Node timer (wake) and the Cloudflare alarm (nextTick) both find
+   * it again after a restart or hibernation; reveal() only ever runs on a round still being
+   * answered, so it can not happen twice or for a round that has moved on. Returns: changed?
+   */
+  discoCheck() {
+    const s = this.state;
+    if (!s || s.room.game?.kind !== 'disco' || s.room.phase !== 'answering') return false;
+    const t = this.now();
+    const pres = this.presence();
+    let room = G.armAutoReveal(s.room, t, pres);
+    if (G.autoRevealNow(room, t, pres)) room = G.reveal(room, { now: t });
+    if (room === s.room) return false;
+    s.room = room;
+    return true;
+  }
+
+  /** The next moment the room needs a tick: the quiz clock or the automatic reveal (or null). */
+  nextEvent() {
+    const r = this.state?.room;
+    return quizNextEvent(r, QUIZ_START_FALLBACK_MS) ?? G.discoNextEvent(r);
   }
 
   /** A member went offline (left = tapped Verlaat): remember since when, for a full room (freeSeat). */
@@ -587,6 +615,16 @@ export class RoomHub {
         break;
       }
       case 'next': s.room = G.nextRound(r, { now: this.now() }); break;
+      // Discobingo: "Wacht nog" (no automatic reveal this round), and the bingo stop's choices
+      case 'hold':
+        if (!r.game || m.round !== r.game.round) return; // for an earlier round
+        s.room = G.holdAutoReveal(r);
+        break;
+      case 'continue':
+        if (typeof m.win !== 'string') throw new G.GameError('answer', 'Kies 2 lijnen of een volle kaart.');
+        s.room = G.continueGame(r, m.win, { now: this.now() });
+        break;
+      case 'finish': s.room = G.finishGame(r); break;
       case 'lobby': s.room = G.backToLobby(r); break;
       case 'remove': {
         const pid = typeof m.pid === 'string' ? m.pid : '';
@@ -738,10 +776,13 @@ export class RoomHub {
   // ---------- state to the phones ----------
   changed() {
     if (!this.state) return;
+    // Discobingo's countdown follows every change (an answer, somebody joining or leaving ...);
+    // inside a message it is part of the transaction
+    this.discoCheck();
     if (this.holding) { this.held = true; return; } // a message is being handled: see guarded()
     this.notePlayed();
     this.persist();
-    this.deps.wake?.(quizNextEvent(this.state.room, QUIZ_START_FALLBACK_MS));
+    this.deps.wake?.(this.nextEvent());
     this.refresh();
   }
 
@@ -882,7 +923,7 @@ export class RoomHub {
   maybeBackup(connId) {
     const s = this.state;
     const g = s.room.game;
-    const key = JSON.stringify([s.room.phase, g?.round, g?.seed, s.room.players.map((p) => p.id), s.room.removed.length, s.room.settings, s.leaderId, g?.results && Object.values(g.results).map((x) => x.verdict ?? x.correct), g?.disco?.choices]);
+    const key = JSON.stringify([s.room.phase, g?.round, g?.seed, s.room.players.map((p) => p.id), s.room.removed.length, s.room.settings, s.leaderId, g?.results && Object.values(g.results).map((x) => x.verdict ?? x.correct), g?.disco?.choices, g?.disco?.win, g?.disco?.stages?.length]);
     if (key === this.backupKey) return;
     this.backupKey = key;
     // A game from the mix holds other players' favourites: those never go to the owner's
@@ -919,6 +960,8 @@ export class RoomHub {
       if (this.quizCheck()) moved = true;
       if (moved) this.changed();
     }
+    // Discobingo: the automatic reveal when its countdown has run out
+    if (g?.kind === 'disco' && s.room.phase === 'answering' && this.discoCheck()) this.changed();
     const limit = idleLimit(s);
     if (t - s.lastActive > limit) {
       this.shutdown('expired', 'Deze kamer is verlopen omdat er lang niet gespeeld is. Maak een nieuwe kamer.');
@@ -932,7 +975,7 @@ export class RoomHub {
   nextTick() {
     const s = this.state;
     if (!s) return null;
-    const quiz = quizNextEvent(s.room, QUIZ_START_FALLBACK_MS);
+    const quiz = this.nextEvent();
     if (quiz != null) return Math.min(quiz, this.conns.size ? this.now() + 15000 : quiz);
     if (this.conns.size) return this.now() + 15000;
     return s.lastActive + idleLimit(s) + 1000;

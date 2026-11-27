@@ -8,8 +8,9 @@ import assert from 'node:assert/strict';
 import {
   createRoom, addPlayer, removePlayer, startGame, submitAnswer, withdrawAnswer, reveal, overrideResult, nextRound,
   judgeResult, stampSquare, choosableSquares, jokerSquares, discoOutcome, fastestOf, discoSummary, setAvatar, playAgain,
-  isValidRoom, backToLobby, withoutAnswerTimes, GameError,
+  isValidRoom, backToLobby, withoutAnswerTimes, GameError, inBingoStop, finishGame, continueGame,
 } from '../../app/js/multi/game.js';
+import { nextGoals } from '../../app/js/multi/disco.js';
 import { viewFor } from '../../app/js/multi/protocol.js';
 import {
   AVATARS, REACTIONS, isAvatar, avatarFor, avatarOf, discoAwards, JOKER_CAP, JOKER_EVERY, AWARD_KINDS,
@@ -40,7 +41,7 @@ function answerOf(r, kind) {
   }
   const right = kind === 'right';
   switch (cat) {
-    case 'decade': return { decade: right ? Math.floor(song.year / 10) * 10 : r.game.disco.decades.find((d) => d !== Math.floor(song.year / 10) * 10) };
+    case 'exact': return { guess: right ? song.year : song.year + 1 };
     case 'year': return { guess: right ? song.year : song.year + 5 };
     case 'artist': return { text: right ? song.artist : 'Iets totaal anders' };
     default: return { text: right ? song.title : 'Iets totaal anders' };
@@ -403,6 +404,10 @@ test('statistieken en prijzen in de weergave zodra er gewonnen is (spelers, spel
     assert.equal(viewFor(r, 'p0', {}).game.disco.awards, null);
     assert.equal(viewFor(r, 'p0', {}).game.disco.stats, null);
     r = nextRound(r, { now: t + 4 });
+    if (inBingoStop(r)) {
+      assert.equal(viewFor(r, 'p0', {}).game.disco.awards, null, 'tijdens de bingostop nog geen prijzen');
+      r = finishGame(r);
+    }
   }
   assert.equal(r.phase, 'won');
   const s = discoSummary(r);
@@ -501,9 +506,15 @@ test('fuzz: willekeurige spellen houden jokers, reeksen, stempels en prijzen klo
           } else {
             // the round ends: the model takes the final verdicts and where the chips lie
             const before = r;
-            r = nextRound(r, { now: t++ });
+            // a bingo stop: go on for a higher goal or stop (both end the round), else the next round
+            if (inBingoStop(r)) {
+              const goals = nextGoals(r.game.disco.win);
+              r = goals.length && rand() < 0.6 ? continueGame(r, pick(goals), { now: t++ }) : finishGame(r);
+            } else r = nextRound(r, { now: t++ });
+            // an automatic chip that made bingo keeps the round open (the stop): it ends later
+            const ended = !(r.phase === 'revealed' && r.game.round === before.game.round);
             const cur = before.game.current;
-            for (const id of Object.keys(before.game.prev)) {
+            for (const id of ended ? Object.keys(before.game.prev) : []) {
               const m = (model[id] ??= { streak: 0, jokers: 0, best: 0, used: 0 });
               const right = !!before.game.results[id]?.correct;
               m.streak = right ? m.streak + 1 : 0;

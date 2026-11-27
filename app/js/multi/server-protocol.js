@@ -59,10 +59,12 @@
 // Version 2 (November 2026): the Quiz (settings questions/qtype/think, playing, the quiz part of
 // the view). Version 3 (November 2026): "Mix van de groep" (mix-add, mix-clear, settings.music,
 // start.play, meta.mix). Version 4 (November 2026): Discobingo (game 'disco', settings.win, stamp,
-// judge, the disco part of the view). A phone with another version gets a clear message
-// (health / hello / POST /rooms).
+// judge, the disco part of the view). Version 5 (November 2026): Discobingo round 3 ("Exact jaar"
+// replaces "Decennium", the bingo stop with continue {win} / finish {}, the automatic reveal
+// with hold {round} and settings.autoReveal): an old app would not know the new category. A
+// phone with another version gets a clear message (health / hello / POST /rooms).
 
-export const SERVER_PROTOCOL_VERSION = 4;
+export const SERVER_PROTOCOL_VERSION = 5;
 /** Optional additions within this version that the server announces in /health `features`. */
 export const SERVER_FEATURES = ['screen', 'party', 'mix-playlists'];
 /**
@@ -83,9 +85,9 @@ export const CLIENT_PING_MS = 10000;
 /** Nothing heard for this long: the connection is dead. */
 export const STALE_MS = 25000;
 
-const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing', 'mix-add', 'mix-clear', 'stamp', 'judge', 'avatar', 'react'];
+const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing', 'mix-add', 'mix-clear', 'stamp', 'judge', 'avatar', 'react', 'hold', 'continue', 'finish'];
 const SERVER_TYPES = ['welcome', 'state', 'error', 'backup', 'react'];
-export const LEADER_TYPES = ['settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'playing', 'judge'];
+export const LEADER_TYPES = ['settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'playing', 'judge', 'hold', 'continue', 'finish'];
 
 export const ID_RE = /^[A-Za-z0-9_-]{4,40}$/;
 export const TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;

@@ -13,7 +13,7 @@ import {
 } from './game.js';
 import { avatarOf } from './party.js';
 import { PROMPTS } from './quiz.js';
-import { decadeLabel, goalCells, completeLines, reachedGoal, stampedCount, bestLineCount, squaresToGo, SPIN_MS } from './disco.js';
+import { goalCells, completeLines, reachedGoal, stampedCount, bestLineCount, squaresToGo, nextGoals, SPIN_MS, AUTO_REVEAL_MS } from './disco.js';
 
 /** Bump when old and new apps can not understand each other any more. */
 export const PROTOCOL_VERSION = 1;
@@ -100,7 +100,7 @@ export function viewFor(room, pid, presence = {}) {
     if (mineState) game.mine = { score: mineState.score, streak: mineState.streak, right: mineState.right, rank: game.quiz.rankOf };
     delete game.quiz.rankOf;
   }
-  if (g.kind === 'disco') game.disco = discoView(room, pid, revealed);
+  if (g.kind === 'disco') game.disco = discoView(room, pid, revealed, presence);
   if (mineState && g.kind !== 'quiz') {
     if (g.kind === 'disco') {
       const fun = discoFun(mineState);
@@ -218,12 +218,15 @@ function quizView(room, pid, revealed, presence = {}) {
  * The Discobingo part of a view. The category is public from the start of the round; the
  * literal answers of others only come with the reveal (in reveal.results).
  */
-function discoView(room, pid, revealed) {
+function discoView(room, pid, revealed, presence = {}) {
   const g = room.game;
   const D = g.disco;
   const live = room.phase === 'answering' || room.phase === 'revealed';
   const shown = revealed && room.phase === 'revealed';
   const r = own(g.results, pid);
+  const pending = shown ? stillChoosing(g) : [];
+  const doubts = shown ? undecided(g) : [];
+  const stop = shown && (g.roundWinners || []).length > 0;
   // a card without marks (a broken state) is left out rather than breaking every view
   const ids = room.players.map((p) => p.id).filter((id) => Array.isArray(own(g.per, id)?.marks));
   const fastest = shown || (room.phase === 'won' && g.current && g.results) ? own(g.disco, 'fastest') ?? null : null;
@@ -234,8 +237,31 @@ function discoView(room, pid, revealed) {
     spin: g.round, // a new value = a new spin of the ball
     spunAt: live ? D.spunAt : null, // server time (compare with meta.now): an old spin is not animated again
     spinMs: SPIN_MS,
-    win: D.win,
-    decades: D.decades.map(decadeLabel),
+    win: D.win, // the goal that counts now ("Eerste bingo bij" is settings.win)
+    // the goals won so far, in order: [{ win, ids, names, round }] ("1 lijn: Anouk")
+    stages: (Array.isArray(D.stages) ? D.stages : []).map((s) => ({ win: s.win, ids: s.winners.slice(), names: s.winners.map((id) => nameOf(room, id)), round: s.round })),
+    // Bingo stop (revealed only): who made it (first one first), their winning cells and card, and
+    // the goals the leader may go on with. No song data: the round is revealed already.
+    bingo: stop ? {
+      win: D.win,
+      next: nextGoals(D.win),
+      winners: g.roundWinners.filter((id) => own(g.per, id)).map((id) => {
+        const p = room.players.find((x) => x.id === id);
+        const s = g.per[id];
+        return {
+          id, name: nameOf(room, id), avatar: avatarOf(p),
+          card: s.card.slice(),
+          marks: s.marks.map((m) => (m == null ? null : m === FREE ? FREE : g.songs[m]?.year ?? FREE)),
+          cells: (own(g.winLines, id) || []).slice(),
+        };
+      }),
+    } : null,
+    // the automatic reveal while answering: the server time it happens (null = no countdown),
+    // its length, and whether the leader tapped "Wacht nog" this round. Says only that
+    // everybody answered (which "x van y" already shows), nothing about any answer.
+    autoAt: room.phase === 'answering' && Number.isFinite(D.autoAt) ? D.autoAt : null,
+    autoMs: AUTO_REVEAL_MS,
+    autoHeld: room.phase === 'answering' && !!D.hold,
     // after the reveal: my stamp choice and where I may put it
     choice: shown && Number.isInteger(own(D.choices, pid)) ? D.choices[pid] : null,
     choosable: shown ? choosableSquares(g, pid) : [],
@@ -249,8 +275,11 @@ function discoView(room, pid, revealed) {
     // the winner screen: everybody's statistics and the awards ("Prijsuitreiking")
     stats: summary ? summary.stats : null,
     awards: summary ? summary.awards : null,
-    pending: shown ? stillChoosing(g) : [],
-    doubts: shown ? undecided(g) : [],
+    pending,
+    doubts,
+    // after the reveal, for the leader and the tv: everybody who may lay a chip this round and how
+    // far they are: 'placed' | 'choosing' | 'away' (offline: placed automatically) | 'doubt'
+    chips: shown ? chipStates(room, pending, doubts, presence) : [],
     // everybody's progress (no song data in it)
     progress: ids.map((id) => {
       const m = g.per[id].marks;
@@ -263,6 +292,22 @@ function discoView(room, pid, revealed) {
       };
     }),
   };
+}
+
+/** After the reveal: one entry per player who lays (or may lay) a chip this round, in room order. */
+function chipStates(room, pending, doubts, presence) {
+  const g = room.game;
+  const out = [];
+  for (const p of room.players) {
+    const r = own(g.results, p.id);
+    if (!r || !own(g.prev, p.id)) continue;
+    let state = null;
+    if (doubts.includes(p.id)) state = 'doubt';
+    else if (pending.includes(p.id)) state = presence[p.id] ? 'choosing' : 'away';
+    else if (r.correct && Number.isInteger(own(g.disco.choices, p.id)) && own(g.per, p.id)?.marks?.[g.disco.choices[p.id]] === g.current) state = 'placed';
+    if (state) out.push({ id: p.id, name: p.name, avatar: avatarOf(p), state, online: !!presence[p.id] });
+  }
+  return out;
 }
 
 /** Discobingo fields of one entry in reveal.results: the literal answer, the verdicts and the stamp. */
@@ -284,7 +329,6 @@ function discoResult(g, id) {
     doubt: r.verdict === 'doubt',
     text: r.text ?? null,
     guess: r.guess ?? null,
-    decade: r.decade ?? null,
     stamped,
     noSquare: !!r.correct && !choosableSquares(g, id).length,
   };
@@ -298,7 +342,6 @@ export function answerFromResult(r) {
   if (r.pass) return { pass: true };
   if (r.slot != null) return { slot: r.slot };
   if (r.choice != null) return { choice: r.choice };
-  if (r.decade != null) return { decade: r.decade };
   if (r.cat) return { guess: r.guess, text: r.text };
   return { index: r.index, guess: r.guess, text: r.text };
 }

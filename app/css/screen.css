@@ -83,7 +83,7 @@ html.tt-screen #toast { font-size: 1rem; }
 .s-title { display: flex; align-items: baseline; gap: .7rem; flex-wrap: wrap; font-size: 1.15rem; color: var(--muted); font-weight: 700; }
 .s-title-game { font-family: var(--font-display); font-weight: 900; font-size: 1.7rem; color: var(--text); }
 .s-title-game.is-disco, .sl-game-name.is-disco {
-  background: linear-gradient(90deg, var(--cat-decade), var(--cat-artist) 38%, var(--cat-year) 66%, var(--cat-title));
+  background: linear-gradient(90deg, var(--cat-exact), var(--cat-artist) 38%, var(--cat-year) 66%, var(--cat-title));
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: var(--mustard);
 }
 .s-badge { display: flex; align-items: center; gap: .7rem; padding: .35rem .35rem .35rem 1rem; border-radius: 1rem; background: rgba(23, 11, 36, .7); border: 1px solid rgba(185, 140, 255, .45); }
@@ -214,7 +214,7 @@ html.tt-screen #toast { font-size: 1rem; }
 .eqz i:nth-child(3n+2) { background: var(--cat-artist); animation-duration: .8s; animation-delay: -.3s; }
 .eqz i:nth-child(3n) { background: var(--cat-year); animation-duration: 1.2s; animation-delay: -.6s; }
 .eqz i:nth-child(4n) { animation-delay: -.15s; animation-duration: .9s; }
-.eqz i:nth-child(5n) { background: var(--cat-decade); animation-delay: -.45s; }
+.eqz i:nth-child(5n) { background: var(--cat-exact); animation-delay: -.45s; }
 @keyframes eqz { 0% { transform: scaleY(.18); } 100% { transform: scaleY(1); } }
 .s-count { display: flex; align-items: center; gap: .6rem; font-size: 1.7rem; font-weight: 700; color: var(--muted); }
 .s-count b { color: var(--text); font-family: var(--font-display); font-size: 1.15em; }
@@ -319,7 +319,7 @@ html.tt-screen #toast { font-size: 1rem; }
 .sk-h b { color: var(--mustard); }
 .sk-kick { display: inline-block; padding: .05em .45em; margin-right: .2em; border-radius: .4em; background: var(--coral); color: var(--ink); font-weight: 900; text-transform: uppercase; letter-spacing: .04em; font-size: .85em; }
 .sk-kick.is-calm { background: var(--multi); }
-.sk-kick.is-bingo { background: linear-gradient(90deg, var(--cat-decade), var(--cat-artist), var(--cat-year), var(--cat-title)); }
+.sk-kick.is-bingo { background: linear-gradient(90deg, var(--cat-exact), var(--cat-artist), var(--cat-year), var(--cat-title)); }
 .sk-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: .55rem; }
 .sk.is-two .sk-list { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row; }
 .sk-row {
@@ -397,7 +397,7 @@ html.tt-screen #toast { font-size: 1rem; }
 .sw > :not(.confetti) { position: relative; z-index: 1; }
 .sw-bingo {
   font-family: var(--font-display); font-weight: 900; font-size: 4.4rem; line-height: 1; letter-spacing: .05em; margin-bottom: -.4rem !important;
-  background: linear-gradient(90deg, var(--cat-decade), var(--cat-artist), var(--cat-year), var(--cat-title));
+  background: linear-gradient(90deg, var(--cat-exact), var(--cat-artist), var(--cat-year), var(--cat-title));
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: var(--mustard);
   animation: s-win .8s cubic-bezier(.2, 1.6, .4, 1);
 }
@@ -448,3 +448,24 @@ html.tt-screen #toast { font-size: 1rem; }
   .st-burst { display: none; }
   .st.is-new, .st.just-lit, .sa, .sr, .sk, .sk-row, .scr .answer-card, .scr .winner, .s-ticker { animation: s-fade .5s ease-out both !important; }
 }
+
+/* round 3: the bingo stop on the big screen, the subtle countdown */
+.sd[data-moment="bingo"] .sd-play { display: none; }
+.sb { position: relative; display: flex; flex-direction: column; align-items: center; gap: .8rem; text-align: center; }
+.sb .confetti { z-index: 0; }
+.sb > * { position: relative; z-index: 1; }
+.sb-word { margin: 0; font-family: var(--font-display); font-size: clamp(3.6rem, 7vw, 6.2rem); line-height: 1; letter-spacing: .05em;
+  background: linear-gradient(90deg, var(--cat-exact), var(--cat-artist), var(--cat-year), var(--cat-title)); -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: sb-pop .8s cubic-bezier(.2, 1.6, .4, 1) both; }
+@keyframes sb-pop { from { transform: scale(.3); opacity: 0; } }
+.sb-who { margin: 0; font-size: clamp(1.6rem, 2.6vw, 2.4rem); }
+.sb-cards { display: flex; flex-wrap: wrap; gap: 1.2rem; justify-content: center; }
+.sb-card { margin: 0; width: clamp(180px, 20vw, 340px); animation: sb-in .5s ease-out both; animation-delay: calc(var(--i) * .25s); }
+.sb-cards.is-more .sb-card { width: clamp(150px, 13vw, 210px); }
+@keyframes sb-in { from { transform: translateY(18px); opacity: 0; } }
+.sb-card figcaption { display: flex; align-items: center; justify-content: center; gap: .5rem; margin-top: .5rem; font-weight: 800; font-size: 1.2rem; }
+.sb-next { margin: 0; color: var(--muted); font-size: 1.15rem; }
+.sb-wait { margin: 0; font-size: 1.05rem; }
+.sd .disco-auto { max-width: 26rem; font-size: 1.05rem; }
+.sa-wait { margin: .4rem 0 0; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .sb-word, .sb-card { animation: none; } }
