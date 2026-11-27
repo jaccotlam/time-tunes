@@ -621,7 +621,8 @@ export default async function run() {
     await host.getByTestId('room-music').waitFor();
     await host.evaluate(() => { window.__ttHost.session.__mark = 'same'; });
     check(/TimeTunesr-deck/.test(await text(host, 'room-music-name')), 'the lobby starts with the built-in deck');
-    check(await host.locator('[data-testid="mix-lists-open"], [data-testid="mix-lists-start"]').count() === 0, 'the lobby offers no "Kies een playlist" for the group mix');
+    // the group mix offers the guests' own Spotify playlists again (multi-links: "Kies uit mijn playlists")
+    check(/Kies uit mijn playlists/.test(await host.getByTestId('mix-lists-open').textContent()), 'the lobby offers "Kies uit mijn playlists" for the group mix (own Spotify playlists, no catalogue search)');
     await host.getByTestId('room-music-other').scrollIntoViewIfNeeded();
     await shot(host, 'muziek-16-lobby-music');
     await host.getByTestId('room-music-other').click();
