@@ -8,6 +8,11 @@
 //    fade), only when the device supports it, and ALWAYS back to the volume the user had: after
 //    a fade-out has paused the music, on an error, a 429, a pause, an interrupted fade and when
 //    the screen is left. A volume call never delays the song by more than a moment.
+//    While the volume is lowered, the user's own volume (and the device) is also kept in
+//    localStorage (VOLUME_MARKER_KEY): a tab that is killed mid-fade never fires 'pagehide', so
+//    the next time the round music starts (recoverSpotifyVolume) that volume comes back once.
+//    Volume calls go out one after the other: a restore is never overtaken by a "low" still on
+//    its way.
 // Pure logic with injected timers and APIs, so `npm test` drives it with fakes.
 
 /** The fade-out at the end of a round's music (ms). */
@@ -18,6 +23,22 @@ export const SPOTIFY_MAX_REQUESTS = 6;
 export const VOLUME_WAIT_MS = 400;
 /** Audio fades step this often (ms). */
 export const AUDIO_STEP_MS = 50;
+
+/** localStorage: { volume, deviceId, at } while fade.js has the user's Spotify volume lowered. */
+export const VOLUME_MARKER_KEY = 'timetunesr.spotifyVolume.v1';
+/** A marker older than this is forgotten without touching the volume (ms). */
+export const MARKER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+/** Longest a volume call waits for the one before it (ms): a request that hangs blocks nothing. */
+export const VOLUME_CHAIN_WAIT_MS = 3000;
+
+/** The marker in localStorage (missing, blocked or full storage: nothing happens). */
+export const localMarker = {
+  get() {
+    try { const v = JSON.parse(globalThis.localStorage?.getItem(VOLUME_MARKER_KEY) || 'null'); return v && typeof v === 'object' ? v : null; } catch { return null; }
+  },
+  set(v) { try { globalThis.localStorage?.setItem(VOLUME_MARKER_KEY, JSON.stringify(v)); } catch { /* ignore */ } },
+  clear() { try { globalThis.localStorage?.removeItem(VOLUME_MARKER_KEY); } catch { /* ignore */ } },
+};
 
 const realTimers = {
   set: (fn, ms) => setTimeout(fn, ms),
@@ -114,15 +135,30 @@ const wait = (p, ms, timers) => new Promise((resolve, reject) => {
  *   restore({ keepalive }): put the user's volume back now (idempotent).
  * `requests` counts the volume API calls of the running fade (tests: never more than 6).
  */
-export function createSpotifyFader(api, { timers = realTimers } = {}) {
+export function createSpotifyFader(api, { timers = realTimers, marker = localMarker, ready = null } = {}) {
   let saved = null; // the user's own volume, while we changed it
+  let deviceId = null; // the device it belongs to (for the marker)
   let lowered = false;
   let op = 0;
   let requests = 0;
   let cooldownUntil = 0; // after a 429: no fades until then
+  let chain = Promise.resolve(); // the volume calls, one after the other
 
   const sleep = (ms) => new Promise((r) => timers.set(r, ms));
-  const call = (fn) => { requests++; return fn(); };
+  /** One volume call, after the one before it has settled (or VOLUME_CHAIN_WAIT_MS passed). */
+  const call = (fn) => {
+    requests++;
+    const before = chain;
+    const run = new Promise((resolve) => {
+      const t = timers.set(resolve, VOLUME_CHAIN_WAIT_MS);
+      before.then(() => { timers.clear(t); resolve(); });
+    }).then(fn);
+    chain = run.then(() => {}, () => {});
+    return run;
+  };
+  /** The user's volume is about to be lowered: remember it outside this page too. */
+  const mark = () => { try { marker?.set({ volume: saved, deviceId, at: timers.now() }); } catch { /* ignore */ } };
+  const unmark = () => { try { marker?.clear(); } catch { /* ignore */ } };
   const rateLimited = (e) => {
     if (e?.code !== 'rate') return false;
     cooldownUntil = timers.now() + (Number(e.retryAfter) > 0 ? e.retryAfter * 1000 : 2000);
@@ -134,7 +170,15 @@ export function createSpotifyFader(api, { timers = realTimers } = {}) {
     const target = saved;
     lowered = false; // at once: a second restore (pause + fade end) sends nothing
     for (let attempt = 0; attempt < 3; attempt++) {
-      try { await call(() => api.setVolume(target, { keepalive })); saved = null; return; } catch (e) {
+      // the page is going away (keepalive): send at once, do not wait for a call still on its
+      // way; the marker stays, so the next start checks the volume once more
+      const send = () => api.setVolume(target, { keepalive });
+      try {
+        if (keepalive) { requests++; await send(); } else await call(send);
+        saved = null;
+        if (!keepalive) unmark();
+        return;
+      } catch (e) {
         // a 429 says how long to wait; anything else: try again shortly
         const ms = e?.code === 'rate' && Number(e.retryAfter) > 0 ? e.retryAfter * 1000 : 800;
         if (attempt < 2) await sleep(Math.min(ms, 5000));
@@ -145,8 +189,11 @@ export function createSpotifyFader(api, { timers = realTimers } = {}) {
   }
 
   async function info() {
-    try { return await wait(call(() => api.info()), VOLUME_WAIT_MS, timers); } catch (e) { rateLimited(e); return null; }
+    try { requests++; return await wait(api.info(), VOLUME_WAIT_MS, timers); } catch (e) { rateLimited(e); return null; }
   }
+  /** A start-up recovery (recoverSpotifyVolume) runs first: never measure the volume before it is back. */
+  const settled = async () => { if (ready) { try { await ready; } catch { /* ignore */ } } };
+  const remember = (d) => { if (!lowered) { saved = Math.round(d.volume); deviceId = typeof d.deviceId === 'string' ? d.deviceId : null; } };
 
   return {
     get lowered() { return lowered; },
@@ -162,13 +209,16 @@ export function createSpotifyFader(api, { timers = realTimers } = {}) {
       const go = () => { if (!started) { started = true; try { start(); } catch { /* the player reports its own errors */ } } };
       if (timers.now() < cooldownUntil) { go(); return false; }
       const t0 = timers.now();
+      await settled();
+      if (my !== op) return false;
       const d = lowered ? { volume: saved, supports: true } : await info();
       if (my !== op) return false; // stopped (or a newer fade) meanwhile: that one decides
       if (!d?.supports || !Number.isFinite(d.volume) || d.volume <= 0) { go(); return false; }
-      if (!lowered) saved = Math.round(d.volume);
+      remember(d);
       const full = saved;
       const low = Math.max(1, Math.round(full * 0.1));
       try {
+        if (!lowered) mark();
         lowered = true;
         await wait(call(() => api.setVolume(low)), VOLUME_WAIT_MS, timers);
       } catch (e) {
@@ -189,7 +239,7 @@ export function createSpotifyFader(api, { timers = realTimers } = {}) {
         const v = k === levels.length - 1 ? full : Math.max(low, Math.round(full * levels[k]));
         try {
           await call(() => api.setVolume(v));
-          if (v === full) { lowered = false; saved = null; }
+          if (v === full) { lowered = false; saved = null; unmark(); }
         } catch (e) {
           rateLimited(e);
           await restore();
@@ -204,11 +254,14 @@ export function createSpotifyFader(api, { timers = realTimers } = {}) {
       requests = 0;
       const stop = async () => { try { await pause(); } catch { /* paused or gone: the volume comes back anyway */ } };
       if (timers.now() < cooldownUntil) { await stop(); await restore(); return false; }
+      await settled();
+      if (my !== op) return false;
       const d = lowered ? { volume: saved, supports: true } : await info();
       if (my !== op) return false;
       if (!d?.supports || !Number.isFinite(d.volume) || d.volume <= 0) { await stop(); return false; }
-      if (!lowered) saved = Math.round(d.volume);
+      remember(d);
       const full = saved;
+      if (!lowered) mark();
       lowered = true;
       // down in three steps, then pause, then the user's volume again (info + 3 + restore <= 6)
       const levels = [0.6, 0.3, 0.05];
@@ -226,6 +279,32 @@ export function createSpotifyFader(api, { timers = realTimers } = {}) {
 }
 
 /**
+ * A tab that died while fade.js had the Spotify volume lowered: put the user's volume back,
+ * once. Only with a marker (else the volume is never touched), only on the same device (still
+ * the active one), never above the saved volume (the user may have turned it up or down since:
+ * a volume at or above it stays). The marker goes when it is used up, when the device is
+ * another one, or when it is older than MARKER_MAX_AGE_MS; it stays when Spotify can not be
+ * asked now (no device, an error), for the next time. Resolves 'restored' | 'kept' | 'none'
+ * | 'later'. api: { info() -> { volume, supports, deviceId }, setVolume(percent) }.
+ */
+export async function recoverSpotifyVolume(api, { marker = localMarker, now = Date.now } = {}) {
+  let m;
+  try { m = marker?.get(); } catch { m = null; }
+  if (!m) return 'none';
+  const target = Math.round(Number(m.volume));
+  if (!Number.isFinite(target) || target <= 0 || target > 100 || typeof m.deviceId !== 'string' || !m.deviceId
+    || !(now() - (Number(m.at) || 0) < MARKER_MAX_AGE_MS)) { marker.clear(); return 'none'; }
+  let d;
+  try { d = await api.info(); } catch { return 'later'; }
+  if (!d) return 'later';
+  if (d.deviceId !== m.deviceId || !d.supports || !Number.isFinite(d.volume)) { marker.clear(); return 'none'; }
+  if (d.volume >= target) { marker.clear(); return 'kept'; }
+  try { await api.setVolume(target); } catch { return 'later'; }
+  marker.clear();
+  return 'restored';
+}
+
+/**
  * The music of a Discobingo round on the leader's device, with fades. `player`: player.js
  * (state, subscribe, play, audioElement); `spotifyApi`: { info, setVolume, pause }.
  *   fadeInPlay(ms): start the loaded song now, silent, at full volume after ms.
@@ -235,9 +314,12 @@ export function createSpotifyFader(api, { timers = realTimers } = {}) {
  * whatever stops the music otherwise (the leader's own pause, an error, leaving) puts the
  * user's Spotify volume back at once. destroy() puts everything back.
  */
-export function createRoundMusic({ player, spotifyApi, timers = realTimers, win = typeof window !== 'undefined' ? window : null }) {
+export function createRoundMusic({ player, spotifyApi, timers = realTimers, win = typeof window !== 'undefined' ? window : null, marker = localMarker }) {
   const audio = createAudioFader(() => player.audioElement(), { timers });
-  const sp = createSpotifyFader(spotifyApi, { timers });
+  // a volume left low by a tab that died mid-fade comes back first (only with Spotify connected:
+  // without a marker nothing is asked); the first fade waits for it
+  const recovered = marker?.get?.() ? recoverSpotifyVolume(spotifyApi, { marker, now: timers.now === realTimers.now ? Date.now : () => Date.now() }).catch(() => 'later') : null;
+  const sp = createSpotifyFader(spotifyApi, { timers, marker, ready: recovered });
   let outBusy = null; // a fade-out of ours is running (the guard below keeps out of its way)
   let endFor = null; // the card whose end-of-play fade has started
   const isSp = () => player.state.source === 'spotify';

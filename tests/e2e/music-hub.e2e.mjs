@@ -721,7 +721,7 @@ export default async function run() {
     await sp.reload();
     await sp.getByTestId('sp-list').first().waitFor();
     const names = await sp.getByTestId('sp-list').allTextContents();
-    check(names.length === 3 && /Mijn feestlijst/.test(names[0]) && /30 nummers/.test(names[0]) && /Samen met Bram/.test(names[1]), `own and shared playlists appear as tiles, somebody else's does not (${names.map((n) => n.slice(0, 22)).join(' | ')})`);
+    check(names.length === 3 && /Mijn feestlijst/.test(names[0]) && /30 nummers/.test(names[0]) && /Samen met Bram/.test(names[1]), `own and shared playlists appear as tiles, somebody else's does not (${names.map((n) => n.replace(/\s+/g, ' ').trim()).join(' | ')})`);
     check(await sp.getByTestId('sp-list').first().locator('img').evaluate((i) => i.complete && i.naturalWidth > 0), 'a tile shows the playlist cover');
     check(await sp.getByTestId('playlist-top-create').count() === 1, '"Mijn meest geluisterd" is offered next to the playlists');
     await sp.getByTestId('sp-tip').locator('summary').click();
@@ -741,7 +741,7 @@ export default async function run() {
     await sp.getByTestId('sp-list').first().click();
     await sp.getByTestId('sheet-playlist').waitFor();
     await sp.waitForFunction(() => document.querySelectorAll('[data-testid="sheet-track"]').length === 30);
-    check(/Jouw Spotify-playlist/.test(await sp.locator('.ms-kicker').first().textContent()) && await sp.getByTestId('sheet-listen').count() === 0, 'the Spotify sheet lists the songs (no fragment buttons: they are not catalogue songs)');
+    check(/Jouw Spotify-playlist/.test(await sp.locator('.ms-sheet .ms-kicker').first().textContent()) && await sp.getByTestId('sheet-listen').count() === 0, 'the Spotify sheet lists the songs (no fragment buttons: they are not catalogue songs)');
     await startSampler(sp);
     await sp.getByTestId('sheet-play-now').click();
     await sp.getByTestId('play-sheet').waitFor({ timeout: 90000 });
