@@ -139,6 +139,9 @@ export function createReactBar({ send, root = () => document }) {
  * tab (a corner, small and short). Reduced motion: a quiet fade in place. Only transform and
  * opacity are animated.
  */
+/** About the height of one float (emoji + avatar + name) at 1080 px: its top rises this far above its path's end. */
+const FLOAT_H = 130;
+
 export function createFloatLayer(host, { max = 8, small = false, avoid = () => [], testid = 'screen-reaction', rise = 0.55 } = {}) {
   const layer = document.createElement('div');
   layer.className = `rx-layer${small ? ' is-small' : ''}`;
@@ -151,7 +154,7 @@ export function createFloatLayer(host, { max = 8, small = false, avoid = () => [
     const W = layer.clientWidth || innerWidth;
     const H = layer.clientHeight || innerHeight;
     if (small) return 0.15 + Math.random() * 0.7;
-    const top = H * (1 - rise);
+    const top = H * (1 - rise) - FLOAT_H; // the top of a float goes its own height above the end of its path
     const lr = layer.getBoundingClientRect();
     const blocks = (avoid() || []).filter(Boolean).map((r) => ({ l: r.left - lr.left, r: r.right - lr.left, t: r.top - lr.top, b: r.bottom - lr.top }))
       .filter((r) => r.b > top && r.t < H && r.r > r.l);
@@ -191,6 +194,27 @@ export function createFloatLayer(host, { max = 8, small = false, avoid = () => [
       const done = () => { f.remove(); const k = live.indexOf(f); if (k >= 0) live.splice(k, 1); };
       f.addEventListener('animationend', (e) => { if (e.target === f) done(); });
       setTimeout(done, 6000);
+    },
+    /**
+     * The things to avoid changed (a song card, an answer, the winner appeared): a float whose
+     * remaining path now crosses one stops where it is and fades out quickly, while it is still
+     * clear of it. Called by the screen after every redraw; cheap (at most `max` floats).
+     */
+    recheck() {
+      if (!live.length || small) return;
+      const blocks = (avoid() || []).filter((r) => r && r.width > 0 && r.height > 0);
+      if (!blocks.length) return;
+      const H = layer.clientHeight || innerHeight;
+      const lr = layer.getBoundingClientRect();
+      for (const f of live) {
+        if (f.dataset.dodge) continue;
+        const b = (f.firstElementChild || f).getBoundingClientRect();
+        const pathTop = Math.min(b.top, lr.top + H * (1 - rise) - FLOAT_H);
+        if (!blocks.some((r) => r.left < b.right && r.right > b.left && r.bottom > pathTop && r.top < b.bottom)) continue;
+        f.dataset.dodge = '1';
+        f.classList.add('is-dodge');
+        setTimeout(() => { f.remove(); const k = live.indexOf(f); if (k >= 0) live.splice(k, 1); }, 320);
+      }
     },
     clear() { for (const f of live.splice(0)) f.remove(); },
     destroy() { this.clear(); layer.remove(); },

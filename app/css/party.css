@@ -397,3 +397,7 @@
 .ph-banner .leader-away.is-waiting { background: #2f1c4b; }
 /* the tv lobby's foot line is a region now (it says when the owner has not opened the room yet) */
 .scr .sl-foot[data-region] { display: flex; flex-direction: row; gap: .6rem; }
+
+/* the song (or an answer) appeared in this float's path: it stops and fades out before it gets there */
+.rx.is-dodge { animation-play-state: paused; }
+.rx.is-dodge .rx-in { opacity: 0; transition: opacity .28s ease-out; }

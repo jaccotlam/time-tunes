@@ -342,7 +342,16 @@ export function render(root, { params, navigate }) {
   let cer = { k: null, start: 0, timer: 0, stepKey: '' }; // the prize ceremony of the won game
   // reactions float up from the bottom, never across the song or a QR code
   const floats = createFloatLayer(document.body, {
-    avoid: () => [...root.querySelectorAll('[data-testid="screen-qr"], .s-badge, [data-testid="screen-song"], .quiz-song, .quiz-correct, [data-testid="room-winner-name"], .aw-spot-title')].map((e) => e.getBoundingClientRect()),
+    avoid: () => {
+      const rects = [...root.querySelectorAll('[data-testid="screen-qr"], .s-badge, [data-testid="screen-song"], .quiz-song, .quiz-correct, [data-testid="room-winner-name"], .aw-spot-title')].map((e) => e.getBoundingClientRect());
+      // while a round is answered, the column where the song (or the quiz answer) will appear at
+      // the reveal stays free too, so a float already in the air never has to cross it
+      if (session.view?.phase === 'answering') {
+        const body = root.querySelector('.s-body')?.getBoundingClientRect();
+        if (body) rects.push(new DOMRect(body.left, body.top, body.width * (mode === 'quiz' ? 0.56 : 0.5), body.height));
+      }
+      return rects;
+    },
   });
   const offReact = session.onReaction?.((r) => { if (mode && mode !== 'error' && mode !== 'boot') floats.push(r); });
 
@@ -445,7 +454,13 @@ export function render(root, { params, navigate }) {
     return Date.now() - reveal.at >= wait ? `ranking:${reason}` : 'answers';
   }
 
+  /** Redraw, then let floats in the air step aside from whatever appeared (the song card at the reveal ...). */
   function draw() {
+    drawScreen();
+    floats.recheck();
+  }
+
+  function drawScreen() {
     if (!regions || !root.isConnected) return;
     const m = modeFor();
     if (m !== mode) { mode = m; skeleton(m); }
