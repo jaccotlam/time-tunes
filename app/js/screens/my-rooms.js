@@ -9,8 +9,8 @@
 import * as account from '../account.js';
 import * as playlists from '../playlists.js';
 import * as spotify from '../spotify.js';
-import { loadBuiltinDeck } from '../deck.js';
-import { BUILTIN_NAME, playlistDeck } from '../playlist-logic.js';
+import { loadBuiltinDeck, musicSource } from '../deck.js';
+import { BUILTIN_NAME, playlistDeck, playable } from '../playlist-logic.js';
 import { playableCards, normalizeSettings, PREFERRED_GAME } from '../multi/game.js';
 import { DISCO_MIN_SONGS } from '../multi/disco.js';
 import { QUIZ_COUNTS, QUIZ_TIMES, QUIZ_MIN_SONGS } from '../multi/quiz.js';
@@ -41,7 +41,7 @@ let cache = null; // { ok, rooms, max, at, user }
 let justMade = ''; // code of the room that was just prepared (the Deel page says so)
 
 /** Songs the lobby would count for this music (same filter as the host screen). */
-const songCount = (cards) => playableCards((cards || []).filter((c) => c.previewUrl || c.itunesId || c.spotifyId)).length;
+const songCount = (cards) => playableCards((cards || []).filter((c) => playable(c, musicSource()))).length;
 
 /** "Discobingo · winnen met 2 lijnen" */
 export function gameSummary(s) {

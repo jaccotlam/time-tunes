@@ -13,7 +13,7 @@
 //   ALLOWED_ORIGINS  comma-separated origins that may connect (default: see policy.mjs)
 import { DurableObject } from 'cloudflare:workers';
 import { RoomHub, randomToken } from './room.mjs';
-import { AccountBox } from './accounts.mjs';
+import { AccountBox, chunkedStore } from './accounts.mjs';
 import { accountRoute, handleAccount, accountLimiters, accountBodyMax } from './account-http.mjs';
 import { prepareRoom, preparedOp } from './prepared.mjs';
 import {
@@ -309,8 +309,10 @@ function roomsFor(env) {
 }
 
 /**
- * One account (its id is derived from the normalised username: getByName). Its record is one
- * value in the object's SQLite-backed storage; an unknown name stores nothing at all.
+ * One account (its id is derived from the normalised username: getByName). Its record is kept
+ * in the object's SQLite-backed storage in pieces (chunkedStore in accounts.mjs: 'account' plus
+ * one 'pl:<id>' per playlist, each far below the 2 MiB a value may hold; a record of before,
+ * all in 'account', still loads); an unknown name stores nothing at all.
  */
 export class Account extends DurableObject {
   constructor(ctx, env) {
@@ -320,12 +322,7 @@ export class Account extends DurableObject {
 
   async call(key, op, args) {
     if (!this.box) {
-      const store = {
-        load: () => this.ctx.storage.get('account'),
-        save: (rec) => this.ctx.storage.put('account', rec),
-        remove: () => this.ctx.storage.deleteAll(),
-      };
-      this.box = new AccountBox(key, store, roomsFor(this.env));
+      this.box = new AccountBox(key, chunkedStore(this.ctx.storage), roomsFor(this.env));
     }
     if (this.box.key !== key) return { status: 400, body: { code: 'bad', message: 'Ongeldig verzoek.' } };
     return this.box.call(op, args);

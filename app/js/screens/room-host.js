@@ -3,6 +3,8 @@
 // along on the same device; that panel is built from the same player view as a phone.
 import * as player from '../player.js';
 import { playableCards, PREFERRED_GAME } from '../multi/game.js';
+import { playable } from '../playlist-logic.js';
+import { musicSource } from '../deck.js';
 import { DISCO_MIN_SONGS } from '../multi/disco.js';
 import { createHostSession, storedRoom } from '../multi/host-session.js';
 import { usesServer, createServerHostSession, storedServerHost, copyText } from '../multi/server-session.js';
@@ -40,7 +42,7 @@ const screenLink = (code) => `${appBase()}#/scherm/${code}`;
 const tvIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="2.5" y="4.5" width="19" height="12.5" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 20.5h8M12 17v3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
 export function render(root, { deck, navigate }) {
-  const cards = playableCards(deck.cards.filter((c) => c.previewUrl || c.itunesId || c.spotifyId));
+  const cards = playableCards(deck.cards.filter((c) => playable(c, musicSource())));
   // with a room server the server holds the room; without one this phone does (PeerJS)
   const viaServer = usesServer();
   let session = viaServer ? createServerHostSession() : createHostSession();

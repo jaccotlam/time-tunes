@@ -16,6 +16,7 @@
 import { seededRandom, shuffle } from '../logic.js';
 import { normalizeTitle, normalizeArtist, splitArtists } from '../spotify-match.js';
 import { DISCO_MIN_SONGS } from './disco.js';
+import { playable } from '../playlist-logic.js';
 
 /** Most songs one phone may add to a room (Spotify gives at most 50 top songs per call). */
 export const MIX_PER_PLAYER = 50;
@@ -96,8 +97,8 @@ export function cleanMixTrack(t) {
   return out;
 }
 
-/** Can the music phone play this song with `source` ('preview' | 'spotify')? */
-export const playableWith = (t, source) => (source === 'spotify' ? !!t.spotifyId : !!(t.previewUrl || t.itunesId));
+/** Can the music phone play this song with `source` ('preview' | 'spotify')? The one rule: playable() in playlist-logic.js. */
+export const playableWith = (t, source) => playable(t, source);
 
 /**
  * Add songs to one player's contribution. `list`: the current songs. Returns

@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { RoomHub, PREPARED_IDLE_MS } from './room.mjs';
-import { AccountBox, memoryStore, PBKDF2_ITERATIONS } from './accounts.mjs';
+import { AccountBox, memoryStore, dataQuota, byteLength, PBKDF2_ITERATIONS } from './accounts.mjs';
 import { accountRoute, handleAccount, accountLimiters } from './account-http.mjs';
 import { prepareRoom, preparedOp } from './prepared.mjs';
 import {
@@ -43,6 +43,8 @@ export function createRoomServer({
   const boxes = new Map(); // key -> AccountBox
   const preparedStates = new Map(); // code -> state of a prepared room (the hub's own object)
   const limiters = accountLimiters({ now, limits: accountLimits });
+  // the synced data of all accounts lives in this process: one budget for all of them
+  const quota = dataQuota(L.maxAccountData);
   let writeTimer = 0;
   function writeNow() {
     clearTimeout(writeTimer);
@@ -89,7 +91,7 @@ export function createRoomServer({
     let box = boxes.get(key);
     if (!box) {
       if (boxes.size > 5000) for (const [k, b] of boxes) if (!b.rec && !b.locked()) boxes.delete(k);
-      box = new AccountBox(key, memoryStore(accounts, key, scheduleWrite), roomsAdapter, { now, iterations, log });
+      box = new AccountBox(key, memoryStore(accounts, key, scheduleWrite), roomsAdapter, { now, iterations, log, quota });
       boxes.set(key, box);
     }
     return box;
@@ -135,7 +137,11 @@ export function createRoomServer({
   if (accountsFile) {
     let saved = null;
     try { saved = JSON.parse(readFileSync(accountsFile, 'utf8')); } catch (e) { if (e?.code !== 'ENOENT') console.error('accounts file not read:', e?.message || e); }
-    for (const [k, rec] of Object.entries(saved?.accounts || {})) if (rec && typeof rec === 'object') accounts.set(k, rec);
+    for (const [k, rec] of Object.entries(saved?.accounts || {})) {
+      if (!rec || typeof rec !== 'object') continue;
+      accounts.set(k, rec);
+      if (rec.data) quota.set(k, byteLength(JSON.stringify(rec.data)));
+    }
     for (const [code, st] of Object.entries(saved?.rooms || {})) {
       if (!st?.prepared || !(now() - (Number(st.lastActive) || 0) < PREPARED_IDLE_MS)) continue;
       const hub = hubFor(code);

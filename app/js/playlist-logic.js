@@ -7,12 +7,21 @@
 // - self-contained card codes for printed QR codes (#/c/~<code>)
 // - compact share links (#/pl/<payload>), split into parts for QR codes
 // - storage format (versioned) and the playlist -> deck conversion
+// - which cards can be played with which music source (playable)
+//
+// A stored track comes from up to three catalogues: Apple Music (`itunesId`, the 30-second
+// fragments and the printed QR codes), Spotify (`spotifyId`, whole songs) and Deezer
+// (`deezerId`, fragments too). `isrc` identifies the recording itself and finds the song on
+// Spotify when there is no `spotifyId`. Preview addresses and store links are NOT stored: a
+// preview is looked up fresh at play time (Apple's and Deezer's links expire) and a store link
+// follows from the id. That keeps a 2000-song list near 400 kB in localStorage.
 import { scoreTrack, titleScore, artistScore, versionPenalty, fold } from './spotify-match.js';
 
 export const STORE_VERSION = 1;
 export const BUILTIN_ID = 'builtin';
 export const BUILTIN_NAME = 'TimeTunesr-deck';
-export const MAX_TRACKS = 500;
+/** Most songs in one playlist (Spotify import, paste, backups, the account, a room's deck). */
+export const MAX_TRACKS = 2000;
 export const NAME_MAX = 40;
 export const YEAR_MIN = 1900;
 export const YEAR_MAX = 2099;
@@ -39,6 +48,31 @@ export function readiness(count) {
 
 const thisYear = () => new Date().getFullYear();
 export const validYear = (y) => Number.isInteger(y) && y >= YEAR_MIN && y <= Math.max(YEAR_MAX, thisYear() + 1);
+
+/** Music sources a phone can play with: 30-second fragments, or whole songs through Spotify. */
+export const SOURCES = ['preview', 'spotify'];
+
+const posInt = (v) => (typeof v === 'number' || (typeof v === 'string' && /^\d{1,16}$/.test(v))) && Number.isSafeInteger(Number(v)) && Number(v) > 0;
+const hasText = (v) => typeof v === 'string' && v.trim() !== '';
+
+/**
+ * THE answer to "can this card / track be played with this music source?" (counters,
+ * readiness checks before a game, the deck builder, the room's deck, the group mix).
+ * Every card needs a year (it has to be placed). Then:
+ * - 'preview' (fragments): an Apple Music id or a Deezer id (the player looks the 30-second
+ *   preview up fresh), or a stored previewUrl (built-in deck, group mix);
+ * - 'spotify': any song: a Spotify id, an ISRC or a title plus artist to search for (and when
+ *   Spotify finds nothing the player falls back to the fragment).
+ */
+export function playable(t, source = 'preview') {
+  if (!t || typeof t !== 'object' || !validYear(Number(t.year))) return false;
+  const fragment = posInt(t.itunesId) || posInt(t.deezerId) || (typeof t.previewUrl === 'string' && /^https:\/\//.test(t.previewUrl));
+  if (source !== 'spotify') return fragment;
+  return fragment || isSpId(t.spotifyId) || isIsrc(t.isrc) || (hasText(t.title) && hasText(t.artist));
+}
+
+/** How many tracks of a playlist (or any list of cards) can be played with this source. */
+export const playableTotal = (tracks, source = 'preview') => (tracks || []).reduce((n, t) => n + (playable(t, source) ? 1 : 0), 0);
 
 /* ---------- pasted lines ---------- */
 
@@ -275,14 +309,18 @@ export function newShareId(rand = Math.random) {
  * With `maxLen` the songs are split over several payloads of at most maxLen chars
  * (for QR codes); without it there is one payload. Songs without an iTunes id or
  * year cannot be shared this way and are skipped (`skipped` in the result).
+ * `deezer: true` also takes songs that only have a Deezer id: they go in an extra last field
+ * "~d<id36 year36>.<...>" (an app of before Deezer refuses such a link as invalid instead of
+ * reading wrong songs). The receiving side must then look those up at Deezer (deezerItems).
  */
-export function encodeShare({ name, tracks }, { maxLen = Infinity, shareId = newShareId() } = {}) {
+export function encodeShare({ name, tracks }, { maxLen = Infinity, shareId = newShareId(), deezer = false } = {}) {
   const ok = (tracks || []).filter((t) => Number.isSafeInteger(Number(t.itunesId)) && Number(t.itunesId) > 0 && validYear(t.year));
-  const items = ok.map(itemCode);
+  const dz = deezer ? (tracks || []).filter((t) => !(Number(t.itunesId) > 0) && posInt(t.deezerId) && validYear(t.year)) : [];
+  const items = [...ok.map(itemCode), ...dz.map((t) => `d${Number(t.deezerId).toString(36)}${(t.year - YEAR_MIN).toString(36).padStart(2, '0')}`)];
   const nm = b64urlEncode(String(name || 'Playlist').slice(0, NAME_MAX));
   const head = (p, n) => `1~${shareId}~${p}~${n}~${nm}~`;
-  const room = maxLen - head(99, 99).length;
-  if (room < 12) throw new Error('maxLen te klein');
+  const room = maxLen - head(99, 99).length - (dz.length ? 3 : 0);
+  if (room < 14) throw new Error('maxLen te klein');
   const chunks = [];
   let cur = [];
   let len = 0;
@@ -293,38 +331,53 @@ export function encodeShare({ name, tracks }, { maxLen = Infinity, shareId = new
     cur.push(it);
   }
   if (cur.length || !chunks.length) chunks.push(cur);
+  const body = (c) => {
+    const a = c.filter((x) => x[0] !== 'd');
+    const d = c.filter((x) => x[0] === 'd').map((x) => x.slice(1));
+    return a.join('.') + (d.length ? `~d${d.join('.')}` : '');
+  };
   return {
-    payloads: chunks.map((c, i) => head(i + 1, chunks.length) + c.join('.')),
-    shared: ok.length,
-    skipped: (tracks || []).length - ok.length,
+    payloads: chunks.map((c, i) => head(i + 1, chunks.length) + body(c)),
+    shared: ok.length + dz.length,
+    skipped: (tracks || []).length - ok.length - dz.length,
   };
 }
 
-/** Parse a share payload (or a whole link containing #/pl/...). Null when invalid. */
+function shareItems(field, key, seen) {
+  const out = [];
+  for (const it of field ? field.split('.') : []) {
+    if (it.length < 3) return null;
+    const id = Number.parseInt(it.slice(0, -2), 36);
+    const year = Number.parseInt(it.slice(-2), 36) + YEAR_MIN;
+    if (!Number.isSafeInteger(id) || id <= 0 || !validYear(year)) return null;
+    if (seen.has(`${key}${id}`)) continue;
+    seen.add(`${key}${id}`);
+    out.push({ [key]: id, year });
+  }
+  return out;
+}
+
+/**
+ * Parse a share payload (or a whole link containing #/pl/...). Null when invalid.
+ * { shareId, part, total, name, items: [{ itunesId, year }], deezerItems: [{ deezerId, year }] }
+ */
 export function decodeShare(input) {
   let s = String(input ?? '').trim();
   const at = s.indexOf('#/pl/');
   if (at >= 0) s = s.slice(at + 5);
   try { s = decodeURIComponent(s); } catch { /* keep */ }
-  const m = s.match(/^1~([0-9a-z]{4,12})~(\d{1,3})~(\d{1,3})~([A-Za-z0-9_-]*)~([0-9a-z.]*)$/);
+  const m = s.match(/^1~([0-9a-z]{4,12})~(\d{1,3})~(\d{1,3})~([A-Za-z0-9_-]*)~([0-9a-z.]*)(?:~d([0-9a-z.]*))?$/);
   if (!m) return null;
   const part = Number(m[2]);
   const total = Number(m[3]);
   if (part < 1 || total < 1 || part > total) return null;
   let name;
   try { name = b64urlDecode(m[4]).slice(0, NAME_MAX); } catch { return null; }
-  const items = [];
   const seen = new Set();
-  for (const it of m[5] ? m[5].split('.') : []) {
-    if (it.length < 3) return null;
-    const itunesId = Number.parseInt(it.slice(0, -2), 36);
-    const year = Number.parseInt(it.slice(-2), 36) + YEAR_MIN;
-    if (!Number.isSafeInteger(itunesId) || itunesId <= 0 || !validYear(year)) return null;
-    if (seen.has(itunesId)) continue;
-    seen.add(itunesId);
-    items.push({ itunesId, year });
-  }
-  return { shareId: m[1], part, total, name: name || 'Gedeelde playlist', items };
+  const items = shareItems(m[5], 'itunesId', seen);
+  const deezerItems = shareItems(m[6] || '', 'deezerId', seen);
+  if (!items || !deezerItems) return null;
+  return { shareId: m[1], part, total, name: name || 'Gedeelde playlist', items, deezerItems };
 }
 
 /* ---------- Spotify playlist links ---------- */
@@ -346,15 +399,50 @@ export function spotifyYear(date) {
 /* ---------- storage ---------- */
 
 const str = (v, max = 200) => (typeof v === 'string' ? v : v == null ? '' : String(v)).slice(0, max);
-const isSpId = (id) => typeof id === 'string' && /^[0-9A-Za-z]{22}$/.test(id);
-const httpUrl = (u) => (typeof u === 'string' && /^https:\/\//.test(u) ? u : null);
+function isSpId(id) { return typeof id === 'string' && /^[0-9A-Za-z]{22}$/.test(id); }
+
+/** An ISRC: 2 letters (country), 3 letters/digits (registrant), 7 digits (year + number). */
+export const ISRC_RE = /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/;
+function isIsrc(v) { return typeof v === 'string' && ISRC_RE.test(v); }
+/** An ISRC from any catalogue ("usrc17607839", "US-RC1-76-07839") in its plain form, or null. */
+export function cleanIsrc(v) {
+  if (typeof v !== 'string') return null;
+  const s = v.trim().toUpperCase().replace(/[\s-]/g, '');
+  return ISRC_RE.test(s) ? s : null;
+}
+
+/** Store links follow from the ids (so they are never stored). */
+export const appleMusicUrl = (itunesId) => (posInt(itunesId) ? `https://music.apple.com/nl/song/${Number(itunesId)}` : null);
+export const deezerUrl = (deezerId) => (posInt(deezerId) ? `https://www.deezer.com/track/${Number(deezerId)}` : null);
+
+const SOURCE_KINDS = ['spotify', 'deezer'];
+export const SOURCE_NAME_MAX = 100;
+/**
+ * Where a playlist came from: { kind: 'spotify' | 'deezer', id, name } (id always a string:
+ * a Spotify playlist id of 22 characters, a Deezer playlist number). Null when invalid.
+ */
+export function cleanSource(src) {
+  if (!src || typeof src !== 'object' || Array.isArray(src) || !SOURCE_KINDS.includes(src.kind)) return null;
+  const id = typeof src.id === 'number' ? String(src.id) : src.id;
+  if (typeof id !== 'string') return null;
+  if (src.kind === 'spotify' && !isSpId(id)) return null;
+  if (src.kind === 'deezer' && !(/^\d{1,16}$/.test(id) && posInt(id))) return null;
+  const name = String(src.name ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, SOURCE_NAME_MAX);
+  return { kind: src.kind, id: src.kind === 'deezer' ? String(Number(id)) : id, name };
+}
 
 export function cleanName(name, fallback = 'Mijn playlist') {
   const s = String(name ?? '').replace(/\s+/g, ' ').trim().slice(0, NAME_MAX);
   return s || fallback;
 }
 
-/** One stored track, sanitised. Returns null when it cannot be played anywhere. */
+/**
+ * One stored track, sanitised. Returns null when it cannot be played anywhere (no Apple Music,
+ * Spotify or Deezer id). Format: { n, itunesId, title, artist, album, year, yearSure,
+ * spotifyId?, deezerId?, isrc?, yearFixed?, match? }. `yearFixed`: the player typed this year
+ * (background work never changes it). Old data with previewUrl / trackViewUrl loads; those two
+ * are dropped (looked up fresh / derived, see the top of this file).
+ */
 export function cleanTrack(t) {
   if (!t || typeof t !== 'object') return null;
   const itunesId = Number(t.itunesId ?? t.trackId);
@@ -366,12 +454,14 @@ export function cleanTrack(t) {
     album: str(t.album ?? t.collectionName),
     year: validYear(Number(t.year)) ? Number(t.year) : null,
     yearSure: t.yearSure !== false,
-    previewUrl: httpUrl(t.previewUrl),
-    trackViewUrl: httpUrl(t.trackViewUrl),
   };
   if (isSpId(t.spotifyId)) out.spotifyId = t.spotifyId;
+  if (posInt(t.deezerId)) out.deezerId = Number(t.deezerId);
+  const isrc = cleanIsrc(t.isrc);
+  if (isrc) out.isrc = isrc;
+  if (t.yearFixed === true && out.year != null) { out.yearFixed = true; out.yearSure = true; }
   if (['pending', 'none'].includes(t.match)) out.match = t.match;
-  if (!out.itunesId && !out.spotifyId) return null;
+  if (!out.itunesId && !out.spotifyId && !out.deezerId) return null;
   return out;
 }
 
@@ -402,6 +492,8 @@ export function cleanPlaylist(p, i = 0) {
   if (typeof p.shareId === 'string' && /^[0-9a-z]{4,12}$/.test(p.shareId)) out.shareId = p.shareId;
   if (Array.isArray(p.partsSeen)) out.partsSeen = p.partsSeen.filter((n) => Number.isInteger(n) && n > 0).slice(0, 100);
   if (Number.isInteger(p.partsTotal) && p.partsTotal > 0) out.partsTotal = p.partsTotal;
+  const source = cleanSource(p.source);
+  if (source) out.source = source;
   return out;
 }
 
@@ -435,7 +527,8 @@ export const padN = (n) => String(n).padStart(3, '0');
 /**
  * A playlist as a deck, in the same format as data/deck.json:
  * { id, name, kind, cards, byId } with cards { id, title, artist, year, itunesId,
- * previewUrl, trackViewUrl, spotifyId?, code? }. Songs without a year are left out.
+ * previewUrl (null: looked up at play time), trackViewUrl (derived), spotifyId?, deezerId?,
+ * isrc?, code? }. Songs without a year are left out.
  */
 export function playlistDeck(p) {
   const cards = (p?.tracks || [])
@@ -443,9 +536,11 @@ export function playlistDeck(p) {
     .map((t) => {
       const c = {
         id: padN(t.n), title: t.title, artist: t.artist, year: t.year,
-        itunesId: t.itunesId || null, previewUrl: t.previewUrl || null, trackViewUrl: t.trackViewUrl || null,
+        itunesId: t.itunesId || null, previewUrl: null, trackViewUrl: appleMusicUrl(t.itunesId) || deezerUrl(t.deezerId),
       };
       if (t.spotifyId) c.spotifyId = t.spotifyId;
+      if (t.deezerId) c.deezerId = t.deezerId;
+      if (t.isrc) c.isrc = t.isrc;
       if (t.itunesId) c.code = encodeCardCode(t.itunesId, t.year);
       return c;
     });
@@ -461,8 +556,10 @@ export function exportPlaylist(p) {
   return {
     app: 'TimeTunesr', type: 'playlist', v: STORE_VERSION, exported: new Date().toISOString(),
     name: p.name,
-    tracks: p.tracks.map(({ n, itunesId, spotifyId, title, artist, album, year, yearSure }) => ({
-      n, itunesId, ...(spotifyId ? { spotifyId } : {}), title, artist, album, year, yearSure,
+    ...(p.source ? { source: p.source } : {}),
+    tracks: p.tracks.map(({ n, itunesId, spotifyId, deezerId, isrc, yearFixed, title, artist, album, year, yearSure }) => ({
+      n, itunesId, ...(spotifyId ? { spotifyId } : {}), ...(deezerId ? { deezerId } : {}), ...(isrc ? { isrc } : {}),
+      title, artist, album, year, yearSure, ...(yearFixed ? { yearFixed } : {}),
     })),
   };
 }

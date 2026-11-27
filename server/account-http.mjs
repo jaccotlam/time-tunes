@@ -11,7 +11,8 @@
 //   POST /account/logout-all        (Bearer)                         -> 200 {ok, revoked}
 //   POST /account/password          (Bearer) {password, newPassword}  -> 200 {ok, revoked}
 //   GET  /account                   (Bearer)                         -> 200 {account, rev, data}
-//   POST /account/data              (Bearer) {rev, data}             -> 200 {rev, data} | 409 {code:'conflict', rev, data}
+//   POST /account/data              (Bearer) {rev, data, delta?}     -> 200 {rev, data} | {rev, delta: true} (delta: with stubs
+//                                                                        or delta: true) | 409 {code:'conflict', rev, data}
 //   POST /account/delete            (Bearer) {password}              -> 200 {ok, rooms}
 //   GET  /account/rooms             (Bearer)                         -> 200 {rooms, max}
 //   POST /account/rooms             (Bearer) {name, settings, music, play, hostPlays, hostName} -> 201 {room}
@@ -158,7 +159,7 @@ export async function handleAccount(req, { boxFor, limiters, log = () => {} }) {
     args = { secret: t.secret };
     if (r.op === 'password') Object.assign(args, { password: str(body.password), newPassword: str(body.newPassword) });
     if (r.op === 'delete') args.password = str(body.password);
-    if (r.op === 'save') Object.assign(args, { rev: body.rev, data: body.data });
+    if (r.op === 'save') Object.assign(args, { rev: body.rev, data: body.data, delta: body.delta === true });
     if (r.op === 'roomCreate') args.room = body;
     if (r.code) args.code = r.code;
     if (r.op === 'roomEdit') args.patch = body;

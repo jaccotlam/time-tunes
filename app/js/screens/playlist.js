@@ -5,13 +5,14 @@ import * as itunes from '../itunes.js';
 import * as spotify from '../spotify.js';
 import * as spl from '../spotify-playlists.js';
 import * as top from '../spotify-top.js';
-import { appleMatch } from '../apple-match.js';
+import * as enrich from '../enrich.js';
 import { RANGES, DEFAULT_RANGE, rangeLabel } from '../multi/mix.js';
 import {
   parseLines, rankSearch, matchLine, trackFromItunes, itunesYear, readiness, validYear, padN,
   encodeShare, newShareId, exportPlaylist, MIN_TRACKS, MAX_TRACKS, NAME_MAX, parseSpotifyPlaylistId, FUN_MIN,
 } from '../playlist-logic.js';
 import { icons, esc, toast } from '../ui.js';
+import { musicSource } from '../deck.js';
 import { qrSvg, defaultBaseUrl } from './print.js';
 import { setupHintHtml } from './devices.js';
 import { accountNoteHtml } from './account-bits.js';
@@ -93,7 +94,6 @@ export function render(root, { params, navigate }) {
   const search = { q: '', last: '', results: [], status: '', busy: false, ctrl: null, timer: 0 };
   const paste = { running: false, ctrl: null, done: 0, total: 0, added: 0, doubts: [], none: [], status: '', waitUntil: 0 };
   const sp = { busy: false, status: '', list: null, error: '' };
-  const match = { running: false, ctrl: null, done: 0, total: 0 };
   let shareState = null; // { payloads, part, skipped, link }
 
   root.innerHTML = `<section class="screen screen-playlist" data-testid="screen-playlist" data-id="${esc(id)}">
@@ -130,11 +130,11 @@ export function render(root, { params, navigate }) {
 
   /* ---------- head ---------- */
   function counts() {
-    const playable = store.playableCount(pl);
+    const playable = store.playableCount(pl, musicSource());
     const check = pl.tracks.filter((t) => !t.yearSure || !validYear(t.year)).length;
     const spOnly = pl.tracks.filter((t) => !t.itunesId && t.spotifyId && t.match !== 'pending').length;
     const pending = pl.tracks.filter((t) => t.match === 'pending').length;
-    return { playable, check, spOnly, pending, total: pl.tracks.length };
+    return { playable, check, spOnly, pending, total: pl.tracks.length, bg: enrich.status(id) };
   }
 
   function readinessHtml(c) {
@@ -159,7 +159,7 @@ export function render(root, { params, navigate }) {
     : `<div class="pl-title-row"><h2 class="pl-name" data-testid="pl-name">${esc(pl.name)}</h2>
           <button class="icon-btn" type="button" data-act="rename" aria-label="Naam wijzigen" data-testid="pl-rename">${editIcon}</button></div>`}
       <p class="pl-meta" data-testid="pl-meta">${meta.join(' · ')}</p>
-      ${match.running || c.pending ? `<p class="pl-matching small" data-testid="pl-match-status" role="status">Fragmenten zoeken bij Apple Music: ${match.done} van ${match.total || c.pending}…</p>` : ''}
+      ${c.bg.appleTodo ? `<p class="pl-matching small" data-testid="pl-match-status" role="status">Fragmenten zoeken bij Apple Music: ${c.bg.appleDone} van ${c.bg.appleDone + c.bg.appleTodo}…</p>` : ''}
       ${readinessHtml(c)}
       ${active
     ? '<p class="pl-active" data-testid="pl-is-active"><span class="pill pill-on">Actief</span> Je speelt nu met deze playlist.</p>'
@@ -444,7 +444,7 @@ export function render(root, { params, navigate }) {
       })));
       tp.status = `${plural(res.added.length, 'nummer', 'nummers')} uit je meest geluisterde (${rangeLabel(tp.range).toLowerCase()}) toegevoegd${res.duplicates ? ` (${res.duplicates} stonden er al in)` : ''}${res.full ? `; de playlist is vol (max. ${MAX_TRACKS})` : ''}. Fragmenten en jaartallen worden nu opgezocht.`;
       fresh(); drawHead(); drawList();
-      startMatching();
+      enrich.prioritise(id);
     } catch (e) {
       if (!alive) return;
       tp.status = '';
@@ -518,7 +518,7 @@ export function render(root, { params, navigate }) {
       sp.status = `${plural(res.added.length, 'nummer', 'nummers')} uit “${meta.name}” toegevoegd${res.duplicates ? ` (${res.duplicates} stonden er al in)` : ''}${res.full ? `; de playlist is vol (max. ${MAX_TRACKS})` : ''}. De fragmenten worden nu opgezocht.`;
       sp.list = null;
       fresh(); drawHead(); drawList();
-      startMatching();
+      enrich.prioritise(id);
     } catch (e) {
       if (!alive) return;
       sp.status = '';
@@ -543,43 +543,17 @@ export function render(root, { params, navigate }) {
     }
   }
 
-  /* ---------- background: Apple Music match for Spotify songs ---------- */
-  async function startMatching() {
-    if (match.running || !alive) return;
-    const todo = () => fresh().tracks.filter((t) => t.match === 'pending');
-    if (!todo().length) return;
-    match.running = true;
-    match.ctrl = new AbortController();
-    match.done = 0;
-    match.total = todo().length;
-    drawHead();
-    while (alive && !match.ctrl.signal.aborted) {
-      const t = todo()[0];
-      if (!t) break;
-      let hit = null;
-      try {
-        hit = await appleMatch(t, { signal: match.ctrl.signal });
-      } catch (e) {
-        if (e.code === 'aborted') break;
-      }
-      if (!alive) break;
-      const cur = fresh().tracks.find((x) => x.n === t.n);
-      if (cur && cur.match === 'pending') {
-        if (hit && !fresh().tracks.some((x) => x.itunesId === hit.itunesId && x.n !== t.n)) {
-          store.updateTrack(id, t.n, {
-            itunesId: hit.itunesId, previewUrl: hit.previewUrl, trackViewUrl: hit.trackViewUrl,
-            year: hit.year ?? cur.year, yearSure: hit.yearSure, match: undefined,
-          });
-        } else {
-          store.updateTrack(id, t.n, { match: 'none', yearSure: false });
-        }
-      }
-      match.done++;
-      fresh(); drawHead(); drawList();
-    }
-    match.running = false;
-    if (alive) { fresh(); drawHead(); }
-  }
+  /* ---------- background: years and fragments (app-wide worker in enrich.js) ---------- */
+  // The worker writes to the store; redraw at most every ~0.5 s so a long list stays smooth.
+  let bgTimer = 0;
+  const unsubEnrich = enrich.subscribe(() => {
+    if (!alive || bgTimer) return;
+    bgTimer = setTimeout(() => {
+      bgTimer = 0;
+      if (!alive || !fresh()) return;
+      drawHead(); drawList();
+    }, 400);
+  });
 
   /* ---------- track list ---------- */
   function trackRow(t) {
@@ -644,7 +618,7 @@ export function render(root, { params, navigate }) {
       return;
     }
     if (y === t.year && t.yearSure) return;
-    store.updateTrack(id, n, { year: y, yearSure: true });
+    store.fixYear(id, n, y); // the player's own year: background work never changes it
     fresh();
     const li = input.closest('.pl-track');
     if (li) li.outerHTML = trackRow(fresh().tracks.find((x) => x.n === n));
@@ -875,7 +849,7 @@ export function render(root, { params, navigate }) {
   drawHead();
   drawPane();
   drawList();
-  startMatching();
+  enrich.prioritise(id);
   maybeAutoTop();
 
   return () => {
@@ -885,7 +859,8 @@ export function render(root, { params, navigate }) {
     clearTimeout(search.timer);
     search.ctrl?.abort();
     paste.ctrl?.abort();
-    match.ctrl?.abort();
+    unsubEnrich();
+    clearTimeout(bgTimer);
     root.removeEventListener('click', onClick);
     root.removeEventListener('submit', onSubmit);
     root.removeEventListener('input', onInput);

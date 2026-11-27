@@ -13,7 +13,7 @@
 import { MULTI_SERVER_URL } from '../../config.js';
 import { store } from '../ui.js';
 import {
-  SERVER_PROTOCOL_VERSION, serverBases, parseServerMessage, cardsForServer, PING_TEXT, PONG_TEXT, CLIENT_PING_MS, STALE_MS,
+  SERVER_PROTOCOL_VERSION, serverBases, parseServerMessage, fitCards, PING_TEXT, PONG_TEXT, CLIENT_PING_MS, STALE_MS,
 } from './server-protocol.js';
 import { playerId, JOIN_KEY, PLAYER_ID_KEY } from './client-session.js';
 import { HOST_ID_KEY, MULTI_SEED_KEY } from './host-session.js';
@@ -796,8 +796,14 @@ export function createServerHostSession() {
     /** Start a game: with `mix` the server takes the songs from the "Mix van de groep" (play: the music source here). */
     start(cards, { mix = false, play = 'preview' } = {}) {
       const fixed = store.get(MULTI_SEED_KEY, null);
-      // with the mix the own music still goes along: a quiz takes its wrong answers from it
-      send({ t: 'start', cards: cardsForServer(cards), mix, play, ...(Number.isInteger(fixed) ? { seed: fixed >>> 0 } : {}) });
+      // with the mix the own music still goes along: a quiz takes its wrong answers from it.
+      // The deck always fits in one message (fitCards); a very big one goes along in part.
+      const fit = fitCards(cards);
+      if (fit.cut > 0) {
+        notice = { message: `Deze lijst is te groot om in één keer naar de server te sturen: ${fit.cards.length} van de ${fit.cards.length + fit.cut} nummers doen mee (willekeurig gekozen).` };
+        emit();
+      }
+      send({ t: 'start', cards: fit.cards, mix, play, ...(Number.isInteger(fixed) ? { seed: fixed >>> 0 } : {}) });
     },
     mixAdd(tracks) { return !!link?.send({ t: 'mix-add', tracks }); },
     mixClear() { return !!link?.send({ t: 'mix-clear' }); },

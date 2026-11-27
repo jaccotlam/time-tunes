@@ -23,7 +23,7 @@ import * as G from '../app/js/multi/game.js';
 import { viewFor } from '../app/js/multi/protocol.js';
 import {
   SERVER_PROTOCOL_VERSION, TAKEOVER_MS, STALE_MS, PING_TEXT, PONG_TEXT, LEADER_TYPES, ID_RE, TOKEN_RE, SPOTIFY_CLIENT_ID_RE,
-  parseClientMessage, cleanCards,
+  parseClientMessage, cleanCards, utf8Length, MAX_CLIENT_MESSAGE,
 } from '../app/js/multi/server-protocol.js';
 import { startQuizClock, quizRoundOver, quizNextEvent } from '../app/js/multi/game.js';
 import { QUIZ_START_FALLBACK_MS } from '../app/js/multi/quiz.js';
@@ -327,6 +327,11 @@ export class RoomHub {
     }
     if (++c.count > RATE_MAX_MESSAGES) { this.fatal(connId, 'ratelimit', 'Te veel berichten. Ververs de pagina.'); return; }
     const m = parseClientMessage(text);
+    if (!m && text && utf8Length(text) > MAX_CLIENT_MESSAGE) {
+      // an app keeps its deck below this (fitCards); say what went wrong, keep the connection
+      this.sendTo(connId, { t: 'error', code: 'deck', message: `Deze lijst is te groot om te versturen (meer dan ${Math.round(MAX_CLIENT_MESSAGE / 1024)} kB). Kies een kleinere playlist.` });
+      return;
+    }
     if (!m) { this.sendTo(connId, { t: 'error', code: 'bad', message: 'Onbekend bericht.' }); return; }
     this.guarded(connId, () => {
       if (m.t === 'hello') { this.hello(connId, m); return; }

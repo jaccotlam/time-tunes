@@ -2,7 +2,7 @@
 // playlists and import backups. Also receives shared links (#/pl/<payload>).
 import * as store from '../playlists.js';
 import * as itunes from '../itunes.js';
-import { loadBuiltinDeck } from '../deck.js';
+import { loadBuiltinDeck, musicSource } from '../deck.js';
 import {
   BUILTIN_ID, BUILTIN_NAME, NAME_MAX, MIN_TRACKS, readiness, decodeShare, importBackup, validYear,
 } from '../playlist-logic.js';
@@ -47,7 +47,7 @@ export function render(root, { params, navigate }) {
       sub: `${builtinCount == null ? '…' : plural(builtinCount, 'kaart', 'kaarten')} · ingebouwd, ook als geprinte kaartjes`,
     })];
     for (const p of lists) {
-      const n = store.playableCount(p);
+      const n = store.playableCount(p, musicSource());
       const r = readiness(n);
       const check = p.tracks.filter((t) => !t.yearSure || !validYear(t.year)).length;
       let warn = '';

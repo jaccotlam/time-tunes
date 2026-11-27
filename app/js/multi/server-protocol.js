@@ -57,10 +57,15 @@
 export const SERVER_PROTOCOL_VERSION = 4;
 /** Optional additions within this version that the server announces in /health `features`. */
 export const SERVER_FEATURES = ['screen', 'party'];
-/** Largest message from a phone (the deck at the start of a game). */
+/**
+ * Largest message from a phone (the deck at the start of a game), in UTF-8 bytes. A start
+ * with 2000 realistic cards is about 300 kB (tests/unit/big-lists.test.mjs); fitCards keeps
+ * every start below it (slimmer cards, else fewer), so the server never has to refuse one.
+ */
 export const MAX_CLIENT_MESSAGE = 512 * 1024;
 /** Every other message is small. */
 export const MAX_SMALL_MESSAGE = 16 * 1024;
+/** Most songs in a room's deck: the same as a playlist's MAX_TRACKS (playlist-logic.js). */
 export const MAX_CARDS = 2000;
 /** A leader who is away this long may be replaced by a player. */
 export const TAKEOVER_MS = 30000;
@@ -81,7 +86,7 @@ export const SPOTIFY_CLIENT_ID_RE = /^[0-9a-f]{32}$/i;
 
 /** Parse a message from a phone (string). Null when it is not a valid message. */
 export function parseClientMessage(raw) {
-  if (typeof raw !== 'string' || raw.length > MAX_CLIENT_MESSAGE) return null;
+  if (typeof raw !== 'string' || raw.length > MAX_CLIENT_MESSAGE || utf8Length(raw) > MAX_CLIENT_MESSAGE) return null;
   let m;
   try { m = JSON.parse(raw); } catch { return null; }
   if (!m || typeof m !== 'object' || Array.isArray(m) || !CLIENT_TYPES.includes(m.t)) return null;
@@ -97,7 +102,19 @@ export function parseServerMessage(raw) {
   return m && typeof m === 'object' && SERVER_TYPES.includes(m.t) ? m : null;
 }
 
-const CARD_FIELDS = ['id', 'year', 'title', 'artist', 'previewUrl', 'itunesId', 'spotifyId'];
+/** UTF-8 length of a string (what a WebSocket frame carries), without building the bytes. */
+export function utf8Length(str) {
+  let n = 0;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    if (c < 0x80) n += 1;
+    else if (c < 0x800) n += 2;
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length) { n += 4; i++; } else n += 3;
+  }
+  return n;
+}
+
+const CARD_FIELDS = ['id', 'year', 'title', 'artist', 'previewUrl', 'itunesId', 'spotifyId', 'deezerId', 'isrc'];
 
 /** Only what the server needs to run a game and the music phone needs to play a song. */
 export function cardsForServer(cards) {
@@ -106,6 +123,39 @@ export function cardsForServer(cards) {
     for (const k of CARD_FIELDS) if (c[k] != null && c[k] !== '') o[k] = c[k];
     return o;
   });
+}
+
+/**
+ * The cards of a start message that fits in `maxBytes` (the whole message, `extra` = the
+ * rest of it): as they are when they fit; else without the previewUrl of cards that have an
+ * id to look it up with, and titles / artists of at most 100 characters; else only as many
+ * cards as fit (a fair random part when `rand` is given). Returns { cards, cut } (cut: how
+ * many were left out).
+ */
+export function fitCards(cards, { maxBytes = MAX_CLIENT_MESSAGE - 4096, extra = 200, rand = Math.random } = {}) {
+  let list = cardsForServer((cards || []).slice(0, MAX_CARDS));
+  const size = (l) => utf8Length(JSON.stringify(l)) + extra;
+  if (size(list) <= maxBytes) return { cards: list, cut: Math.max(0, (cards || []).length - list.length) };
+  list = list.map((c) => {
+    const o = { ...c };
+    if (o.itunesId || o.deezerId) delete o.previewUrl;
+    if (typeof o.title === 'string') o.title = o.title.slice(0, 100);
+    if (typeof o.artist === 'string') o.artist = o.artist.slice(0, 100);
+    return o;
+  });
+  if (size(list) <= maxBytes) return { cards: list, cut: Math.max(0, (cards || []).length - list.length) };
+  // still too big: a random part of the cards, as many as fit
+  const order = list.map((c, i) => [rand(), i]).sort((a, b) => a[0] - b[0]).map(([, i]) => i);
+  const keep = new Set();
+  let used = 2 + extra;
+  for (const i of order) {
+    const b = utf8Length(JSON.stringify(list[i])) + 1;
+    if (used + b > maxBytes) continue;
+    used += b;
+    keep.add(i);
+  }
+  const out = list.filter((_, i) => keep.has(i));
+  return { cards: out, cut: (cards || []).length - out.length };
 }
 
 const str = (v, max) => (typeof v === 'string' || typeof v === 'number' ? String(v).replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max) : '');
@@ -125,6 +175,8 @@ export function cleanCards(cards) {
     if (typeof c.previewUrl === 'string' && /^https:\/\/[^\s"'<>]{4,600}$/.test(c.previewUrl)) o.previewUrl = c.previewUrl;
     if (Number.isSafeInteger(Number(c.itunesId)) && Number(c.itunesId) > 0) o.itunesId = Number(c.itunesId);
     if (typeof c.spotifyId === 'string' && /^[A-Za-z0-9]{10,40}$/.test(c.spotifyId)) o.spotifyId = c.spotifyId;
+    if (Number.isSafeInteger(c.deezerId) && c.deezerId > 0) o.deezerId = c.deezerId;
+    if (typeof c.isrc === 'string' && /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(c.isrc)) o.isrc = c.isrc;
     out.push(o);
   }
   return out;

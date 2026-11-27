@@ -15,8 +15,16 @@
 //   ask (no global index needed), the secret (32 random bytes) is stored only as its SHA-256.
 //   Sessions live 90 days after their last use (sliding), at most MAX_SESSIONS per account.
 // - data: what the app syncs (Spotify Client ID, own playlists, small preferences), validated
-//   field by field and capped at MAX_DATA_BYTES; `rev` goes up by one on every save, and a save
-//   with an older rev is refused with the current data (the client merges and saves again).
+//   field by field and capped: MAX_DATA_BYTES for everything, MAX_PLAYLIST_BYTES (and the
+//   app's MAX_TRACKS) per playlist; `rev` goes up by one on every save, and a save with an
+//   older rev is refused with the current data (the client merges and saves again).
+//   A save may send a playlist the account already has unchanged as a stub { id, updated,
+//   same: true } ("keep yours"; /health feature 'account-delta'), so a big library is not sent
+//   again for every small change; such a save is answered with { rev, delta: true } (no data).
+// - Cloudflare stores the record in pieces (chunkedStore): the record without its playlists
+//   under 'account' and every playlist under 'pl:<id>', because one Durable Object value holds
+//   at most 2 MiB; only the pieces that changed are written. A record of before (everything
+//   in 'account') still loads and is split by its next save.
 // - rooms: the prepared rooms of this account (the room itself lives in the room server; the
 //   `rooms` adapter below reaches it).
 //
@@ -26,14 +34,18 @@
 // time, so two requests never interleave across an `await` (PBKDF2 is async).
 import { sha256Hex } from './sha256.mjs';
 import { evictOldest } from './policy.mjs';
-import { cleanPlaylist, cleanTrack, NAME_MAX, MAX_TRACKS, BUILTIN_ID } from '../app/js/playlist-logic.js';
+import { cleanPlaylist, cleanTrack, cleanSource, NAME_MAX, MAX_TRACKS, BUILTIN_ID } from '../app/js/playlist-logic.js';
 import { cleanName as cleanPlayerName } from '../app/js/multi/game.js';
 
 export const PBKDF2_ITERATIONS = 100000; // Cloudflare's maximum for PBKDF2 in WebCrypto
 export const SESSION_MS = 90 * 24 * 60 * 60 * 1000;
 const SESSION_TOUCH_MS = 12 * 60 * 60 * 1000; // a used session is stored again at most twice a day
 export const MAX_SESSIONS = 20;
-export const MAX_DATA_BYTES = 1024 * 1024; // a few full playlists (a 500-song list is ~200 kB)
+// A 2000-song playlist is about 400-450 kB as JSON (measured in tests/unit/big-lists.test.mjs).
+/** One playlist at most (JSON bytes): twice a realistic 2000-song list, under the 2 MiB of one Durable Object value. */
+export const MAX_PLAYLIST_BYTES = 1024 * 1024;
+/** Everything of one account (JSON bytes): about a dozen full 2000-song lists. */
+export const MAX_DATA_BYTES = 6 * 1024 * 1024;
 export const MAX_PLAYLISTS = 50;
 export const MAX_PREPARED_ROOMS = 5;
 export const PASSWORD_MIN = 8;
@@ -173,7 +185,7 @@ export function parseToken(value) {
 }
 
 // ---------- account data ----------
-const ALLOWED_PLAYLIST = ['id', 'name', 'created', 'updated', 'nextN', 'tracks', 'shareId', 'partsSeen', 'partsTotal'];
+const ALLOWED_PLAYLIST = ['id', 'name', 'created', 'updated', 'nextN', 'tracks', 'shareId', 'partsSeen', 'partsTotal', 'source'];
 const TRACK_STRINGS = ['title', 'artist', 'album'];
 const okTime = (v) => Number.isFinite(v) && v >= 0 && v < 1e14;
 
@@ -193,15 +205,23 @@ export function validatePlaylist(p) {
     for (const k of TRACK_STRINGS) if (t[k] != null && (typeof t[k] !== 'string' || t[k].length > 200)) return { error: `Een nummer in "${p.name}" is ongeldig.` };
     if (t.year != null && !Number.isInteger(t.year)) return { error: `Een nummer in "${p.name}" heeft een ongeldig jaar.` };
     for (const k of ['previewUrl', 'trackViewUrl']) if (t[k] != null && (typeof t[k] !== 'string' || !/^https:\/\/[^\s"'<>]{4,600}$/.test(t[k]))) return { error: `Een nummer in "${p.name}" heeft een ongeldig adres.` };
+    if (t.deezerId != null && !(Number.isSafeInteger(t.deezerId) && t.deezerId > 0)) return { error: `Een nummer in "${p.name}" heeft een ongeldige Deezer-id.` };
+    if (t.isrc != null && (typeof t.isrc !== 'string' || !/^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(t.isrc))) return { error: `Een nummer in "${p.name}" heeft een ongeldige ISRC.` };
+    if (t.yearFixed != null && typeof t.yearFixed !== 'boolean') return { error: `Een nummer in "${p.name}" is ongeldig.` };
     if (!cleanTrack(t)) return { error: `Een nummer in "${p.name}" kan nergens worden afgespeeld.` };
   }
   if (p.shareId != null && (typeof p.shareId !== 'string' || !/^[0-9a-z]{4,12}$/.test(p.shareId))) return { error: `De playlist "${p.name}" is beschadigd.` };
+  if (p.source != null && !cleanSource(p.source)) return { error: `De playlist "${p.name}" heeft een ongeldige herkomst.` };
   // known fields only: anything else is dropped (never stored)
   const known = Object.fromEntries(ALLOWED_PLAYLIST.filter((k) => p[k] !== undefined).map((k) => [k, p[k]]));
   const value = cleanPlaylist(known);
   value.updated = p.updated;
+  if (byteLength(JSON.stringify(value)) > MAX_PLAYLIST_BYTES) return { error: `De playlist "${p.name}" is te groot om te bewaren (meer dan ${Math.round(MAX_PLAYLIST_BYTES / 1024)} kB). Maak hem kleiner of verdeel hem over twee playlists.` };
   return { value };
 }
+
+/** A playlist the account already has, unchanged: { id, updated, same: true }. */
+const isStub = (p) => !!p && typeof p === 'object' && !Array.isArray(p) && p.same === true;
 
 export function validatePrefs(p) {
   if (p == null) return { value: {} };
@@ -230,7 +250,7 @@ const musicOk = (m) => m === 'deck' || m === 'mix' || (typeof m === 'string' && 
  * the sections that were sent) or { error }. The Spotify value must be a Client ID (32
  * hexadecimal characters, the form the app checks): a token or anything else is refused.
  */
-export function validateData(d) {
+export function validateData(d, { current = null } = {}) {
   if (!d || typeof d !== 'object' || Array.isArray(d)) return { error: 'Ongeldige gegevens.' };
   if (hasBadKeys(d)) return { error: 'Ongeldige gegevens.' };
   const out = {};
@@ -245,7 +265,18 @@ export function validateData(d) {
     if (!Array.isArray(d.playlists) || d.playlists.length > MAX_PLAYLISTS) return { error: `Hoogstens ${MAX_PLAYLISTS} playlists.` };
     const ids = new Set();
     out.playlists = [];
+    const have = new Map((current?.playlists || []).map((p) => [p.id, p]));
     for (const p of d.playlists) {
+      if (isStub(p)) {
+        // "keep yours": only when the account has exactly this playlist (same id and time)
+        const mine = typeof p.id === 'string' ? have.get(p.id) : null;
+        if (!mine || mine.updated !== p.updated || Object.keys(p).some((k) => !['id', 'updated', 'same'].includes(k))) return { error: 'stale', stale: true };
+        if (ids.has(mine.id)) return { error: 'Twee playlists hebben dezelfde id.' };
+        ids.add(mine.id);
+        out.playlists.push(mine);
+        out.stubs = (out.stubs || 0) + 1;
+        continue;
+      }
       const r = validatePlaylist(p);
       if (r.error) return r;
       if (ids.has(r.value.id)) return { error: 'Twee playlists hebben dezelfde id.' };
@@ -347,8 +378,9 @@ export class AccountBox {
    * key: the normalised username; store: { load, save, remove }; rooms: the prepared-room
    * adapter (optional); opts: { now, iterations, log }.
    */
-  constructor(key, store, rooms = null, { now = Date.now, iterations = PBKDF2_ITERATIONS, log = () => {} } = {}) {
+  constructor(key, store, rooms = null, { now = Date.now, iterations = PBKDF2_ITERATIONS, log = () => {}, quota = null } = {}) {
     this.key = key;
+    this.quota = quota; // Node: { fits(key, bytes), set(key, bytes) } over all accounts in memory
     this.store = store;
     this.rooms = rooms;
     this.now = now;
@@ -583,17 +615,25 @@ export class AccountBox {
       if (args.rev !== this.rec.rev) {
         return fail(409, 'conflict', 'Je account is intussen op een ander toestel gewijzigd.', { rev: this.rec.rev, data: this.rec.data });
       }
-      const r = validateData(args.data);
+      const r = validateData(args.data, { current: this.rec.data });
+      // a stub for a playlist the account does not have like that: merge with the current data again
+      if (r.stale) return fail(409, 'conflict', 'Je account is intussen op een ander toestel gewijzigd.', { rev: this.rec.rev, data: this.rec.data });
       if (r.error) return fail(400, 'data', r.error);
+      const delta = !!r.value.stubs;
+      delete r.value.stubs;
       const next = { ...emptyData(), ...this.rec.data, ...r.value };
       // a tombstone older than 180 days is forgotten
       const cutoff = this.now() - 180 * 24 * 60 * 60 * 1000;
       next.deleted = Object.fromEntries(Object.entries(next.deleted || {}).filter(([, at]) => at > cutoff));
-      if (byteLength(JSON.stringify(next)) > MAX_DATA_BYTES) return fail(413, 'size', `Je gegevens zijn te groot om te bewaren (meer dan ${Math.round(MAX_DATA_BYTES / 1024)} kB). Maak een playlist kleiner of verwijder er een.`);
+      const bytes = byteLength(JSON.stringify(next));
+      if (bytes > MAX_DATA_BYTES) return fail(413, 'size', `Je gegevens zijn te groot om te bewaren (meer dan ${Math.round(MAX_DATA_BYTES / 1024 / 1024)} MB). Maak een playlist kleiner of verwijder er een.`);
+      if (this.quota && !this.quota.fits(this.key, bytes)) return fail(507, 'full', 'De server is vol: je gegevens konden niet worden bewaard. Probeer het later opnieuw.');
       this.rec.data = next;
       this.rec.rev++;
       await this.persist();
-      return ok({ rev: this.rec.rev, data: this.rec.data });
+      this.quota?.set(this.key, bytes);
+      // a delta save (stubs) is answered without the data: the client has it already
+      return ok(delta || args.delta === true ? { rev: this.rec.rev, delta: true } : { rev: this.rec.rev, data: this.rec.data });
     });
   }
 
@@ -610,6 +650,7 @@ export class AccountBox {
       }
       this.rec = null;
       await this.store.remove();
+      this.quota?.set(this.key, 0);
       return ok({ ok: true, rooms });
     });
   }
@@ -696,6 +737,65 @@ export class AccountBox {
 
 const OPS = ['signup', 'login', 'recover', 'logout', 'logoutAll', 'password', 'get', 'save', 'delete', 'rooms', 'roomCreate', 'roomEdit', 'roomReset', 'roomOpen', 'roomDelete'];
 export const ACCOUNT_OPS = OPS.slice();
+
+export const PLAYLIST_KEY_PREFIX = 'pl:';
+
+/**
+ * Cloudflare: the record over several Durable Object values (one value holds at most 2 MiB).
+ * kv: the object's storage (get(key) / get([keys]) -> Map, put({ key: value, ... }),
+ * delete([keys]), deleteAll()). 'account' holds the record with data.playlistIds instead of
+ * data.playlists; every playlist is 'pl:<id>'. Only changed playlists are written; one put of
+ * at most MAX_PLAYLISTS + 1 keys (Durable Objects take 128 per call) is one atomic write.
+ */
+export function chunkedStore(kv) {
+  let stored = new Map(); // playlist id -> JSON as last read / written
+  const key = (id) => `${PLAYLIST_KEY_PREFIX}${id}`;
+  return {
+    async load() {
+      const rec = await kv.get('account');
+      stored = new Map();
+      if (!rec) return null;
+      const ids = rec.data?.playlistIds;
+      if (!Array.isArray(ids)) return rec; // a record of before: everything in one value
+      const got = ids.length ? await kv.get(ids.map(key)) : new Map();
+      const playlists = ids.map((id) => got.get(key(id))).filter((p) => p && typeof p === 'object');
+      for (const p of playlists) stored.set(p.id, JSON.stringify(p));
+      const { playlistIds: _ids, ...data } = rec.data;
+      return { ...rec, data: { ...data, playlists } };
+    },
+    async save(rec) {
+      const playlists = Array.isArray(rec?.data?.playlists) ? rec.data.playlists : [];
+      const entries = {};
+      const now = new Map();
+      for (const p of playlists) {
+        const j = JSON.stringify(p);
+        now.set(p.id, j);
+        if (stored.get(p.id) !== j) entries[key(p.id)] = p;
+      }
+      const { playlists: _pl, ...data } = rec.data || {};
+      entries.account = { ...rec, data: { ...data, playlistIds: playlists.map((p) => p.id) } };
+      await kv.put(entries);
+      const gone = [...stored.keys()].filter((id) => !now.has(id)).map(key);
+      if (gone.length) await kv.delete(gone);
+      stored = now;
+    },
+    async remove() {
+      stored = new Map();
+      await kv.deleteAll();
+    },
+  };
+}
+
+/** Node: one budget for the data of all accounts in memory: { fits(key, bytes), set(key, bytes), total }. */
+export function dataQuota(maxBytes) {
+  const sizes = new Map();
+  let total = 0;
+  return {
+    fits: (key, bytes) => total - (sizes.get(key) || 0) + bytes <= maxBytes,
+    set(key, bytes) { total += bytes - (sizes.get(key) || 0); if (bytes) sizes.set(key, bytes); else sizes.delete(key); },
+    get total() { return total; },
+  };
+}
 
 /** A store in memory (tests, Node without a file): { load, save, remove } over one map entry. */
 export function memoryStore(map, key, onChange = () => {}) {
