@@ -89,7 +89,12 @@ export function createMusicSheet({ slot, navigate, getPick }) {
     gen++;
     st = { listening: null, ...state };
     if (!offPlayer) offPlayer = player.subscribe(() => { if (st?.listening) drawTracks(); });
-    if (!offEnrich) offEnrich = enrich.subscribe(() => { if (st?.view === 'play') draw(); });
+    if (!offEnrich) {
+      offEnrich = enrich.subscribe(() => {
+        const box = st?.view === 'play' ? slot.querySelector('[data-slot="ready"]') : null;
+        if (box) keepFocus(() => { box.innerHTML = readyHtml(); });
+      });
+    }
     draw();
     focusFirst();
   }
@@ -141,7 +146,7 @@ export function createMusicSheet({ slot, navigate, getPick }) {
       ${coverHtml(s.picture, small ? 'cover-md' : 'cover-lg')}
       <div class="ms-head-text">
         <p class="ms-kicker">${kicker}</p>
-        <h2 id="sheet-title" data-testid="sheet-title">${esc(s.name || 'Playlist')}</h2>
+        <h2 id="sheet-title" data-testid="sheet-title">${esc(s.name || s.placeholder || 'Playlist')}</h2>
         <p class="ms-sub" data-testid="sheet-count">${esc(countLine(s.count, s.by))}${longer}</p>
       </div>
       <button class="icon-btn ms-close" type="button" data-act="sheet-close" data-testid="sheet-close" aria-label="Sluiten">${icons.close}</button>
@@ -235,10 +240,10 @@ export function createMusicSheet({ slot, navigate, getPick }) {
       </div>`;
   }
 
-  function playHtml() {
+  /** How the chosen list plays now (+ the way out when it cannot), redrawn while work goes on. */
+  function readyHtml() {
     const { pid } = st.play;
     const p = pid === BUILTIN_ID ? null : store.get(pid);
-    const name = p ? p.name : BUILTIN_NAME;
     const src = musicSource();
     let info;
     if (p) {
@@ -246,10 +251,19 @@ export function createMusicSheet({ slot, navigate, getPick }) {
       const spCounts = store.deckCounts(p, 'spotify');
       info = readinessInfo({ counts, source: src, spotifyPlayable: spCounts.inDeck, status: enrich.status(pid), playNow: p.playNow === true });
     } else info = { text: 'Klaar: het ingebouwde deck, ook als geprinte kaartjes.', tone: 'ok', action: null };
-    const work = p ? workLine(enrich.status(pid)) : '';
+    // "Speelt met 40 van 500; de rest wordt nog nagekeken" already says that the check runs
+    const work = p && info.tone !== 'busy' ? workLine(enrich.status(pid)) : '';
     const action = info.action === 'connect'
       ? '<a class="btn btn-secondary btn-small" href="#/instellingen/spotify" data-testid="play-connect">Verbind Spotify</a>'
       : info.action === 'wait' ? '<button class="btn btn-secondary btn-small" type="button" data-act="play-wait" data-testid="play-wait">Wacht op de jaartallen</button>' : '';
+    return `<div class="ms-ready is-${info.tone}" data-testid="play-ready"><p>${esc(info.text)}${work ? ` <span class="muted">${esc(work)}.</span>` : ''}</p>${action}</div>
+      ${p?.playNow && (enrich.status(pid).yearsPending || 0) > 0 ? '<p class="small muted ms-honest" data-testid="play-honest">Niet alle jaartallen zijn nagekeken; bij oudere nummers kan er het jaar van een heruitgave staan.</p>' : ''}`;
+  }
+
+  function playHtml() {
+    const { pid } = st.play;
+    const p = pid === BUILTIN_ID ? null : store.get(pid);
+    const name = p ? p.name : BUILTIN_NAME;
     const choice = (href, testid, icon, title, sub, cls = '') => `<a class="ms-choice ${cls}" href="${href}" data-act="go" data-testid="${testid}"><span class="ms-choice-ico">${icon}</span><span class="ms-choice-text"><b>${title}</b><small>${sub}</small></span></a>`;
     return `<header class="ms-head is-small">
         ${coverHtml(st.play.picture, 'cover-md')}
@@ -257,8 +271,7 @@ export function createMusicSheet({ slot, navigate, getPick }) {
         <button class="icon-btn ms-close" type="button" data-act="sheet-close" data-testid="sheet-close" aria-label="Sluiten">${icons.close}</button>
       </header>
       ${st.play.done ? `<p class="ms-done" data-testid="play-done">${esc(st.play.done)}</p>` : ''}
-      <div class="ms-ready is-${info.tone}" data-testid="play-ready"><p>${esc(info.text)}${work ? ` <span class="muted">${esc(work)}.</span>` : ''}</p>${action}</div>
-      ${p?.playNow && (enrich.status(pid).yearsPending || 0) > 0 ? '<p class="small muted ms-honest" data-testid="play-honest">Niet alle jaartallen zijn nagekeken; bij oudere nummers kan er het jaar van een heruitgave staan.</p>' : ''}
+      <div data-slot="ready">${readyHtml()}</div>
       <h3 class="ms-how">Hoe wil je spelen?</h3>
       <div class="ms-choices">
         ${choice('#/spelleider', 'play-room', phonesIcon, 'Samen spelen', 'ieder op een eigen telefoon: Discobingo, quiz, Bingo of Tijdlijn', 'is-main')}
@@ -285,9 +298,16 @@ export function createMusicSheet({ slot, navigate, getPick }) {
     const testid = st.view === 'play' ? 'play-sheet' : 'sheet-playlist';
     const body = st.view === 'list' ? listHtml() : st.view === 'run' ? runHtml() : playHtml();
     keepFocus(() => {
-      slot.innerHTML = `<div class="sheet-backdrop ms-backdrop" data-act="sheet-backdrop">
-        <div class="sheet ms-sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" data-testid="${testid}" data-view="${st.view}" data-kind="${esc(st.src?.kind || 'saved')}">${body}</div>
-      </div>`;
+      let el = sheetEl();
+      if (!el) {
+        // built once per opening: redraws replace the content only (no new entry animation)
+        slot.innerHTML = '<div class="sheet-backdrop ms-backdrop" data-act="sheet-backdrop"><div class="sheet ms-sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"></div></div>';
+        el = sheetEl();
+      }
+      el.dataset.testid = testid;
+      el.dataset.view = st.view;
+      el.dataset.kind = st.src?.kind || 'saved';
+      el.innerHTML = body;
     });
   }
 
@@ -320,7 +340,7 @@ export function createMusicSheet({ slot, navigate, getPick }) {
       if (s.kind === 'deezer' && (!s.name || s.count == null)) {
         const info = await deezer.playlistInfo(Number(s.id), { signal: ctrl.signal });
         if (my !== gen) return;
-        Object.assign(s, { name: s.name || info.title, count: info.count, by: s.by || info.by, picture: s.picture || info.picture });
+        Object.assign(s, { name: s.name || info.title || s.placeholder || '', count: info.count, by: s.by || info.by, picture: s.picture || info.picture });
         draw();
       }
       const tracks = s.kind === 'deezer'

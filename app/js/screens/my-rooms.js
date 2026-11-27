@@ -255,7 +255,7 @@ export function render(root, { params = [], navigate }) {
           ${musicOpt('mix', 'Mix van de groep', 'de favorieten van de spelers', 'prep-music-mix')}
         </div>
         ${needHtml(s, form.music)}
-        ${lists.length ? '' : '<p class="muted small">Eigen muziek? Maak eerst een <a href="#/playlists">playlist</a>; die komt dan hier te staan.</p>'}
+        <p class="muted small" data-testid="prep-music-hint">${lists.length ? 'Staat je lijst er niet bij? Kies of zoek hem eerst bij <a href="#/playlists" data-testid="prep-music-pick">Muziek kiezen</a> (bewaar hem daar); dan staat hij hier.' : 'Eigen muziek, of een hitlijst zoals de Top 40? Zoek of maak hem eerst bij <a href="#/playlists" data-testid="prep-music-pick">Muziek kiezen</a> (bewaar hem daar); dan staat hij hier.'}</p>
       </fieldset>
       <fieldset>
         <legend>Hoe klinkt de muziek?</legend>

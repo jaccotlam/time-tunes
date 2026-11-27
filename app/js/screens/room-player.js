@@ -7,7 +7,7 @@ import { cleanName } from '../multi/game.js';
 import { usesServer, createServerClientSession, wakeServer, SERVER_HOST_KEY, storedSeat, checkSeat, forgetSeat, storedAvatar, AVATAR_KEY } from '../multi/server-session.js';
 import { ERROR_TITLES } from '../multi/server-protocol.js';
 import { createMixShare, forgetMixShare } from '../multi/mix-share.js';
-import { mixBlockHtml, mixServerOnlyHtml, mixKey, onMixChange, mixCountsHtml, mixPanelHtml } from './room-mix.js';
+import { mixBlockHtml, mixServerOnlyHtml, mixKey, onMixChange, mixCountsHtml, mixPanelHtml, bindMixPanel } from './room-mix.js';
 import { icons, esc, toast, vibrate, store } from '../ui.js';
 import {
   patch, connBadge, playersHtml, standingsHtml, answerPanelHtml, answerController, myResultHtml, songHtml,
@@ -88,7 +88,7 @@ export function render(root, { params, navigate }) {
     });
     if (viaServer) {
       const s = session;
-      ms = createMixShare({ code, memberId: () => s.playerId, session: s, returnHash: `#/kamer/${code}`, onChange: () => draw() });
+      ms = createMixShare({ code, memberId: () => s.playerId, session: s, returnHash: `#/kamer/${code}`, onChange: () => draw(), inLobby: () => s.view?.phase === 'lobby' });
     }
     session.start();
     draw();
@@ -544,6 +544,7 @@ export function render(root, { params, navigate }) {
   root.addEventListener('keydown', onKeyDown);
   const onChange = (e) => { if (onMixChange(ms, e)) draw(); };
   root.addEventListener('change', onChange);
+  const offMixPanel = bindMixPanel(root, () => ms); // "Kies een playlist" (room-mix.js)
 
   const releaseAwake = keepAwake();
   /** "Terug naar kamer ABCD": ask the server whether the room is still there, then take the seat again. */
@@ -594,6 +595,7 @@ export function render(root, { params, navigate }) {
     hero?.destroy();
     hero = null;
     root.removeEventListener('change', onChange);
+    offMixPanel();
     releaseAwake();
     clearInterval(ticker);
     clearInterval(quizTicker);

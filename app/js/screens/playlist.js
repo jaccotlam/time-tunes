@@ -9,13 +9,16 @@ import * as enrich from '../enrich.js';
 import { RANGES, DEFAULT_RANGE, rangeLabel } from '../multi/mix.js';
 import {
   parseLines, rankSearch, matchLine, trackFromItunes, itunesYear, readiness, validYear, padN,
-  encodeShare, newShareId, exportPlaylist, MIN_TRACKS, MAX_TRACKS, NAME_MAX, parseSpotifyPlaylistId, FUN_MIN,
+  encodeShare, newShareId, exportPlaylist, MIN_TRACKS, MAX_TRACKS, NAME_MAX, parseSpotifyPlaylistId, FUN_MIN, yearPending,
 } from '../playlist-logic.js';
 import { icons, esc, toast } from '../ui.js';
 import { musicSource } from '../deck.js';
 import { qrSvg, defaultBaseUrl } from './print.js';
 import { setupHintHtml } from './devices.js';
 import { accountNoteHtml } from './account-bits.js';
+import { readinessInfo, workLine, rowMark, sourceLabel } from './music-bits.js';
+import { fetchAndImport, importMessage } from './music-sheet.js';
+import { errorMessage as deezerMessage } from '../deezer.js';
 
 export const name = 'playlist';
 
@@ -92,6 +95,7 @@ export function render(root, { params, navigate }) {
     count: TOP_COUNTS.includes(topAuto?.count) ? topAuto.count : topPref.count,
   };
   let renaming = false;
+  const refresh = { busy: false, status: '', ctrl: null }; // "Opnieuw ophalen" of a list with a source
   let filter = '';
   let onlyCheck = false;
   const search = { q: '', last: '', results: [], status: '', busy: false, ctrl: null, timer: 0 };
@@ -133,27 +137,48 @@ export function render(root, { params, navigate }) {
 
   /* ---------- head ---------- */
   function counts() {
-    const playable = store.playableCount(pl, musicSource());
-    const check = pl.tracks.filter((t) => !t.yearSure || !validYear(t.year)).length;
-    const spOnly = pl.tracks.filter((t) => !t.itunesId && t.spotifyId && t.match !== 'pending').length;
-    const pending = pl.tracks.filter((t) => t.match === 'pending').length;
-    return { playable, check, spOnly, pending, total: pl.tracks.length, bg: enrich.status(id) };
+    const src = musicSource();
+    const deck = store.deckCounts(pl, src);
+    const spOnly = pl.tracks.filter((t) => !t.itunesId && !t.deezerId && t.spotifyId && t.match !== 'pending').length;
+    return { src, deck, playable: deck.inDeck, spOnly, total: pl.tracks.length, bg: enrich.status(id), spPlayable: store.deckCounts(pl, 'spotify').inDeck };
   }
 
-  function readinessHtml(c) {
+  /**
+   * The status header: how the list plays now (one line, instead of a tag on every row), what
+   * the background work is doing, and what the player can do (connect Spotify, fetch again).
+   */
+  function statusHtml(c) {
+    const info = readinessInfo({ counts: c.deck, source: c.src, spotifyPlayable: c.spPlayable, status: c.bg, playNow: pl.playNow === true });
     const r = readiness(c.playable);
-    if (!r.timeline) return `<p class="warn small" data-testid="pl-too-small">Nog te weinig nummers om te spelen: Tijdlijn vraagt er minstens ${MIN_TRACKS.timeline}, Bingo ${MIN_TRACKS.bingo}. Scannen met geprinte kaartjes kan altijd.</p>`;
-    if (!r.bingo) return `<p class="warn small" data-testid="pl-too-small">Genoeg voor Tijdlijn. Voor Bingo zijn er minstens ${MIN_TRACKS.bingo} nodig: nog ${plural(r.missing, 'nummer', 'nummers')}.</p>`;
-    if (!r.fun) return `<p class="small muted" data-testid="pl-ready">Speelbaar in alle spelvormen. Met ${FUN_MIN} of meer nummers duren de potjes langer.</p>`;
-    return '<p class="small muted" data-testid="pl-ready">Klaar voor Tijdlijn, Bingo en kaartjes.</p>';
+    let main;
+    if (info.action || info.tone === 'busy') main = `<p class="pl-status-main is-${info.tone}" data-testid="${r.timeline ? 'pl-ready' : 'pl-too-small'}">${esc(info.text)}</p>`;
+    else if (!r.timeline) main = `<p class="warn small" data-testid="pl-too-small">Nog te weinig nummers om te spelen: Tijdlijn vraagt er minstens ${MIN_TRACKS.timeline}, Bingo ${MIN_TRACKS.bingo}. Scannen met geprinte kaartjes kan altijd.</p>`;
+    else if (!r.bingo) main = `<p class="warn small" data-testid="pl-too-small">Genoeg voor Tijdlijn. Voor Bingo zijn er minstens ${MIN_TRACKS.bingo} nodig: nog ${plural(r.missing, 'nummer', 'nummers')}.</p>`;
+    else main = `<p class="pl-status-main is-ok" data-testid="pl-ready">${esc(info.text)}${r.fun ? '' : ` Met ${FUN_MIN} of meer nummers duren de potjes langer.`}</p>`;
+    // one progress line while the background worker runs (the Apple Music line keeps its own id)
+    const work = workLine(c.bg);
+    const apple = c.bg.appleTodo && /^Fragmenten/.test(work);
+    const workHtml = work ? `<p class="pl-matching small" data-testid="${apple ? 'pl-match-status' : 'pl-work-status'}" role="status">${esc(work)}…</p>`
+      : '';
+    const appleHtml = c.bg.appleTodo && !apple ? `<p class="pl-matching small" data-testid="pl-match-status">Fragmenten zoeken… ${c.bg.appleDone} van ${c.bg.appleDone + c.bg.appleTodo}</p>` : '';
+    const notes = [];
+    if (c.spOnly) notes.push(`<span data-testid="pl-spotify-only">${plural(c.spOnly, 'nummer speelt', 'nummers spelen')} alleen via Spotify</span>`);
+    if (pl.source) notes.push(`<span data-testid="pl-source">uit ${esc(sourceLabel(pl))}${pl.source.name && pl.source.name !== pl.name ? `: ${esc(pl.source.name)}` : ''}</span>`);
+    const acts = [];
+    if (info.action === 'connect') acts.push('<a class="btn btn-secondary btn-small" href="#/instellingen/spotify" data-testid="pl-connect">Verbind Spotify</a>');
+    if (pl.source) acts.push(`<button class="btn btn-ghost btn-small" type="button" data-act="refresh-source" data-testid="pl-refresh-source" ${refresh.busy ? 'disabled' : ''}>${icons.restart}<span>${refresh.busy ? 'Bezig…' : 'Opnieuw ophalen'}</span></button>`);
+    return `<div class="pl-status-line" data-testid="pl-status-line">
+        ${main}${workHtml}${appleHtml}
+        ${notes.length ? `<p class="small muted">${notes.join(' · ')}</p>` : ''}
+        ${refresh.status ? `<p class="small" role="status" data-testid="pl-refresh-status">${esc(refresh.status)}</p>` : ''}
+        ${acts.length ? `<div class="pl-status-acts">${acts.join('')}</div>` : ''}
+      </div>`;
   }
 
   function drawHead() {
     const c = counts();
     const active = store.getActiveId() === id;
     const meta = [plural(c.total, 'nummer', 'nummers')];
-    if (c.check) meta.push(`<span class="pl-warn-txt">${plural(c.check, 'jaar', 'jaren')} controleren</span>`);
-    if (c.spOnly) meta.push(`${c.spOnly} alleen via Spotify`);
     slot('head').innerHTML = `
       ${renaming ? `<form class="pl-rename" data-testid="pl-rename-form" autocomplete="off">
           <input type="text" name="name" maxlength="${NAME_MAX}" value="${esc(pl.name)}" aria-label="Naam van de playlist" data-testid="pl-rename-input" enterkeyhint="done">
@@ -162,8 +187,7 @@ export function render(root, { params, navigate }) {
     : `<div class="pl-title-row"><h2 class="pl-name" data-testid="pl-name">${esc(pl.name)}</h2>
           <button class="icon-btn" type="button" data-act="rename" aria-label="Naam wijzigen" data-testid="pl-rename">${editIcon}</button></div>`}
       <p class="pl-meta" data-testid="pl-meta">${meta.join(' · ')}</p>
-      ${c.bg.appleTodo ? `<p class="pl-matching small" data-testid="pl-match-status" role="status">Fragmenten zoeken bij Apple Music: ${c.bg.appleDone} van ${c.bg.appleDone + c.bg.appleTodo}…</p>` : ''}
-      ${readinessHtml(c)}
+      ${statusHtml(c)}
       ${active
     ? '<p class="pl-active" data-testid="pl-is-active"><span class="pill pill-on">Actief</span> Je speelt nu met deze playlist.</p>'
     : !c.total ? '' : `<button class="btn btn-secondary" type="button" data-act="activate" data-testid="pl-activate">${icons.play}<span>Speel met deze playlist</span></button>`}`;
@@ -172,6 +196,46 @@ export function render(root, { params, navigate }) {
       inp.focus();
       inp.select();
     }
+  }
+
+  /** Background redraw of the head: not while renaming, and the focused button keeps its focus. */
+  function drawHeadKeep() {
+    if (renaming) return;
+    const head = slot('head');
+    const a = document.activeElement;
+    const tid = a && head.contains(a) ? a.dataset.testid : null;
+    drawHead();
+    if (tid) head.querySelector(`[data-testid="${CSS.escape(tid)}"]`)?.focus({ preventScroll: true });
+  }
+
+  /** "Opnieuw ophalen": the source list again (new songs are added, fixes stay). */
+  async function refreshSource() {
+    const src = pl.source;
+    if (!src || refresh.busy) return;
+    if (src.kind === 'spotify' && !spl.canRead()) {
+      refresh.status = 'Om de Spotify-playlist opnieuw op te halen moet de app je playlists mogen lezen: kies hieronder de tab Spotify en geef toestemming.';
+      drawHeadKeep();
+      return;
+    }
+    refresh.busy = true;
+    refresh.ctrl = new AbortController();
+    refresh.status = 'Nummers ophalen…';
+    drawHeadKeep();
+    try {
+      const { res } = await fetchAndImport({ kind: src.kind, id: src.id, name: src.name || pl.name, count: null }, {
+        signal: refresh.ctrl.signal,
+        onProgress: (read, total) => { refresh.status = `Nummers ophalen… ${read} van ${total}`; if (alive) drawHeadKeep(); },
+      });
+      if (!alive) return;
+      refresh.status = res.error ? (res.error === 'storage' ? store.STORAGE_FULL_MESSAGE : 'Opnieuw ophalen lukte niet.') : importMessage(res);
+      if (!res.error) { toast(refresh.status, { ms: 3000 }); enrich.prioritise(id); }
+    } catch (e) {
+      if (!alive || e?.code === 'aborted') return;
+      refresh.status = src.kind === 'spotify' ? spl.errorMessage(e) : deezerMessage(e);
+    } finally {
+      refresh.busy = false;
+    }
+    fresh(); drawHeadKeep(); drawList();
   }
 
   /* ---------- tabs ---------- */
@@ -554,20 +618,23 @@ export function render(root, { params, navigate }) {
     bgTimer = setTimeout(() => {
       bgTimer = 0;
       if (!alive || !fresh()) return;
-      drawHead(); drawList();
+      drawHeadKeep(); drawList({ patch: true });
     }, 400);
   });
 
   /* ---------- track list ---------- */
   let listGen = 0; // a newer drawList stops the slices of an older one
+  /** A row only gets a mark where the player can do something (see rowMark in music-bits.js). */
+  const markOf = (t) => rowMark(t, { pending: yearPending(t), fromSource: !!pl.source });
+  const rowKey = (t) => `${t.n}|${t.year}|${markOf(t)}|${t.title}|${t.artist}`;
+
   function trackRow(t) {
     const yearOk = validYear(t.year);
-    const check = !t.yearSure || !yearOk;
+    const mark = markOf(t);
     const tags = [];
-    if (check) tags.push(`<span class="pl-tag is-warn" data-testid="pl-year-warn">${yearOk ? 'controleer het jaar' : 'vul het jaar in'}</span>`);
-    if (t.match === 'pending') tags.push('<span class="pl-tag">fragment zoeken…</span>');
-    else if (!t.itunesId && t.spotifyId) tags.push('<span class="pl-tag" data-testid="pl-spotify-only">alleen via Spotify</span>');
-    return `<li class="pl-track${check ? ' is-check' : ''}" data-testid="pl-track" data-n="${t.n}">
+    if (mark === 'missing') tags.push('<span class="pl-tag is-warn" data-testid="pl-year-warn">vul het jaar in</span>');
+    else if (mark === 'unsure') tags.push('<span class="pl-tag is-soft" data-testid="pl-year-warn" title="Het jaartal is niet zeker: controleer het">jaar?</span>');
+    return `<li class="pl-track${mark === 'missing' ? ' is-check' : mark === 'unsure' ? ' is-unsure' : ''}" data-testid="pl-track" data-n="${t.n}">
       <span class="pl-num" aria-hidden="true">${padN(t.n)}</span>
       <span class="pl-info"><b class="pl-title">${esc(t.title || 'Onbekende titel')}</b><span class="pl-artist">${esc(t.artist || 'Onbekende artiest')}</span>${tags.length ? `<span class="pl-tags">${tags.join('')}</span>` : ''}</span>
       <input class="pl-year" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" value="${yearOk ? t.year : ''}" placeholder="jaar" aria-label="Jaar van ${esc(t.title)}" data-testid="pl-year" data-n="${t.n}">
@@ -575,14 +642,30 @@ export function render(root, { params, navigate }) {
     </li>`;
   }
 
-  function drawList() {
+  let drawn = null; // { keys: Map<n, rowKey>, order: 'n,n,...' } of the rows on screen
+  function drawList({ patch = false } = {}) {
     const list = slot('list');
     const total = pl.tracks.length;
     const needle = filter.trim().toLowerCase();
     const shown = pl.tracks
-      .filter((t) => !onlyCheck || !t.yearSure || !validYear(t.year))
+      .filter((t) => !onlyCheck || markOf(t))
       .filter((t) => !needle || `${t.title} ${t.artist} ${t.year ?? ''}`.toLowerCase().includes(needle));
-    const nCheck = pl.tracks.filter((t) => !t.yearSure || !validYear(t.year)).length;
+    const nCheck = pl.tracks.filter((t) => markOf(t)).length;
+    // background updates: only the rows that changed are drawn again (a 2000-song list stays calm)
+    const order = shown.map((t) => t.n).join(',');
+    if (patch && drawn && drawn.order === order && list.querySelector('.pl-list-head') && drawn.complete) {
+      const ol = list.querySelector('[data-testid="pl-tracks"]');
+      for (const t of shown) {
+        const k = rowKey(t);
+        if (drawn.keys.get(t.n) === k) continue;
+        const li = ol.querySelector(`[data-testid="pl-track"][data-n="${t.n}"]`);
+        if (!li || li.contains(document.activeElement)) continue; // never under the player's fingers
+        li.outerHTML = trackRow(t);
+        drawn.keys.set(t.n, k);
+      }
+      updateOnly(list, nCheck);
+      return;
+    }
     const focus = document.activeElement;
     const keepFilterFocus = focus?.dataset?.testid === 'pl-filter';
     const caret = keepFilterFocus ? focus.selectionStart : 0;
@@ -591,25 +674,24 @@ export function render(root, { params, navigate }) {
           <h2 id="pl-list-title" data-testid="pl-count"></h2>
           ${total > 10 ? `<input type="search" class="pl-filter" placeholder="Zoek in de lijst" aria-label="Zoek in de lijst" data-testid="pl-filter" value="${esc(filter)}">` : ''}
         </div>
-        <label class="pl-only" data-slot="only"><input type="checkbox" data-act="only-check" data-testid="pl-only-check"> <span></span></label>
+        <label class="pl-only" data-slot="only" data-testid="pl-filter-unsure"><input type="checkbox" data-act="only-check" data-testid="pl-only-check"> <span></span></label>
         <ol class="pl-tracks" data-testid="pl-tracks"></ol>
         <p class="set-empty" data-slot="empty" hidden></p>`;
     }
-    list.querySelector('[data-testid="pl-count"]').textContent = total ? `Nummers (${total})` : 'Nummers';
-    const only = list.querySelector('[data-slot="only"]');
-    only.hidden = !nCheck && !onlyCheck;
-    only.querySelector('input').checked = onlyCheck;
-    only.querySelector('span').textContent = `Alleen jaren om te controleren (${nCheck})`;
+    updateOnly(list, nCheck);
     // 2000 rows: the first ones at once, the rest in slices after it, so a change never blocks the screen
     const rows = shown.slice().reverse();
     const ol = list.querySelector('[data-testid="pl-tracks"]');
     const gen = ++listGen;
-    ol.innerHTML = rows.slice(0, ROWS_FIRST).map(trackRow).join('');
+    drawn = { order, keys: new Map(), complete: rows.length <= ROWS_FIRST };
+    const rowsHtml = (part) => part.map((t) => { drawn.keys.set(t.n, rowKey(t)); return trackRow(t); }).join('');
+    ol.innerHTML = rowsHtml(rows.slice(0, ROWS_FIRST));
     let at = ROWS_FIRST;
     const more = () => {
       if (gen !== listGen || !alive || at >= rows.length) return;
-      ol.insertAdjacentHTML('beforeend', rows.slice(at, at + ROWS_SLICE).map(trackRow).join(''));
+      ol.insertAdjacentHTML('beforeend', rowsHtml(rows.slice(at, at + ROWS_SLICE)));
       at += ROWS_SLICE;
+      if (at >= rows.length) drawn.complete = true;
       setTimeout(more, 0);
     };
     if (at < rows.length) setTimeout(more, 0);
@@ -620,6 +702,14 @@ export function render(root, { params, navigate }) {
       const f = list.querySelector('[data-testid="pl-filter"]');
       f?.focus(); f?.setSelectionRange(caret, caret);
     }
+  }
+
+  function updateOnly(list, nCheck) {
+    list.querySelector('[data-testid="pl-count"]').textContent = pl.tracks.length ? `Nummers (${pl.tracks.length})` : 'Nummers';
+    const only = list.querySelector('[data-slot="only"]');
+    only.hidden = !nCheck && !onlyCheck;
+    only.querySelector('input').checked = onlyCheck;
+    only.querySelector('span').textContent = `Toon alleen twijfeljaren (${nCheck})`;
   }
 
   function setYear(input) {
@@ -639,9 +729,8 @@ export function render(root, { params, navigate }) {
     const li = input.closest('.pl-track');
     if (li) li.outerHTML = trackRow(fresh().tracks.find((x) => x.n === n));
     drawHead();
-    const nCheck = pl.tracks.filter((x) => !x.yearSure || !validYear(x.year)).length;
-    const only = slot('list').querySelector('[data-slot="only"]');
-    if (only) { only.querySelector('span').textContent = `Alleen jaren om te controleren (${nCheck})`; only.hidden = !nCheck && !onlyCheck; }
+    if (drawn) drawn.keys.set(n, rowKey(fresh().tracks.find((x) => x.n === n)));
+    updateOnly(slot('list'), pl.tracks.filter((x) => markOf(x)).length);
     toast(`Jaar opgeslagen: ${y}`, { ms: 1600 });
   }
 
@@ -764,6 +853,7 @@ export function render(root, { params, navigate }) {
         break;
       }
       case 'rename': renaming = true; drawHead(); break;
+      case 'refresh-source': refreshSource(); break;
       case 'activate':
         store.setActive(id);
         toast(`Je speelt nu met “${pl.name}”.`, { ms: 2400 });
@@ -875,6 +965,7 @@ export function render(root, { params, navigate }) {
     clearTimeout(search.timer);
     search.ctrl?.abort();
     paste.ctrl?.abort();
+    refresh.ctrl?.abort();
     unsubEnrich();
     clearTimeout(bgTimer);
     root.removeEventListener('click', onClick);
