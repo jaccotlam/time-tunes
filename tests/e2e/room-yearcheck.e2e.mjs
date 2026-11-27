@@ -128,7 +128,7 @@ export default async function run() {
     // during the round the worker waits: no MusicBrainz request while a round is in progress
     assert(await host.page.evaluate(() => window.__tt.enrich.isPaused()), 'the year check pauses during a round');
     const askedAtStart = mbAsked.length;
-    allowUpTo(N);
+    allowUpTo(Infinity); // (a request the pause stopped is asked again later)
     await host.page.waitForTimeout(1500);
     assert(mbAsked.length === askedAtStart, `no new year checks during the round (${mbAsked.length - askedAtStart} asked)`);
     const during = await host.page.evaluate(() => JSON.parse(localStorage.getItem('timetunesr.playlists.v1')).lists[0].tracks.filter((t) => t.yearChecked).length);
@@ -140,8 +140,6 @@ export default async function run() {
     assert(await host.page.evaluate(() => window.__tt.enrich.isPaused()), 'still paused while the round is revealed');
     await host.page.evaluate(() => window.__ttHost.session.toLobby());
     await host.page.locator('[data-testid="screen-room-host"][data-view="lobby"]').waitFor();
-    await host.page.waitForTimeout(4000);
-    console.log('DEBUG', mbAsked.length, answered, held.length, await host.page.evaluate(() => JSON.stringify({ st: window.__tt.enrich.status(JSON.parse(localStorage.getItem('timetunesr.playlists.v1')).lists[0].id), p: window.__tt.enrich.isPaused(), held: document.querySelector('[data-testid="deck-held"]')?.textContent, name: document.querySelector('[data-testid="room-music-name"]')?.textContent })));
     await host.page.waitForFunction(() => !document.querySelector('[data-testid="deck-held"]') && /60 nummers/.test(document.querySelector('[data-testid="room-music-name"]')?.textContent || ''), null, { timeout: 30000 });
     assert(true, 'back in the lobby the rest is checked: all 60 songs play, the note is gone');
 
