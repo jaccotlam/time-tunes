@@ -108,17 +108,19 @@ export function etaText(sec) {
  * counts: deckCounts() of playlists.js ({ total, playable, inDeck, held }) for the current music
  * source; spotifyPlayable: playable count when Spotify would be the source; status: enrich.status().
  */
-export function readinessInfo({ counts, source, spotifyPlayable = 0, status = null, playNow = false } = {}) {
+export function readinessInfo({ counts, source, spotifyPlayable = 0, status = null, playNow = false, spotifyConnected = false } = {}) {
   const c = counts || { total: 0, playable: 0, inDeck: 0, held: 0 };
   const st = status || {};
   if (!c.total) return { text: 'Nog leeg: voeg nummers toe.', tone: 'warn', action: null };
   if (c.inDeck < MIN_TRACKS.timeline) {
     if (source !== 'spotify' && spotifyPlayable >= MIN_TRACKS.timeline) {
       const todo = (st.appleTodo || 0) + (st.appleDone || 0);
+      // connected but playing fragments: the way out is choosing Spotify as the music source
+      const how = spotifyConnected ? 'Kies Spotify als muziekbron' : 'Verbind Spotify';
       return {
-        text: todo ? `Deze lijst speelt via Spotify. Verbind Spotify, of wacht op de fragmenten: ${st.appleDone || 0} van ${todo} gezocht.`
-          : 'Deze lijst speelt via Spotify. Verbind Spotify om hem te spelen.',
-        tone: 'warn', action: 'connect',
+        text: todo ? `Deze lijst speelt via Spotify. ${how}, of wacht op de fragmenten: ${st.appleDone || 0} van ${todo} gezocht.`
+          : `Deze lijst speelt via Spotify. ${how} om hem te spelen.`,
+        tone: 'warn', action: spotifyConnected ? 'source' : 'connect',
       };
     }
     if ((st.yearsMissing || 0) > 0 && (st.pending || 0) > 0) {

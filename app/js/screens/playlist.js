@@ -148,7 +148,7 @@ export function render(root, { params, navigate }) {
    * the background work is doing, and what the player can do (connect Spotify, fetch again).
    */
   function statusHtml(c) {
-    const info = readinessInfo({ counts: c.deck, source: c.src, spotifyPlayable: c.spPlayable, status: c.bg, playNow: pl.playNow === true });
+    const info = readinessInfo({ counts: c.deck, source: c.src, spotifyPlayable: c.spPlayable, status: c.bg, playNow: pl.playNow === true, spotifyConnected: spotify.isConnected() });
     const r = readiness(c.playable);
     let main;
     if (info.action || info.tone === 'busy') main = `<p class="pl-status-main is-${info.tone}" data-testid="${r.timeline ? 'pl-ready' : 'pl-too-small'}">${esc(info.text)}</p>`;
@@ -166,7 +166,7 @@ export function render(root, { params, navigate }) {
     if (c.spOnly) notes.push(`<span data-testid="pl-spotify-only">${plural(c.spOnly, 'nummer speelt', 'nummers spelen')} alleen via Spotify</span>`);
     if (pl.source) notes.push(`<span data-testid="pl-source">uit ${esc(sourceLabel(pl))}${pl.source.name && pl.source.name !== pl.name ? `: ${esc(pl.source.name)}` : ''}</span>`);
     const acts = [];
-    if (info.action === 'connect') acts.push('<a class="btn btn-secondary btn-small" href="#/instellingen/spotify" data-testid="pl-connect">Verbind Spotify</a>');
+    if (info.action === 'connect' || info.action === 'source') acts.push(`<a class="btn btn-secondary btn-small" href="#/instellingen/spotify" data-testid="pl-connect">${info.action === 'source' ? 'Kies Spotify' : 'Verbind Spotify'}</a>`);
     if (pl.source) acts.push(`<button class="btn btn-ghost btn-small" type="button" data-act="refresh-source" data-testid="pl-refresh-source" ${refresh.busy ? 'disabled' : ''}>${icons.restart}<span>${refresh.busy ? 'Bezig…' : 'Opnieuw ophalen'}</span></button>`);
     return `<div class="pl-status-line" data-testid="pl-status-line">
         ${main}${workHtml}${appleHtml}

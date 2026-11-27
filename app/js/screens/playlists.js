@@ -131,7 +131,7 @@ export function render(root, { params, navigate }) {
     const src = musicSource();
     const counts = store.deckCounts(p, src);
     const status = enrich.status(p.id);
-    const info = readinessInfo({ counts, source: src, spotifyPlayable: store.deckCounts(p, 'spotify').inDeck, status, playNow: p.playNow === true });
+    const info = readinessInfo({ counts, source: src, spotifyPlayable: store.deckCounts(p, 'spotify').inDeck, status, playNow: p.playNow === true, spotifyConnected: spotify.isConnected() });
     return { counts, status, info, work: workLine(status) };
   }
 
