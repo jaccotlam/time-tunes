@@ -326,3 +326,45 @@ test('accountmodule: uitloggen (met of zonder de gegevens), overal uitloggen, wa
   assert.equal(account.current(), null);
   assert.equal((await account.logIn('ilse', 'nieuw-wachtwoord')).code, 'login');
 });
+
+test('accountmodule: drie lijsten van 2000 nummers naar een tweede toestel, daarna alleen de gewijzigde lijst opsturen', async (t) => {
+  useServer(base);
+  await account.available({ fresh: true });
+  devices.C = new Map();
+  devices.D = new Map();
+  for (const d of [devices.C, devices.D]) d.set(SERVER_OVERRIDE_KEY, JSON.stringify(base));
+  const song = (i) => ({ n: i + 1, itunesId: 1422648000 + i, spotifyId: `4uLU6hMCjMI75M1A${String(i).padStart(6, '0')}`, deezerId: 3135000 + i, title: `Liedje ${i + 1}`, artist: `Artiest ${i % 300}`, album: 'Album', year: 1960 + (i % 60), yearSure: true });
+  const big = (id, updated) => ({ id, name: `Groot ${id}`, created: 1, updated, nextN: 2001, tracks: Array.from({ length: 2000 }, (_, i) => song(i)), source: { kind: 'deezer', id: '1266971851', name: 'Top' } });
+  use('C');
+  set('timetunesr.playlists.v1', { v: 1, lists: [big('g1', 10), big('g2', 11), big('g3', 12)] });
+  const sent = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (url, opts = {}) => { if (opts.body && String(url).endsWith('/account/data')) sent.push(opts.body.length); return realFetch(url, opts); };
+  try {
+    const s = await account.signUp('Groot', 'geheim-wachtwoord');
+    assert.equal(s.ok, true, JSON.stringify(s));
+    t.diagnostic(`eerste opslag van 3 x 2000 nummers: ${Math.round(sent[0] / 1024)} kB`);
+    use('D');
+    const l = await account.logIn('groot', 'geheim-wachtwoord');
+    assert.equal(l.ok, true, JSON.stringify(l));
+    assert.equal(playlists.all().length, 3);
+    assert.equal(playlists.get('g2').tracks.length, 2000);
+    assert.deepEqual(playlists.get('g2').source, { kind: 'deezer', id: '1266971851', name: 'Top' });
+    // D fixes one year in g2: the save sends that list only (the others as stubs)
+    sent.length = 0;
+    playlists.fixYear('g2', 5, 1977);
+    const p = await account.push();
+    assert.equal(p.ok, true, JSON.stringify(p));
+    assert.equal(sent.length, 1);
+    t.diagnostic(`opslaan na één eigen jaar: ${Math.round(sent[0] / 1024)} kB verstuurd`);
+    assert.ok(sent[0] < 600 * 1024, 'één lijst, niet drie');
+    use('C');
+    const back = await account.pull();
+    assert.equal(back.ok, true);
+    assert.equal(playlists.get('g2').tracks[4].year, 1977);
+    assert.equal(playlists.get('g2').tracks[4].yearFixed, true);
+    assert.equal(playlists.get('g1').tracks.length, 2000);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
