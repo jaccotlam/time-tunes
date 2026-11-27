@@ -24,6 +24,7 @@ import {
   stampedCount, reachedGoal, goalCells, openSquares, bestSquare, lateMarks, decadeOf, decadeLabel, decadesFor,
   yearRight, drawCategory, freshBag, normalizeWin, isValidCard, CENTER, WINS, squaresToGo,
 } from './disco.js';
+import { orderSongs } from './order.js';
 import { isAvatar, avatarFor, avatarOf, JOKER_EVERY, JOKER_CAP, freshStats, cleanStats, discoAwards } from './party.js';
 
 export const MAX_ROOM_PLAYERS = 12;
@@ -172,16 +173,17 @@ export function playableCards(cards) {
  * Start a game with everybody in the room. `cards`: full deck cards (id, year, title, artist,
  * previewUrl ...); they are kept in the state so a reload can go on even when the deck changes.
  */
-export function startGame(room, { cards, seed = Date.now(), now = Date.now(), pool = null }) {
+export function startGame(room, { cards, seed = Date.now(), now = Date.now(), pool = null, history = null }) {
   if (!room.players.length) throw new GameError('empty', 'Er doet nog niemand mee.');
   const valid = playableCards(cards).map((c) => ({ ...c, id: String(c.id), year: Number(c.year) }));
   const { game: kind, size, goal } = room.settings;
-  if (kind === 'quiz') return startQuiz(room, valid, seed, now, pool);
+  if (kind === 'quiz') return startQuiz(room, valid, seed, now, pool, history);
   if (kind === 'disco' && valid.length < DISCO_MIN_SONGS) throw new GameError('deck', `Voor Discobingo zijn minstens ${DISCO_MIN_SONGS} nummers nodig.`);
   if (valid.length < room.players.length + 2) throw new GameError('deck', 'Er staan te weinig kaarten in het deck.');
   const rand = seededRandom(seed >>> 0);
   const songs = Object.fromEntries(valid.map((c) => [c.id, c]));
-  const pile = shuffle(valid.map((c) => c.id), rand);
+  // random, the songs this room has not played yet first, artists spread (order.js)
+  const pile = orderSongs(valid.map((c) => c.id), songs, { rand, history });
   const per = {};
   if (kind === 'bingo') {
     const seen = new Set();
@@ -717,13 +719,13 @@ export function finishByPile(room) {
 /* ---------- Quiz (room server only; the clock is the server's) ---------- */
 
 /** pool: other songs for wrong artist / title answers (a quiz from the mix); default the quiz's own songs. */
-function startQuiz(room, valid, seed, now, pool = null) {
+function startQuiz(room, valid, seed, now, pool = null, history = null) {
   const { questions, qtype, think } = room.settings;
   if (valid.length < QUIZ_MIN_SONGS) throw new GameError('deck', `Voor de quiz zijn minstens ${QUIZ_MIN_SONGS} nummers nodig.`);
   const rand = seededRandom(seed >>> 0);
   const songs = Object.fromEntries(valid.map((c) => [c.id, c]));
   const total = Math.min(questions, valid.length);
-  const pile = shuffle(valid.map((c) => c.id), rand).slice(0, total);
+  const pile = orderSongs(valid.map((c) => c.id), songs, { rand, history }).slice(0, total);
   const others = Array.isArray(pool) && pool.length
     ? shuffle(playableCards(pool), rand).slice(0, 400).map((c, i) => ({ id: `pool${i}`, title: String(c.title || ''), artist: String(c.artist || ''), year: Number(c.year) }))
     : null;

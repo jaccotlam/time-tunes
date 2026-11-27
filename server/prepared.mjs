@@ -75,7 +75,7 @@ export function resetPrepared(hub, code = 'closed', message = 'De spelleider hee
   kickAll(hub, code, message);
   const owner = s.members[s.ownerId];
   const room = G.createRoom({ code: hub.code, host: s.prepared.hostPlays ? { id: s.ownerId, name: s.ownerName } : null, settings: s.room.settings });
-  const next = { ...s, lastActive: t, leaderId: s.ownerId, leaderAwaySince: t, members: { [s.ownerId]: owner }, room, mix: {}, away: {} };
+  const next = { ...s, lastActive: t, leaderId: s.ownerId, leaderAwaySince: t, members: { [s.ownerId]: owner }, room, mix: {}, away: {}, played: { n: 0, keys: {} } };
   delete next.restoredAt;
   hub.state = next;
   hub.mixVersion++;

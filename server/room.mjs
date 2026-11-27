@@ -31,6 +31,7 @@ import {
   addToContribution, contributionTotal, mixStats, mixMinimum, buildMix, MixError, MIX_PER_PLAYER,
 } from '../app/js/multi/mix.js';
 import { sha256Hex } from './sha256.mjs';
+import { cleanHistory, nextGame, markPlayed, emptyHistory } from '../app/js/multi/order.js';
 import { resetPrepared } from './prepared.mjs';
 import { isAvatar, avatarOf, isReaction, REACT_GAP_MS, REACT_ROOM_MAX, REACT_ROOM_WINDOW_MS } from '../app/js/multi/party.js';
 
@@ -63,6 +64,8 @@ export function migrateState(state) {
   if (!state.mix || typeof state.mix !== 'object' || Array.isArray(state.mix)) state.mix = {};
   if (!state.away || typeof state.away !== 'object' || Array.isArray(state.away)) state.away = {};
   if (state.room && typeof state.room === 'object') state.room = withSettings(state.room);
+  // the songs played in this room's earlier games (order.js): fresh songs come first in a new game
+  state.played = cleanHistory(state.played);
   return state;
 }
 
@@ -179,6 +182,7 @@ export class RoomHub {
       restoredAt: t,
       mix: {}, // contributions are not in the backup: the phones send them again
       away: {},
+      played: cleanHistory(snap.played),
     };
     this.persist();
     return { code: this.code, restored: true };
@@ -554,7 +558,10 @@ export class RoomHub {
         // from other players' favourites (those would show up before they are played)
         const pool = mix && r.settings.game === 'quiz' ? cleanCards(m.cards) : null;
         const now = this.now();
-        s.room = r.phase === 'won' ? G.playAgain(r, { cards, seed, now, pool }) : G.startGame(r, { cards, seed, now, pool });
+        // the songs of the earlier games in this room come last (fresh first, order.js)
+        const history = s.played || emptyHistory();
+        s.room = r.phase === 'won' ? G.playAgain(r, { cards, seed, now, pool, history }) : G.startGame(r, { cards, seed, now, pool, history });
+        s.played = nextGame(history);
         if (mix) s.room = { ...s.room, game: { ...s.room.game, mix: true, play: m.play === 'spotify' ? 'spotify' : 'preview' } };
         break;
       }
@@ -731,9 +738,25 @@ export class RoomHub {
   changed() {
     if (!this.state) return;
     if (this.holding) { this.held = true; return; } // a message is being handled: see guarded()
+    this.notePlayed();
     this.persist();
     this.deps.wake?.(quizNextEvent(this.state.room, QUIZ_START_FALLBACK_MS));
     this.refresh();
+  }
+
+  /**
+   * Remember the songs this game has played (the running song, and the start cards of a
+   * Tijdlijn game) in the room's history. Server state only: never in a phone's view.
+   */
+  notePlayed() {
+    const s = this.state;
+    const g = s?.room?.game;
+    if (!g || !g.songs || s.room.phase === 'lobby' || !(s.played?.n > 0)) return;
+    const ids = [];
+    if (g.current != null && s.room.phase !== 'won') ids.push(g.current);
+    if (g.round <= 1 && g.kind === 'timeline') for (const p of Object.values(g.per || {})) for (const id of p.timeline || []) ids.push(id);
+    const songs = ids.map((id) => g.songs[id]).filter(Boolean);
+    if (songs.length) s.played = markPlayed(s.played, songs);
   }
 
   /** Send everybody a fresh state, without saving (nothing stored changed: a display came or went). */
@@ -865,7 +888,7 @@ export class RoomHub {
     // phone. Its backup is the room in the lobby (after a restore the phones send their
     // contributions again and the leader starts a new game).
     const room = g?.mix ? G.backToLobby(s.room) : G.withoutAnswerTimes(s.room);
-    const snap = { v: 1, code: s.code, createdAt: s.createdAt, ownerId: s.ownerId, ownerName: s.ownerName, leaderId: s.leaderId, members: s.members, room };
+    const snap = { v: 1, code: s.code, createdAt: s.createdAt, ownerId: s.ownerId, ownerName: s.ownerName, leaderId: s.leaderId, members: s.members, room, played: s.played || emptyHistory() };
     this.sendTo(connId, { t: 'backup', snap });
   }
 

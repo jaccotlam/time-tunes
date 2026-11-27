@@ -276,7 +276,7 @@ async function wholeGame(browser, rooms, server) {
     await H.waitForFunction(() => document.getElementById('player') && !document.getElementById('player').paused, null, { timeout: 8000 });
     assert(true, `round ${round}: the music plays on the spelleider's phone only after the ball landed`);
     const { song } = await serverHost(H);
-    assert(TRACKS.some((t) => t.previewUrl === song.previewUrl), `round ${round}: "${song.title}" from the playlist`);
+    assert(TRACKS.some((t) => t.itunesId === song.itunesId), `round ${round}: "${song.title}" from the playlist`);
     if (cas) { await C.getByTestId('disco-answer').waitFor(); await answer(C, '', cat, song, 'pass', round); }
 
     // ----- what the phones answer -----

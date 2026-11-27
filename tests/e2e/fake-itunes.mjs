@@ -66,6 +66,13 @@ export async function installFakeItunes(ctx, { catalog = CATALOG } = {}) {
       const ids = String(u.searchParams.get('id') || '').split(',').map(Number);
       stats.lookup.push(ids);
       const results = catalog.filter((s) => ids.includes(s.trackId));
+      // the room suites' own playlists (ids 7 000 000 - 8 999 999): a playlist stores no preview
+      // address any more, so the music phone looks every song up by id, as with real Apple ids
+      for (const id of ids) {
+        if (id >= 7000000 && id < 9000000 && !results.some((r) => r.trackId === id)) {
+          results.push({ wrapperType: 'track', kind: 'song', trackId: id, previewUrl: `https://audio-ssl.itunes.apple.com/fake/${id}.m4a`, trackViewUrl: `https://music.apple.com/nl/song/${id}` });
+        }
+      }
       return json(route, { resultCount: results.length, results });
     }
     return json(route, { resultCount: 0, results: [] });
