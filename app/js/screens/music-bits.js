@@ -146,7 +146,8 @@ export function workLine(st, { short = false } = {}) {
     return short ? `jaren nakijken ${done}/${st.total}` : `Jaartallen nakijken… ${done} van ${st.total}`;
   }
   if (st.yearsMissing > 0 && st.pending > 0) return short ? `jaren ophalen ${st.ready}/${st.total}` : `Jaartallen ophalen… ${st.ready} van ${st.total}`;
-  if (st.appleTodo > 0 && (st.working || st.pending)) {
+  // Apple Music fragments only matter for songs without any fragment (a Deezer song has one)
+  if (st.appleTodo > 0 && st.fragmentsMissing > 0 && (st.working || st.pending)) {
     const all = st.appleDone + st.appleTodo;
     return short ? `fragmenten ${st.appleDone}/${all}` : `Fragmenten zoeken… ${st.appleDone} van ${all}`;
   }

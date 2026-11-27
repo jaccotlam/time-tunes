@@ -96,7 +96,8 @@ test('workLine: the background work in one line', () => {
   assert.equal(workLine(null), '');
   assert.equal(workLine({ total: 500, yearsPending: 380, working: true, pending: 380 }), 'Jaartallen nakijken… 120 van 500');
   assert.equal(workLine({ total: 500, yearsPending: 380, working: true, pending: 380 }, { short: true }), 'jaren nakijken 120/500');
-  assert.equal(workLine({ total: 500, yearsPending: 0, yearsMissing: 0, appleTodo: 480, appleDone: 20, working: true, pending: 480 }), 'Fragmenten zoeken… 20 van 500');
+  assert.equal(workLine({ total: 500, yearsPending: 0, yearsMissing: 0, appleTodo: 480, appleDone: 20, fragmentsMissing: 480, working: true, pending: 480 }), 'Fragmenten zoeken… 20 van 500');
+  assert.equal(workLine({ total: 500, yearsPending: 0, yearsMissing: 0, appleTodo: 480, appleDone: 20, fragmentsMissing: 0, working: true, pending: 480 }), '', 'a catalogue list has its fragments already');
   assert.equal(workLine({ total: 500, yearsPending: 0, yearsMissing: 0, appleTodo: 0, working: false, pending: 0 }), '');
 });
 

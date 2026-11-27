@@ -158,9 +158,10 @@ export function render(root, { params, navigate }) {
     // one progress line while the background worker runs (the Apple Music line keeps its own id)
     const work = workLine(c.bg);
     const apple = c.bg.appleTodo && /^Fragmenten/.test(work);
-    const workHtml = work ? `<p class="pl-matching small" data-testid="${apple ? 'pl-match-status' : 'pl-work-status'}" role="status">${esc(work)}…</p>`
+    const workHtml = work ? `<p class="pl-matching small" data-testid="${apple ? 'pl-match-status' : 'pl-work-status'}" role="status">${esc(work)}</p>`
       : '';
-    const appleHtml = c.bg.appleTodo && !apple ? `<p class="pl-matching small" data-testid="pl-match-status">Fragmenten zoeken… ${c.bg.appleDone} van ${c.bg.appleDone + c.bg.appleTodo}</p>` : '';
+    // songs without any fragment (Spotify-only) are looked up at Apple Music: its own line
+    const appleHtml = c.bg.appleTodo && c.bg.fragmentsMissing && !apple ? `<p class="pl-matching small" data-testid="pl-match-status">Fragmenten zoeken… ${c.bg.appleDone} van ${c.bg.appleDone + c.bg.appleTodo}</p>` : '';
     const notes = [];
     if (c.spOnly) notes.push(`<span data-testid="pl-spotify-only">${plural(c.spOnly, 'nummer speelt', 'nummers spelen')} alleen via Spotify</span>`);
     if (pl.source) notes.push(`<span data-testid="pl-source">uit ${esc(sourceLabel(pl))}${pl.source.name && pl.source.name !== pl.name ? `: ${esc(pl.source.name)}` : ''}</span>`);
