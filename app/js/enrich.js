@@ -33,7 +33,7 @@ import * as deezerApi from './deezer.js';
 import * as mbApi from './musicbrainz.js';
 import { searchKey } from './musicbrainz.js';
 import { appleMatch as appleMatchFn } from './apple-match.js';
-import { validYear, FUN_MIN } from './playlist-logic.js';
+import { validYear, FUN_MIN, yearPending } from './playlist-logic.js';
 import { store as ls } from './ui.js';
 
 const MEM_KEY = 'timetunesr.enrich.v1';
@@ -97,12 +97,8 @@ const hasText = (v) => typeof v === 'string' && v.trim() !== '';
  * already trusted (yearSure on a valid year), not marked yearChecked, and there is something
  * to check with (an ISRC, or title + artist). Pure: reads only the stored fields.
  */
-export function yearPending(t) {
-  if (!t || typeof t !== 'object') return false;
-  if (t.yearFixed === true || t.yearChecked === true) return false;
-  if (t.yearSure === true && validYear(Number(t.year))) return false;
-  return !!(isrcOf(t.isrc) || (hasText(t.title) && hasText(t.artist)));
-}
+// One source of truth: the rule lives in playlist-logic.js (the deck builder uses it too).
+export { yearPending };
 
 /** A year that can be played with: valid and no longer waiting for the check. */
 export const yearChecked = (t) => !!t && validYear(Number(t.year)) && !yearPending(t);
