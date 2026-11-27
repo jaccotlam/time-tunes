@@ -59,7 +59,7 @@ async function partyRoom(core, { settings = {}, start = true, extra = [] } = {})
 const song = (host) => host.last('state').lead.song;
 function answerFor(view, s, right) {
   const d = view.game.disco;
-  if (d.cat === 'decade') return { decade: right ? Math.floor(s.year / 10) * 10 : d.decades.find((x) => x.decade !== Math.floor(s.year / 10) * 10).decade };
+  if (d.cat === 'exact') return { guess: right ? s.year : s.year + 1 };
   if (d.cat === 'year') return { guess: right ? s.year : s.year + 7 };
   return { text: right ? (d.cat === 'artist' ? s.artist : s.title) : 'Iets heel anders' };
 }
@@ -314,6 +314,12 @@ test('prijsuitreiking op de server: na de winst bij spelers, spelleider en tv ge
     assert.equal(scr.view().game.disco.awards, null);
     host.send({ t: 'next' });
     await flush();
+    // a bingo stops the game on every screen; "Stop: naar de prijsuitreiking"
+    if (scr.view().game.disco.bingo) {
+      assert.equal(scr.view().game.disco.awards, null, 'tijdens de bingostop nog geen prijzen');
+      host.send({ t: 'finish' });
+      await flush();
+    }
   }
   assert.equal(a.view().phase, 'won');
   const d = scr.view().game.disco;
@@ -337,7 +343,7 @@ test('een Discobingo-kamer van de vorige versie (geen plaatjes, reeksen, tijden)
   room = G.startGame(room, { cards, seed: 3, now: 1 });
   const s = room.game.songs[room.game.current];
   const cat = room.game.disco.cat;
-  const ans = cat === 'decade' ? { decade: Math.floor(s.year / 10) * 10 } : cat === 'year' ? { guess: s.year } : { text: cat === 'artist' ? s.artist : s.title };
+  const ans = cat === 'exact' || cat === 'year' ? { guess: s.year } : { text: cat === 'artist' ? s.artist : s.title };
   room = G.submitAnswer(room, 'playerA1', ans, { now: 2 });
   room = G.reveal(room, { now: 3 });
   const stored = JSON.parse(JSON.stringify({ v: 1, code: 'KMRT', createdAt: 1, lastActive: 1, claimed: true, ownerId: 'owner01', ownerName: 'Ilse', leaderId: 'owner01', leaderAwaySince: 1, members: { owner01: { th: 'a'.repeat(64) }, playerA1: { th: 'b'.repeat(64) }, playerB1: { th: 'c'.repeat(64) } }, room }));

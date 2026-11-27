@@ -17,6 +17,7 @@ const SHELL = [
   'js/logic.js',
   'js/deck.js',
   'js/player.js',
+  'js/fade.js',
   'js/scanner.js',
   'js/ui.js',
   'js/screens/start.js',

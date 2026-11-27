@@ -838,6 +838,11 @@ export function createServerHostSession() {
     serverNow: () => Date.now() + clock,
     override(pid) { send({ t: 'override', pid }); },
     next() { send({ t: 'next' }); },
+    /** Discobingo: "Wacht nog" (no automatic reveal this round). */
+    hold() { const g = st?.view?.game; if (g) send({ t: 'hold', round: g.round }); },
+    /** Discobingo, on a bingo stop: go on for 'line2' / 'full', or stop (the prize ceremony). */
+    goOn(win) { send({ t: 'continue', win }); },
+    finish() { send({ t: 'finish' }); },
     toLobby() { send({ t: 'lobby' }); },
     remove(pid) { send({ t: 'remove', pid }); },
     /** The owner takes the lead back. */

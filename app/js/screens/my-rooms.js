@@ -43,10 +43,10 @@ let justMade = ''; // code of the room that was just prepared (the Deel page say
 /** Songs the lobby would count for this music (same filter as the host screen). */
 const songCount = (cards) => playableCards((cards || []).filter((c) => c.previewUrl || c.itunesId || c.spotifyId)).length;
 
-/** "Discobingo · winnen met 2 lijnen" */
+/** "Discobingo · eerste bingo bij 2 lijnen" */
 export function gameSummary(s) {
   if (!s) return '';
-  if (s.game === 'disco') return `Discobingo · winnen met ${winText(s.win)}`;
+  if (s.game === 'disco') return `Discobingo · eerste bingo bij ${winText(s.win)}`;
   if (s.game === 'bingo') return `Bingo · kaart van ${s.size}×${s.size}`;
   if (s.game === 'quiz') return `Quiz · ${quizSettingsText(s)}`;
   return `Tijdlijn · doel ${s.goal} kaarten`;

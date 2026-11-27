@@ -14,7 +14,8 @@
 import { categoryOf, squaresToGo } from '../multi/disco.js';
 import {
   createDiscoStage, discoCardHtml, catIcon, catChip, answerWords, resultWords, discoResultsHtml,
-  proposedAnswer, sameAnswer, verdictOf, winText,
+  proposedAnswer, sameAnswer, verdictOf, winText, QUESTION, HINT, isWinner, autoTimerHtml, tickAutoTimers,
+  bingoWhoText, winnerCardHtml, stagesHtml,
 } from './room-disco.js';
 import { patch, winnerHtml, confettiHtml, leaderAwayHtml, diagHtml } from './room-ui.js';
 import { icons, esc, vibrate } from '../ui.js';
@@ -42,14 +43,7 @@ const ss = {
   set(k, v) { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } },
 };
 
-/** The one short question line per category. */
-const QUESTION = {
-  decade: 'Uit welke jaren is dit?',
-  artist: 'Wie zingt of speelt dit?',
-  year: 'Uit welk jaar?',
-  title: 'Hoe heet dit nummer?',
-};
-const HINT = { year: '2 jaar ernaast mag', artist: 'Kleine typefouten mogen', title: 'Kleine typefouten mogen' };
+const yearCat = (cat) => cat === 'year' || cat === 'exact';
 
 const CONN_TEXT = {
   idle: 'Verbinden…',
@@ -90,7 +84,7 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
   const partKeys = {};
   let splash = { k: null, until: 0 };
   let edit = null; // round key while "Wijzig" is open
-  let local = { k: null, value: null, decade: null };
+  let local = { k: null, value: null };
   let shown = { k: null, v: null, until: 0 }; // the verdict on screen
   let seen = ss.get(SEEN_KEY) || {};
   let sheet = null; // null | 'menu' | 'stand' | 'card' | 'answers' | 'mix' | 'leave'
@@ -109,6 +103,8 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
   let sawPlay = false; // this page saw the game running (not only its end, as after a reload)
 
   const later = (fn, ms) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); };
+  // the shared countdown to the automatic reveal moves on between server messages
+  const autoTick = setInterval(() => { if (el) tickAutoTimers(el, serverNow()); }, 250);
   const view = () => getSession()?.view || null;
   const rk = (v) => `${v.code}|${v.game?.disco?.spunAt ?? ''}|${v.game?.round ?? ''}`;
 
@@ -146,7 +142,7 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
     // revealed
     const vv = g.mine ? myVerdict(v) : null;
     if (vv) {
-      if (seen.k !== k) seen = { k, v: null, bingo: false };
+      if (seen.k !== k) seen = { k, v: null, bingo: false, stop: null };
       if (seen.v !== vv) {
         seen.v = vv;
         ss.set(SEEN_KEY, seen);
@@ -156,10 +152,20 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
         if (vv !== 'doubt') later(draw, ms + 30);
         vibrate(vv === 'right' ? [30, 50, 30] : vv === 'wrong' ? [90] : 20);
       }
-      if (vv === 'doubt') return 'verdict';
-      if (shown.k === k && shown.v === vv && Date.now() < shown.until) return 'verdict';
     }
-    if (g.mine?.bingo && !(seen.k === k && seen.bingo)) return 'bingo';
+    // a bingo stops the game on every phone at once: the winner gets the BINGO moment, who may
+    // still lay a chip this round chooses first, everybody else sees who has bingo
+    const b = d.bingo;
+    if (b) {
+      if (seen.k !== k) seen = { k, v: vv, bingo: false, stop: null };
+      if (isWinner(v)) return seen.bingo ? 'card' : 'bingo';
+      if (vv === 'doubt') return 'verdict';
+      const choosing = !!g.reveal?.mine?.correct && !d.waitingForHost && d.choice == null && (d.choosable?.length > 0 || jokerActive(v));
+      if (choosing) return 'choose';
+      return seen.stop === b.win ? 'card' : 'stop';
+    }
+    if (vv === 'doubt') return 'verdict';
+    if (vv && shown.k === k && shown.v === vv && Date.now() < shown.until) return 'verdict';
     if (g.reveal?.mine?.correct && !d.waitingForHost && (d.choosable?.length || jokerActive(v))) return 'choose';
     return 'card';
   }
@@ -299,11 +305,11 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
       const first = momentId == null;
       momentId = id;
       moment = m;
-      if (m === 'bingo' && !lastBingo) vibrate([60, 40, 60, 40, 220]);
-      lastBingo = m === 'bingo';
+      if ((m === 'bingo' || m === 'stop') && !lastBingo) vibrate(m === 'bingo' ? [60, 40, 60, 40, 220] : [40, 40, 40]);
+      lastBingo = m === 'bingo' || m === 'stop';
       parts.host.innerHTML = skeletonHtml(m, v, vv, first);
       // confetti on its own layer under the moment: it never falls over text or buttons
-      parts.fx.innerHTML = m === 'bingo' || m === 'winner' ? confettiHtml() : '';
+      parts.fx.innerHTML = m === 'bingo' || m === 'stop' || m === 'winner' ? confettiHtml() : '';
       for (const k of Object.keys(partKeys)) delete partKeys[k];
       for (const p of ['head', 'main', 'foot']) parts[p] = parts.host.querySelector(`[data-part="${p}"]`);
     }
@@ -366,7 +372,7 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
     const enter = first ? '' : ' is-enter';
     const fx = m === 'verdict' && vv === 'right' ? '<div class="ph-burst" aria-hidden="true"></div>' : '';
     const cls = m === 'verdict' ? ` is-${vv}` : '';
-    const tap = m === 'verdict' && vv !== 'doubt' ? ' data-action="ph-next"' : m === 'bingo' ? ' data-action="ph-bingo-done"' : '';
+    const tap = m === 'verdict' && vv !== 'doubt' ? ' data-action="ph-next"' : m === 'bingo' ? ' data-action="ph-bingo-done"' : m === 'stop' ? ' data-action="ph-stop-done"' : '';
     return `<div class="ph-moment ph-m-${m}${cls}${enter}" data-testid="disco-moment" data-moment="${m}"${tap}>
       ${fx}<div class="ph-part ph-head" data-part="head"></div><div class="ph-part ph-main" data-part="main"></div><div class="ph-part ph-foot" data-part="foot"></div>
     </div>`;
@@ -392,8 +398,21 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
         main: `<p class="ph-bingo-word" data-testid="disco-bingo" role="status">BINGO!</p>
           <p class="ph-bingo-sub">Je hebt ${esc(winText(g.disco.win))}!</p>
           ${discoCardHtml(g.mine, { testid: 'disco-bingo-card', name: v.you?.name, jokerChips: jokerChips(v) })}`,
-        foot: `<p class="ph-line" data-testid="disco-bingo-wait">De spelleider gaat zo naar de uitslag.</p>
+        foot: `<p class="ph-line" data-testid="disco-bingo-wait">Je fiche ligt vast. Het spel staat stil: de spelleider kiest of het doorgaat.</p>
           <button class="btn btn-ghost ph-small-btn" type="button" data-action="ph-bingo-done" data-testid="disco-bingo-card-btn">${gridIco}<span>Bekijk je kaart</span></button>`,
+      };
+    },
+    /** Somebody else has bingo: the game stops here too, with who and their card. */
+    stop(v) {
+      const b = v.game.disco.bingo;
+      const first = b?.winners?.[0];
+      return {
+        keys: { main: JSON.stringify([b]) },
+        main: `<p class="ph-bingo-word is-other" data-testid="disco-stop-word" role="status">BINGO!</p>
+          <p class="ph-bingo-sub" data-testid="disco-stop-who">${esc(bingoWhoText(b))}</p>
+          ${first ? `<div class="ph-stop-card">${winnerCardHtml(first, { testid: 'disco-stop-card' })}</div>` : ''}`,
+        foot: `<p class="ph-line ph-calm" data-testid="disco-stop-wait"><span class="ph-dots" aria-hidden="true"><i></i><i></i><i></i></span>Het spel staat stil. De spelleider kiest: doorgaan of stoppen.</p>
+          <button class="btn btn-ghost ph-small-btn" type="button" data-action="ph-stop-done" data-testid="disco-stop-card-btn">${gridIco}<span>Bekijk je kaart</span></button>`,
       };
     },
     winner(v) {
@@ -409,6 +428,7 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
         keys: { main: JSON.stringify([g.winners, me, mine, prizes, awards]) },
         main: `<div class="ph-winner${me ? ' is-me' : ''}${prizes ? ' is-compact' : ''}" data-testid="disco-win-step" data-step="${prizes ? 'prizes' : 'winner'}">${winnerHtml(v)}</div>
           ${me ? '<p class="ph-won-you" data-testid="room-you-won">Gefeliciteerd, jij hebt gewonnen!</p>' : ''}
+          ${(g.disco?.stages || []).length > 1 ? stagesHtml(g.disco, { testid: 'disco-win-stages' }) : ''}
           ${mine && !me ? `<p class="ph-line ph-place" data-testid="disco-place">Jij: ${place}e plaats · ${mine.stamped} ${mine.stamped === 1 ? 'vakje' : 'vakjes'} · ${mine.lines} ${mine.lines === 1 ? 'lijn' : 'lijnen'}</p>` : ''}
           ${prizes ? `<section class="ph-prizes" data-testid="disco-prizes" aria-label="Prijzen"><h2 class="ph-prizes-h"><span aria-hidden="true">🏅</span> Prijzen</h2>${myAwardsLine(awards, v.you?.id)}${awardsListHtml(awards, { you: v.you?.id, testid: 'disco-awards', itemTestid: 'disco-award', cls: 'is-phone' })}</section>` : ''}`,
         foot: `<button class="btn btn-ghost ph-small-btn" type="button" data-action="ph-sheet" data-page="stand" data-testid="disco-winner-stand">${icons.trophy}<span>Bekijk de stand</span></button>
@@ -439,30 +459,24 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
     const d = g.disco;
     const cat = d.cat;
     const k = rk(v);
-    if (local.k !== k) local = { k, value: null, decade: null };
+    if (local.k !== k) local = { k, value: null };
     const sent = sentAnswer(v);
     const sending = !!getSession()?.pending;
     let input;
-    if (cat === 'decade') {
-      const pick = local.decade ?? sent?.decade ?? null;
-      input = `<div class="ph-decades" role="group" aria-label="Decennium">${d.decades.map((x) => {
-        const on = pick === x.decade;
-        return `<button type="button" class="ph-dec${on ? ' is-on' : ''}" data-action="ph-decade" data-decade="${x.decade}" data-testid="disco-decade-${x.decade}" aria-pressed="${on}"><b>${esc(x.label)}</b><small>${esc(x.sub)}</small></button>`;
-      }).join('')}</div>`;
-    } else if (cat === 'year') {
+    if (yearCat(cat)) {
       const val = local.value ?? (sent?.guess != null ? String(sent.guess) : '');
-      input = `<input id="ph-input" class="ph-input ph-year" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="19··" value="${esc(val)}" data-testid="disco-year-input" aria-label="Jaartal" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="send">`;
+      input = `<input id="ph-input" class="ph-input ph-year" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="19··" value="${esc(val)}" data-testid="disco-year-input" aria-label="${cat === 'exact' ? 'Exact jaar' : 'Jaartal'}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="send">`;
     } else {
       const val = local.value ?? (sent?.text ?? '');
       input = `<input id="ph-input" class="ph-input" type="text" maxlength="60" placeholder="${cat === 'artist' ? 'Artiest of band' : 'Titel'}" value="${esc(val)}" data-testid="disco-text-input" aria-label="${cat === 'artist' ? 'Artiest of band' : 'Titel'}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="send">`;
     }
     const hint = HINT[cat];
     return {
-      keys: { main: JSON.stringify([k, cat, d.decades, sent, edit === k, sending, local.decade]) },
+      keys: { main: JSON.stringify([k, cat, sent, edit === k, sending]) },
       head: questionHead(cat),
       main: `<div class="ph-q disco-answer" data-testid="disco-answer" data-cat="${esc(cat)}">
         <label class="ph-q-line" for="ph-input">${esc(QUESTION[cat])}</label>
-        ${hint ? `<p class="ph-q-hint" data-testid="disco-hint">${esc(hint)}</p>` : ''}
+        ${hint ? `<p class="ph-q-hint${cat === 'exact' ? ' is-exact' : ''}" data-testid="disco-hint">${esc(hint)}</p>` : ''}
         ${input}
         ${stateLine(v, sent)}
         ${lockButton(v, sending)}
@@ -481,12 +495,8 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
   }
   function currentProposal(v) {
     const cat = v.game.disco.cat;
-    if (cat === 'decade') {
-      const pick = local.decade ?? sentAnswer(v)?.decade ?? null;
-      return pick == null ? null : { decade: pick };
-    }
     const sent = sentAnswer(v);
-    const val = local.value ?? (cat === 'year' ? (sent?.guess != null ? String(sent.guess) : '') : sent?.text ?? '');
+    const val = local.value ?? (yearCat(cat) ? (sent?.guess != null ? String(sent.guess) : '') : sent?.text ?? '');
     return proposedAnswer(cat, val);
   }
   function lockButton(v, sending) {
@@ -505,8 +515,11 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
     const sent = sentAnswer(v);
     const { answered, total } = counts(v);
     const all = total > 0 && answered >= total;
-    const words = sent?.pass ? 'Weet ik niet' : sent?.decade != null ? `${answerWords(sent).replace(/ \(.*\)$/, '')}` : sent?.guess != null ? String(sent.guess) : sent?.text != null ? `“${sent.text}”` : '';
+    const words = sent?.pass ? 'Weet ik niet' : sent?.guess != null ? String(sent.guess) : sent?.text != null ? `“${sent.text}”` : '';
+    const d = v.game.disco;
     return {
+      // the countdown key is its own moment on the server clock: a redraw does not restart it
+      keys: { foot: JSON.stringify([answered, total, sent?.pass, d.autoAt]) },
       head: questionHead(cat),
       main: `<div class="ph-sub">
         <span class="ph-sub-check" aria-hidden="true">${icons.check}</span>
@@ -515,6 +528,7 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
         <div class="ph-eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
       </div>`,
       foot: `<p class="ph-count${all ? ' is-all' : ''}" data-testid="disco-answered" data-answered="${answered}" data-total="${total}">${all ? 'Iedereen heeft geantwoord!' : `${answered} van ${total} ${total === 1 ? 'heeft' : 'hebben'} geantwoord`}</p>
+        ${autoTimerHtml(d, serverNow(), { testid: 'disco-auto' })}
         <button class="ph-edit" type="button" data-action="ph-edit" data-testid="disco-edit">${sent?.pass ? 'Toch een idee?' : 'Wijzig'}</button>`,
     };
   }
@@ -531,6 +545,7 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
     let t = `Jij zei ${resultWords(r)}.`;
     if (r.decided && r.auto === 'doubt' && vv !== 'doubt') t += ` De spelleider keurde het ${vv === 'right' ? 'goed' : 'af'}.`;
     else if (r.overridden) t += ' De spelleider heeft het oordeel omgedraaid.';
+    else if (r.cat === 'exact' && vv === 'wrong') t += ' Bij Exact jaar moet het precies kloppen.';
     return t;
   }
 
@@ -577,23 +592,27 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
     const canJoker = revealed && r?.correct && !d.waitingForHost && (d.jokerSquares || []).length > 0 && (!g.mine.bingo || onJoker);
     const pill = vv ? `<span class="ph-pill is-${vv}" data-testid="disco-verdict" data-verdict="${vv}">${vv === 'right' ? `${icons.check}<span>Goed!</span>` : vv === 'wrong' ? `${icons.cross}<span>Helaas</span>` : vv === 'pass' ? '<span>Weet ik niet</span>' : vv === 'none' ? '<span>Geen antwoord</span>' : '<span>Twijfel</span>'}</span>` : '';
     let line = '';
-    if (g.mine.bingo) line = `<p class="ph-instr is-bingo" data-testid="disco-choose" data-state="bingo"><b class="ph-bingo-badge" data-testid="disco-bingo">BINGO!</b><span>${d.choice != null && d.choosable.length > 1 ? 'Verplaatsen kan nog' : `Je hebt ${esc(winText(win))}`}</span></p>`;
-    else if (choosing && d.choice == null && jokerOn) line = '<p class="ph-instr is-todo is-joker" data-testid="disco-choose" data-state="joker"><span class="ph-joker-ico" aria-hidden="true">🃏</span><span>Kies elk open vakje</span></p>';
-    else if (choosing && d.choice == null) line = `<p class="ph-instr is-todo" data-testid="disco-choose" data-state="choose"><span>Kies een</span> ${catChip(d.cat)} <span>vakje</span></p>`;
+    const winner = revealed && isWinner(v);
+    if (winner) line = `<p class="ph-instr is-bingo" data-testid="disco-choose" data-state="bingo"><b class="ph-bingo-badge" data-testid="disco-bingo">BINGO!</b><span>Je hebt ${esc(winText(win))}</span></p>`;
+    else if (choosing && d.choice == null && jokerOn) line = '<p class="ph-instr is-todo is-joker" data-testid="disco-choose" data-state="joker"><span class="ph-joker-ico" aria-hidden="true">🃏</span><span>Kies zelf een open vakje</span></p>';
+    else if (choosing && d.choice == null) line = `<p class="ph-instr is-todo" data-testid="disco-choose" data-state="choose"><span>Kies zelf een</span> ${catChip(d.cat)} <span>vakje</span></p>`;
     else if (choosing && onJoker) line = '<p class="ph-instr is-done is-joker" data-testid="disco-choose" data-state="joker-chosen"><span class="ph-joker-ico" aria-hidden="true">🃏</span><span>Joker ingezet!</span></p>';
-    else if (choosing) line = `<p class="ph-instr is-done" data-testid="disco-choose" data-state="chosen">${icons.check}<span>Fiche gezet! Ander vakje? Tik erop.</span></p>`;
+    else if (choosing) line = `<p class="ph-instr is-done" data-testid="disco-choose" data-state="chosen">${icons.check}<span>Fiche gelegd! Ander vakje? Tik erop.</span></p>`;
     else if (revealed && r?.correct && d.noSquare) line = `<p class="ph-instr" data-testid="disco-choose" data-state="nosquare"><span>Geen open</span> ${catChip(d.cat, { short: true })} <span>vakje meer</span></p>`;
     else if (revealed && r) line = '<p class="ph-instr is-none" data-testid="disco-nothing">Geen vakje deze ronde</p>';
     else if (revealed) line = '<p class="ph-instr is-none" data-testid="disco-nothing">Welkom! Je doet mee vanaf de volgende ronde.</p>';
     const explain = r && (r.overridden || (r.decided && r.auto === 'doubt')) ? `<p class="ph-explain-small" data-testid="disco-verdict-explain">${esc(explainText(r, vv))}</p>` : '';
     const n = myToGo(v);
     const togo = n != null && n > 0 ? `<p class="ph-togo${n === 1 ? ' is-hot' : ''}" data-testid="disco-togo" data-togo="${n}">${esc(toGoText(n, win))}</p>` : '';
+    // a bingo stop: who has it, on top of the card (who may still lay a chip does that now)
+    const stop = revealed && d.bingo && !winner
+      ? `<p class="ph-stop-line" data-testid="disco-stop-banner"><b>BINGO</b> <span>${esc(bingoWhoText(d.bingo))}.${choosing && d.choice == null ? ' Leg nog je fiche!' : ''}</span></p>` : '';
     const wait = v.phase === 'answering'
       ? ''
-      : `<p class="ph-line ph-calm" data-testid="room-next-wait"><span class="ph-dots" aria-hidden="true"><i></i><i></i><i></i></span>${g.mine.bingo ? 'De spelleider gaat zo naar de uitslag…' : 'Wachten op de volgende ronde…'}</p>`;
+      : `<p class="ph-line ph-calm" data-testid="room-next-wait"><span class="ph-dots" aria-hidden="true"><i></i><i></i><i></i></span>${d.bingo ? 'Het spel staat stil: de spelleider kiest of het doorgaat…' : 'Wachten op de volgende ronde…'}</p>`;
     const joker = canJoker ? jokerHtml(v, { on: jokerOn, onJoker }) : '';
     return {
-      head: `<div class="ph-cardhead${pill ? '' : ' no-pill'}">${pill}${line}</div>${explain}`,
+      head: `${stop}<div class="ph-cardhead${pill ? '' : ' no-pill'}">${pill}${line}</div>${explain}`,
       main: `<div class="ph-cardbox${joker ? ' has-joker' : ''}">${discoCardHtml(g.mine, { mode: choosing ? 'choose' : 'show', choosable: d.choosable || [], joker: jokerOn ? d.jokerSquares : [], jokerChips: jokerChips(v), choice: d.choice, cat: choosing ? d.cat : null, name: v.you?.name })}</div>`,
       // the joker control takes the place of the waiting line (the round is not over while it is there)
       foot: joker ? `${togo}${joker}` : `${togo}${wait}`,
@@ -649,7 +668,7 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
     if (!ans) return;
     const sent = sentAnswer(v);
     edit = null;
-    if (!sent || !sameAnswer(ans, sent) || (ans.decade != null && sent.decade !== ans.decade)) send(ans);
+    if (!sent || !sameAnswer(ans, sent)) send(ans);
     vibrate(15);
     document.activeElement?.blur?.();
     draw();
@@ -772,7 +791,8 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
       ss.set(TOAST_KEY, toastSeen);
     }
     // never over the big moments; it waits for a calm one
-    if (toastQueue && !['verdict', 'splash', 'bingo', 'spin', 'question'].includes(m)) {
+    if (g.disco.bingo) toastQueue = null; // a bingo says it all: no stale "spannend" over it
+    if (toastQueue && !['verdict', 'splash', 'bingo', 'stop', 'spin', 'question'].includes(m)) {
       const text = toastQueue;
       toastQueue = null;
       const t = parts.toast;
@@ -801,15 +821,13 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
       case 'ph-leave-yes': closeSheet(); leave(); return true;
       case 'ph-next': shown.until = 0; draw(); return true;
       case 'ph-bingo-done': if (v) { seen = { ...seen, k: rk(v), bingo: true }; ss.set(SEEN_KEY, seen); } draw(); return true;
-      case 'ph-decade':
-        if (v?.phase === 'answering') { local = { ...local, k: rk(v), decade: Number(a.dataset.decade) }; vibrate(8); draw(); }
-        return true;
+      case 'ph-stop-done': if (v?.game?.disco?.bingo) { seen = { ...seen, k: rk(v), stop: v.game.disco.bingo.win }; ss.set(SEEN_KEY, seen); } draw(); return true;
       case 'ph-lock': if (!a.disabled) submit(); return true;
       case 'ph-pass':
-        if (v?.phase === 'answering' && v.game.mine) { edit = null; local = { k: rk(v), value: null, decade: null }; send({ pass: true }); vibrate(15); document.activeElement?.blur?.(); draw(); }
+        if (v?.phase === 'answering' && v.game.mine) { edit = null; local = { k: rk(v), value: null }; send({ pass: true }); vibrate(15); document.activeElement?.blur?.(); draw(); }
         return true;
       case 'ph-edit':
-        if (v?.phase === 'answering') { edit = rk(v); local = { k: rk(v), value: null, decade: null }; draw(); }
+        if (v?.phase === 'answering') { edit = rk(v); local = { k: rk(v), value: null }; draw(); }
         return true;
       case 'disco-stamp':
         if (v?.phase === 'revealed' && Number(a.dataset.index) !== v.game.disco.choice) {
@@ -859,6 +877,7 @@ export function createDiscoPhone({ getSession, send, stamp, leave, mixHtml = () 
     get moment() { return moment; },
     get sheet() { return sheet; },
     destroy() {
+      clearInterval(autoTick);
       for (const t of timers) clearTimeout(t);
       timers.clear();
       clearTimeout(toastTimer);

@@ -104,7 +104,7 @@ export function createJoinHero() {
 function gameOpts(s) {
   if (s.game === 'bingo') return [`${s.size}×${s.size}`];
   if (s.game === 'quiz') { const [n, t, ...kind] = quizSettingsText(s).split(', '); return [n, t, kind.join(', ')].filter(Boolean); }
-  if (s.game === 'disco') return [`winnen met ${winText(s.win)}`];
+  if (s.game === 'disco') return [`eerste bingo bij ${winText(s.win)}`];
   return [`doel ${s.goal} kaarten`];
 }
 
