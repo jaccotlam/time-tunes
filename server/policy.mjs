@@ -99,7 +99,13 @@ export const LIMITS = {
   maxRooms: 1000, // Node: normal rooms in memory at the same time (prepared rooms not counted)
   maxPreparedRooms: 500, // Node: rooms prepared by accounts (live 30 days), a cap of their own
   maxAccounts: 1000, // Node: accounts in memory / in the accounts file
-  maxAccountData: 512 * 1024 * 1024, // Node: the synced data of all accounts together (each at most MAX_DATA_BYTES)
+  // Node: the synced data of all accounts together (each at most MAX_DATA_BYTES = 6 MiB). It all
+  // lives in this process's memory (twice: the store and the open account), so the budget is
+  // what a small host carries comfortably; on disk each account is a file of its own (core.mjs)
+  maxAccountData: 128 * 1024 * 1024,
+  // Node: how much one address may grow the stored account data in a day (5 accounts at most
+  // with a sign-up limit of 5 per hour: a flood from one address fills at most a quarter)
+  accountGrowthPerIp: { limit: 32 * 1024 * 1024, windowMs: 24 * 60 * 60 * 1000 },
 };
 
 /** Which endpoint is this? -> { kind: 'health'|'create'|'restore'|'seat'|'info'|'ws'|'none', code? } */

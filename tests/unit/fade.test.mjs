@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ramp, volumeWorks, createAudioFader, createSpotifyFader, createRoundMusic, FADE_OUT_MS, SPOTIFY_MAX_REQUESTS, VOLUME_WAIT_MS,
+  recoverSpotifyVolume, MARKER_MAX_AGE_MS,
 } from '../../app/js/fade.js';
 
 /** Manual clock: set/clear/now plus advance(ms), which runs what is due and lets promises settle. */
@@ -288,4 +289,140 @@ test('ronde-muziek met Spotify: de eigen pauze van de spelleider zet het volume 
   m.destroy();
   await tm.advance(100);
   assert.equal(s.volume, 55, 'weg van het scherm: het eigen volume');
+});
+
+/** The localStorage marker, in memory. */
+function memMarker(v = null) {
+  const m = { v, sets: 0, clears: 0 };
+  m.get = () => m.v;
+  m.set = (x) => { m.sets++; m.v = { ...x }; };
+  m.clear = () => { m.clears++; m.v = null; };
+  return m;
+}
+
+test('Spotify: zolang het volume laag staat, staat het eigen volume (en het toestel) in localStorage; terug = weg', async () => {
+  const tm = fakeTimers();
+  const s = fakeSpotify({ volume: 64 });
+  s.api.info = () => { s.calls.push('info'); return Promise.resolve({ volume: s.volume, supports: true, deviceId: 'dev1' }); };
+  const mk = memMarker();
+  const f = createSpotifyFader(s.api, { timers: tm, marker: mk });
+  const p = f.fadeIn(4000, () => {});
+  await tm.advance(50);
+  assert.ok(s.volume <= 10);
+  assert.deepEqual({ volume: mk.v?.volume, deviceId: mk.v?.deviceId }, { volume: 64, deviceId: 'dev1' }, 'marker while low');
+  await tm.advance(4200);
+  await p;
+  assert.equal(mk.v, null, 'back at the user volume: marker gone');
+  const o = f.fadeOut(FADE_OUT_MS, s.api.pause);
+  await tm.advance(200);
+  assert.equal(mk.v?.volume, 64);
+  await tm.advance(FADE_OUT_MS + 200);
+  await o;
+  assert.equal(mk.v, null);
+  // pagehide (keepalive): sent at once, but the marker stays for the next start to check
+  const p2 = f.fadeIn(4000, () => {});
+  await tm.advance(50);
+  await f.interrupt({ keepalive: true });
+  assert.equal(s.volume, 64);
+  assert.equal(mk.v?.volume, 64, 'keepalive restore keeps the marker');
+  await tm.advance(5000);
+  await p2;
+});
+
+test('Spotify: een tab die midden in een fade stierf -> bij de volgende start eenmaal het eigen volume terug', async () => {
+  const dev = (id, volume, supports = true) => ({ volume, supports, deviceId: id });
+  const api = (d, { infoFails = false, setFails = false } = {}) => {
+    const calls = [];
+    return {
+      calls,
+      info: async () => { calls.push('info'); if (infoFails) throw new Error('x'); return d; },
+      setVolume: async (v) => { calls.push(v); if (setFails) throw new Error('x'); d.volume = v; },
+    };
+  };
+  const now = () => 1_000_000;
+  const at = 999_000;
+  // no marker: the volume is never touched, Spotify not even asked
+  let a = api(dev('dev1', 6));
+  assert.equal(await recoverSpotifyVolume(a, { marker: memMarker(), now }), 'none');
+  assert.deepEqual(a.calls, []);
+  // the same device, still low: restored once, marker cleared
+  let mk = memMarker({ volume: 64, deviceId: 'dev1', at });
+  a = api(dev('dev1', 6));
+  assert.equal(await recoverSpotifyVolume(a, { marker: mk, now }), 'restored');
+  assert.deepEqual(a.calls, ['info', 64]);
+  assert.equal(mk.v, null);
+  assert.equal(await recoverSpotifyVolume(a, { marker: mk, now }), 'none', 'once');
+  // another device is active: not touched, marker dropped
+  mk = memMarker({ volume: 64, deviceId: 'dev1', at });
+  a = api(dev('dev2', 6));
+  assert.equal(await recoverSpotifyVolume(a, { marker: mk, now }), 'none');
+  assert.deepEqual(a.calls, ['info']);
+  assert.equal(mk.v, null);
+  // the user turned it up (or it came back anyway): never above / never changed
+  mk = memMarker({ volume: 40, deviceId: 'dev1', at });
+  a = api(dev('dev1', 80));
+  assert.equal(await recoverSpotifyVolume(a, { marker: mk, now }), 'kept');
+  assert.deepEqual(a.calls, ['info']);
+  // Spotify not reachable now / no device: the marker stays for later
+  mk = memMarker({ volume: 64, deviceId: 'dev1', at });
+  assert.equal(await recoverSpotifyVolume(api(null, { infoFails: true }), { marker: mk, now }), 'later');
+  assert.equal(await recoverSpotifyVolume(api(null), { marker: mk, now }), 'later');
+  assert.equal(await recoverSpotifyVolume(api(dev('dev1', 6), { setFails: true }), { marker: mk, now }), 'later');
+  assert.equal(mk.v?.volume, 64);
+  // a stale or broken marker is dropped without asking
+  for (const bad of [{ volume: 64, deviceId: 'dev1', at: now() - MARKER_MAX_AGE_MS - 1 }, { volume: 'x', deviceId: 'dev1', at }, { volume: 64, at }]) {
+    mk = memMarker(bad);
+    a = api(dev('dev1', 6));
+    assert.equal(await recoverSpotifyVolume(a, { marker: mk, now }), 'none');
+    assert.deepEqual(a.calls, []);
+    assert.equal(mk.v, null);
+  }
+});
+
+test('ronde-muziek: de herstelstap van een gestorven tab gaat voor de eerste fade (die meet het herstelde volume)', async () => {
+  const tm = fakeTimers();
+  const { p } = fakePlayer('spotify');
+  const s = fakeSpotify({ volume: 6 });
+  s.api.info = () => { s.calls.push('info'); return Promise.resolve({ volume: s.volume, supports: true, deviceId: 'dev1' }); };
+  const mk = memMarker({ volume: 64, deviceId: 'dev1', at: 0 });
+  const m = createRoundMusic({ player: p, spotifyApi: s.api, timers: tm, win: null, marker: mk });
+  m.fadeInPlay(4000);
+  await tm.advance(4500);
+  assert.equal(s.volumes()[0], 64, `first the recovery (${s.volumes()})`);
+  assert.equal(s.volume, 64, 'the fade ends at the recovered volume, not at the low one');
+  assert.equal(mk.v, null);
+  m.destroy();
+  // without a marker nothing extra is asked
+  const s2 = fakeSpotify({ volume: 50 });
+  const m2 = createRoundMusic({ player: fakePlayer('spotify').p, spotifyApi: s2.api, timers: tm, win: null, marker: memMarker() });
+  assert.deepEqual(s2.calls, []);
+  m2.destroy();
+});
+
+test('Spotify: een herstel wordt nooit ingehaald door een "zacht"-verzoek dat nog onderweg is', async () => {
+  const tm = fakeTimers();
+  let device = 64;
+  const sent = [];
+  const pendingCalls = [];
+  const api = {
+    info: () => Promise.resolve({ volume: device, supports: true, deviceId: 'd' }),
+    // every call hangs until the test lets it land; it lands in the order they are released
+    setVolume: (v) => new Promise((resolve) => { sent.push(v); pendingCalls.push(() => { device = v; resolve(null); }); }),
+  };
+  const f = createSpotifyFader(api, { timers: tm, marker: memMarker() });
+  let started = 0;
+  f.fadeIn(4000, () => { started++; });
+  await tm.advance(VOLUME_WAIT_MS + 50); // the "low" call is still on its way: the song starts anyway
+  assert.equal(started, 1);
+  assert.deepEqual(sent, [6], 'only the low call went out');
+  const r = f.interrupt(); // the leader pauses: restore
+  await tm.advance(100);
+  assert.deepEqual(sent, [6], 'the restore waits for the low call');
+  pendingCalls.shift()(); // low lands
+  await tm.advance(50);
+  assert.deepEqual(sent, [6, 64], 'then the restore goes');
+  pendingCalls.shift()();
+  await r;
+  await tm.advance(50);
+  assert.equal(device, 64, 'the last word is the user volume');
 });

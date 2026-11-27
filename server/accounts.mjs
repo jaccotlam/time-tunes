@@ -665,11 +665,13 @@ export class AccountBox {
       next.deleted = Object.fromEntries(Object.entries(next.deleted || {}).filter(([, at]) => at > cutoff));
       const bytes = byteLength(JSON.stringify(next));
       if (bytes > MAX_DATA_BYTES) return fail(413, 'size', `Je gegevens zijn te groot om te bewaren (meer dan ${Math.round(MAX_DATA_BYTES / 1024 / 1024)} MB). Maak een playlist kleiner of verwijder er een.`);
-      if (this.quota && !this.quota.fits(this.key, bytes)) return fail(507, 'full', 'De server is vol: je gegevens konden niet worden bewaard. Probeer het later opnieuw.');
+      const room = this.quota ? (this.quota.check ? this.quota.check(this.key, bytes, args.ip) : (this.quota.fits(this.key, bytes) ? null : 'full')) : null;
+      if (room === 'ip') return fail(429, 'ratelimit', 'Er zijn vandaag al veel gegevens bewaard vanaf dit netwerk. Probeer het morgen opnieuw, of maak je gegevens kleiner.');
+      if (room) return fail(507, 'full', 'De server is vol: je gegevens konden niet worden bewaard. Probeer het later opnieuw.');
       this.rec.data = next;
       this.rec.rev++;
       await this.persist();
-      this.quota?.set(this.key, bytes);
+      this.quota?.set(this.key, bytes, args.ip);
       // a delta save (stubs) is answered without the data: the client has it already
       return ok(delta || args.delta === true ? { rev: this.rec.rev, delta: true } : { rev: this.rec.rev, data: this.rec.data });
     });
@@ -824,13 +826,48 @@ export function chunkedStore(kv) {
   };
 }
 
-/** Node: one budget for the data of all accounts in memory: { fits(key, bytes), set(key, bytes), total }. */
-export function dataQuota(maxBytes) {
+/**
+ * Node: one budget for the data of all accounts in memory: { check(key, bytes, ip), fits(key,
+ * bytes, ip), set(key, bytes, ip), total }. check -> null (fits) | 'full' (the budget) | 'ip'
+ * (this address grew the data by more than growthPerIp.limit bytes in growthPerIp.windowMs).
+ * A save that does not grow an account always fits: a full server (or one whose budget was
+ * lowered below what it holds) never stops anybody from keeping or shrinking their data.
+ */
+export function dataQuota(maxBytes, { growthPerIp = null, now = Date.now, maxIps = 10000 } = {}) {
   const sizes = new Map();
+  const growth = new Map(); // ip -> { start, bytes }
   let total = 0;
+  const grown = (ip) => {
+    const g = growth.get(ip);
+    if (!g || now() - g.start > growthPerIp.windowMs) return 0;
+    return g.bytes;
+  };
+  const check = (key, bytes, ip) => {
+    const add = bytes - (sizes.get(key) || 0);
+    if (add <= 0) return null;
+    if (total + add > maxBytes) return 'full';
+    if (growthPerIp && ip != null && grown(ip) + add > growthPerIp.limit) return 'ip';
+    return null;
+  };
   return {
-    fits: (key, bytes) => total - (sizes.get(key) || 0) + bytes <= maxBytes,
-    set(key, bytes) { total += bytes - (sizes.get(key) || 0); if (bytes) sizes.set(key, bytes); else sizes.delete(key); },
+    check,
+    fits: (key, bytes, ip) => check(key, bytes, ip) === null,
+    set(key, bytes, ip) {
+      const add = bytes - (sizes.get(key) || 0);
+      total += add;
+      if (bytes) sizes.set(key, bytes); else sizes.delete(key);
+      if (growthPerIp && ip != null && add > 0) {
+        const t = now();
+        let g = growth.get(ip);
+        if (!g || t - g.start > growthPerIp.windowMs) {
+          growth.delete(ip);
+          evictOldest(growth, maxIps, (v) => t - v.start > growthPerIp.windowMs);
+          g = { start: t, bytes: 0 };
+          growth.set(ip, g);
+        }
+        g.bytes += add;
+      }
+    },
     get total() { return total; },
   };
 }

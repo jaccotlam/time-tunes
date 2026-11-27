@@ -634,3 +634,52 @@ test('beschrijving, geldige kamer en weergave na de onthulling', () => {
   assert.deepEqual(v.game.disco.pending, ['p0']);
   assert.deepEqual(viewFor(r, 'p0', {}).game.disco.choosable, openSquares(r.game.prev.p0.card, r.game.prev.p0.marks, r.game.disco.cat));
 });
+
+test('doorgaan en dan zijn de nummers op: wie een etappe won, wint (op volgorde); de rest volgt in de stand', () => {
+  let r = discoRoom(['Anouk', 'Bram'], {}, cards.slice(0, 25));
+  // round 1: Anouk makes one line; the leader goes on for 2 lines
+  const A = lineFor(r, 'p0', r.game.disco.cat);
+  r = withMarks(r, 'p0', A.line.filter((i) => i !== A.sq));
+  r = submitAnswer(r, 'p0', rightAnswer(r));
+  r = stampSquare(reveal(r), 'p0', A.sq);
+  assert.ok(inBingoStop(r));
+  r = continueGame(r, 'line2', { now: 5000 });
+  const anouk = scoreOf(r.game, 'p0');
+  // from now on only Bram is right: he stamps more squares than Anouk, but never 2 lines
+  let rounds = 0;
+  while (r.phase === 'answering') {
+    rounds++;
+    if (scoreOf(r.game, 'p1') <= anouk + 1) r = submitAnswer(r, 'p1', rightAnswer(r));
+    r = reveal(r);
+    assert.ok(!inBingoStop(r), 'nobody reaches 2 lines');
+    r = nextRound(r, { now: 6000 + rounds });
+  }
+  assert.equal(r.phase, 'won');
+  assert.ok(scoreOf(r.game, 'p1') > scoreOf(r.game, 'p0'), `Bram has more squares (${scoreOf(r.game, 'p1')} vs ${scoreOf(r.game, 'p0')})`);
+  assert.deepEqual(r.game.winners, ['p0'], 'the stage winner wins, not the most squares');
+  assert.equal(r.game.endedBy, 'goal', 'shown as after "Stop"');
+  assert.equal(r.game.disco.win, 'line1', 'won with the last stage reached');
+  assert.deepEqual(r.game.disco.stages.map((s) => [s.win, s.winners]), [['line1', ['p0']]]);
+  const w = viewFor(r, 'p1', {});
+  assert.deepEqual(w.game.winners, ['Anouk']);
+  assert.deepEqual(w.game.disco.stages.map((s) => s.names), [['Anouk']]);
+  assert.ok(w.game.disco.awards.length > 0, 'the prize ceremony');
+});
+
+test('nummers op na doorgaan, maar de etappewinnaar is weg: dan de meeste vakjes', () => {
+  let r = discoRoom(['Anouk', 'Bram', 'Cas'], {}, cards.slice(0, 25));
+  const A = lineFor(r, 'p0', r.game.disco.cat);
+  r = withMarks(r, 'p0', A.line.filter((i) => i !== A.sq));
+  r = submitAnswer(r, 'p0', rightAnswer(r));
+  r = stampSquare(reveal(r), 'p0', A.sq);
+  r = continueGame(r, 'line2', { now: 5000 });
+  r = removePlayer(r, 'p0');
+  let rounds = 0;
+  while (r.phase === 'answering') {
+    rounds++;
+    if (rounds <= 2) r = submitAnswer(r, 'p1', rightAnswer(r));
+    r = nextRound(reveal(r), { now: 6000 + rounds });
+  }
+  assert.equal(r.game.endedBy, 'pile');
+  assert.deepEqual(r.game.winners, ['p1']);
+});

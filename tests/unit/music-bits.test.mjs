@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cleanPick, readPick, setPick, clearPick, markPicked, takePicked, isPlaylistLink, countLine, safeImage,
-  yearsEta, etaText, readinessInfo, workLine, sourceLabel, rowMark, PICK_KEY, PICK_MAX_AGE_MS,
+  yearsEta, etaText, yearsWaitText, readinessInfo, workLine, sourceLabel, rowMark, PICK_KEY, PICK_MAX_AGE_MS,
 } from '../../app/js/screens/music-bits.js';
 
 function memStorage() {
@@ -58,8 +58,8 @@ test('countLine and safeImage', () => {
   assert.equal(safeImage(42), null);
 });
 
-test('waiting time for checked years: about 1.2 s per year, in words', () => {
-  assert.equal(yearsEta(0, 30), 36);
+test('waiting time for checked years: a first guess of 2.2 s per year, in words', () => {
+  assert.equal(yearsEta(0, 30), 66);
   assert.equal(yearsEta(30, 30), 0);
   assert.equal(yearsEta(40, 30), 0);
   assert.equal(etaText(36), 'nog ongeveer 35 seconden');
@@ -67,6 +67,26 @@ test('waiting time for checked years: about 1.2 s per year, in words', () => {
   assert.equal(etaText(12), 'nog ongeveer 10 seconden');
   assert.equal(etaText(150), 'nog ongeveer 3 minuten');
   assert.equal(etaText(70), 'nog ongeveer 1 minuut');
+});
+
+test('waiting time from the OBSERVED rate; "reageert traag" after 10 s without a new year', async () => {
+  const { rateEta } = await import('../../app/js/playlist-logic.js');
+  const t0 = 1_000_000;
+  // nothing measured yet: the first guess (2.2 s per song)
+  assert.deepEqual(rateEta({ done: 0, left: 30, startedAt: t0, now: t0 }), { sec: 66, stalled: false });
+  // measured: 10 songs in 30 s = 3 s per song -> 20 left = 60 s
+  assert.deepEqual(rateEta({ done: 10, left: 20, startedAt: t0, lastAt: t0 + 30000, now: t0 + 30000 }), { sec: 60, stalled: false });
+  // fast: 10 songs in 11 s -> 20 left = 22 s; it counts down between songs
+  assert.equal(rateEta({ done: 10, left: 20, startedAt: t0, lastAt: t0 + 11000, now: t0 + 11000 }).sec, 22);
+  assert.equal(rateEta({ done: 10, left: 20, startedAt: t0, lastAt: t0 + 11000, now: t0 + 16000 }).sec, 17);
+  // the first songs blend with the first guess (one fast song does not promise a minute too few)
+  assert.equal(rateEta({ done: 1, left: 29, startedAt: t0, lastAt: t0 + 500, now: t0 + 500 }).sec, Math.ceil((29 * (500 + 2 * 2200)) / 3 / 1000));
+  // stalled: no new song for 10 s
+  const slow = { done: 5, left: 25, startedAt: t0, lastAt: t0 + 8000, now: t0 + 18000 };
+  assert.equal(rateEta(slow).stalled, true);
+  assert.equal(yearsWaitText(slow), 'MusicBrainz reageert traag…');
+  assert.equal(yearsWaitText({ done: 10, left: 20, startedAt: t0, lastAt: t0 + 30000, now: t0 + 30000 }), 'nog ongeveer 1 minuut');
+  assert.equal(yearsWaitText({ done: 10, left: 0, startedAt: t0, now: t0 + 30000 }), 'bijna klaar');
 });
 
 test('readinessInfo: one honest line and the way out', () => {

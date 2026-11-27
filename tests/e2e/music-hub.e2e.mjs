@@ -95,7 +95,7 @@ export function newMocks() {
     storing: true, // 'storing' searches fail with a Deezer error until this is false
     previews: [], // preview URLs the page fetched
     mb: { isrc: {}, fired503: new Set(), n503: 0, search: [], n404: 0 },
-    spotify: { calls: [] },
+    spotify: { calls: [], delayMs: 0 },
   };
 }
 
@@ -232,7 +232,7 @@ const spTrack = (k) => ({
 });
 
 async function installSpotify(ctx, M) {
-  await ctx.route('https://api.spotify.com/v1/**', (route) => {
+  await ctx.route('https://api.spotify.com/v1/**', async (route) => {
     const req = route.request();
     const u = new URL(req.url());
     const p = u.pathname.replace('/v1', '');
@@ -253,6 +253,7 @@ async function installSpotify(ctx, M) {
     if (m) {
       const id = m[1];
       if (id === SP.locked || id === SP.foreign) return json(403, { error: { status: 403, message: 'Forbidden' } });
+      if (M.spotify.delayMs) await new Promise((r) => setTimeout(r, M.spotify.delayMs));
       const total = SP_COUNT[id] ?? 0;
       const off = Number(u.searchParams.get('offset')) || 0;
       const lim = Math.min(Number(u.searchParams.get('limit')) || 50, 50);
@@ -303,7 +304,9 @@ async function searchFor(page, q) {
 
 async function newPage(ctx, errors, label) {
   const page = await ctx.newPage();
-  page.on('pageerror', (e) => errors.push(`${label}: ${e.message}`));
+  // (the opaque-origin Deezer frame makes Playwright's own init scripts complain about
+  // serviceWorker / localStorage access: that is the test harness, not the app)
+  page.on('pageerror', (e) => { if (!/sandboxed and lacks the 'allow-same-origin'/.test(e.message)) errors.push(`${label}: ${e.message}`); });
   page.on('dialog', (d) => d.accept());
   return page;
 }
@@ -742,6 +745,7 @@ export default async function run() {
     await sp.getByTestId('sheet-playlist').waitFor();
     await sp.waitForFunction(() => document.querySelectorAll('[data-testid="sheet-track"]').length === 30);
     check(/Jouw Spotify-playlist/.test(await sp.locator('.ms-sheet .ms-kicker').first().textContent()) && await sp.getByTestId('sheet-listen').count() === 0, 'the Spotify sheet lists the songs (no fragment buttons: they are not catalogue songs)');
+    M.spotify.delayMs = 300; // long enough for the progress to be seen
     await startSampler(sp);
     await sp.getByTestId('sheet-play-now').click();
     await sp.getByTestId('play-sheet').waitFor({ timeout: 90000 });
@@ -760,6 +764,7 @@ export default async function run() {
     for (const [w, mobile] of [[390, true], [1280, false]]) {
       const bctx = await phoneCtx(browser, M, { w, h: 800, mobile });
       await bctx.addInitScript(() => {
+        try { localStorage.getItem('x'); } catch { return; } // the sandboxed Deezer frame has no storage
         if (localStorage.getItem('__seeded')) return;
         localStorage.setItem('__seeded', '1');
         localStorage.setItem('timetunesr.mbGap.v1', '600000');
@@ -818,7 +823,7 @@ export default async function run() {
     await installEscapeGuard(H.context, M);
     await installFakeItunes(H.context);
     await installMusic(H.context, M);
-    H.page.on('pageerror', (e) => errors.push(`host: ${e.message}`));
+    H.page.on('pageerror', (e) => { if (!/sandboxed and lacks the 'allow-same-origin'/.test(e.message)) errors.push(`host: ${e.message}`); });
     H.page.setDefaultTimeout(30000);
     const host = H.page;
     await host.goto(base);
@@ -828,7 +833,7 @@ export default async function run() {
     const P = await phone(browser, rs, { viewport: { width: 390, height: 800 } });
     await installEscapeGuard(P.context, M);
     await installFakeItunes(P.context);
-    P.page.on('pageerror', (e) => errors.push(`player: ${e.message}`));
+    P.page.on('pageerror', (e) => { if (!/sandboxed and lacks the 'allow-same-origin'/.test(e.message)) errors.push(`player: ${e.message}`); });
     await joinRoom(P.page, base, code, 'Sanne');
     await waitForPlayers(host, 1);
     // the player records whether the "spelleider is even weg" state ever shows

@@ -16,7 +16,7 @@ import { musicSource } from '../deck.js';
 import { FUN_MIN, BUILTIN_ID, BUILTIN_NAME, MAX_TRACKS } from '../playlist-logic.js';
 import { icons, esc, toast } from '../ui.js';
 import {
-  countLine, safeImage, readinessInfo, yearsEta, etaText, plural, clearPick, markPicked, workLine,
+  countLine, safeImage, readinessInfo, yearsWaitText, plural, clearPick, markPicked, workLine,
 } from './music-bits.js';
 
 const PREVIEW_ROWS = 30;
@@ -104,6 +104,7 @@ export function createMusicSheet({ slot, navigate, getPick }) {
     st?.run?.ctrl?.abort();
     st?.loadCtrl?.abort();
     if (st?.nowTimer) clearTimeout(st.nowTimer);
+    if (st?.etaTimer) { clearInterval(st.etaTimer); st.etaTimer = null; }
     if (st?.listening) { player.stop(); st.listening = null; }
   }
 
@@ -215,7 +216,8 @@ export function createMusicSheet({ slot, navigate, getPick }) {
           <div class="pl-bar" aria-hidden="true"><i style="width:${pct(have, r.min)}%"></i></div>
           <p class="small muted">Je speelt zo met alle nummers die al een jaartal hebben. Niet alle jaartallen zijn nagekeken; bij oudere nummers kan er het jaar van een heruitgave staan.</p>`;
       }
-      return `<p class="ms-step"><b>Jaartallen nakijken…</b> <span data-testid="sheet-progress-count">${checked} van ${r.min}</span> <span class="muted">· ${esc(etaText(yearsEta(checked, r.min)))}</span></p>
+      const wait = yearsWaitText({ done: Math.max(0, (r.lastChecked ?? 0) - (r.c0 ?? 0)), left: r.min - checked, startedAt: r.t0 || Date.now(), lastAt: r.lastAt || r.t0 });
+      return `<p class="ms-step"><b>Jaartallen nakijken…</b> <span data-testid="sheet-progress-count">${checked} van ${r.min}</span> <span class="muted" data-testid="sheet-eta">· ${esc(wait)}</span></p>
         <div class="pl-bar" aria-hidden="true"><i style="width:${pct(checked, r.min)}%"></i></div>
         <p class="small muted">Catalogi geven bij oudere nummers vaak het jaar van een heruitgave. Daarom kijkt de app elk jaartal na bij MusicBrainz, ongeveer één per seconde. Bij ${r.min} nagekeken nummers start het spel vanzelf; de rest gaat op de achtergrond door.</p>`;
     }
@@ -424,14 +426,21 @@ export function createMusicSheet({ slot, navigate, getPick }) {
     if (!p) return;
     const min = Math.max(1, Math.min(FUN_MIN, p.tracks.length));
     const ctrl = new AbortController();
-    st.run = { ...(st.run || { mode: 'play' }), phase: 'years', pid, min, name: p.name, ctrl, status: enrich.status(pid), failedAt: null };
+    const s0 = enrich.status(pid);
+    const now = Date.now();
+    // the estimate comes from the rate seen from here on (t0, c0); lastAt: the last new checked song
+    st.run = { ...(st.run || { mode: 'play' }), phase: 'years', pid, min, name: p.name, ctrl, status: s0, failedAt: null, t0: now, c0: s0.yearsChecked || 0, lastChecked: s0.yearsChecked || 0, lastAt: now };
     st.view = 'run';
     draw(); focusFirst();
+    // the line moves on between progress events (the countdown, or "reageert traag")
+    if (st.etaTimer) clearInterval(st.etaTimer);
+    st.etaTimer = setInterval(() => { if (my === gen && st?.run?.phase === 'years') drawProgress(); else if (st?.etaTimer) { clearInterval(st.etaTimer); st.etaTimer = null; } }, 1000);
     enrich.prepare(pid, {
       min, signal: ctrl.signal,
       onProgress: (s) => {
         if (my !== gen || !st?.run || st.run.pid !== pid) return;
         st.run.status = s;
+        if ((s.yearsChecked || 0) > st.run.lastChecked) { st.run.lastChecked = s.yearsChecked; st.run.lastAt = Date.now(); }
         if (st.run.phase === 'now') nowCheck();
         else drawProgress();
       },
@@ -474,6 +483,7 @@ export function createMusicSheet({ slot, navigate, getPick }) {
   function finishPlay(pid, done) {
     if (!st) return;
     if (st.nowTimer) { clearTimeout(st.nowTimer); st.nowTimer = null; }
+    if (st.etaTimer) { clearInterval(st.etaTimer); st.etaTimer = null; }
     // the year check goes on in the background (prepare is only the waiting moment)
     st.run?.ctrl?.abort();
     const p = store.get(pid);

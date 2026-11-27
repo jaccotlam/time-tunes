@@ -846,10 +846,22 @@ export function scoreOf(game, pid) {
   return s.timeline ? s.timeline.length : Number(s.score) || 0;
 }
 
-/** Songs ran out: highest score wins (ties share). */
+/**
+ * Songs ran out: highest score wins (ties share). Discobingo after "doorgaan": the stages won
+ * so far decide, as after "Stop" (finishGame): whoever won a stage is a winner, in stage order,
+ * and the game ends as won by its last stage (`disco.win` = that stage's goal, the stages kept
+ * for the prize screens); the goal nobody reached is only the ranking that follows (stamped
+ * squares). Nobody of the stages still in the game: the highest score, as before.
+ */
 export function finishByPile(room) {
   const g = room.game;
   const ids = room.players.map((p) => p.id).filter((id) => g.per[id]);
+  const stages = g.kind === 'disco' && Array.isArray(g.disco?.stages) ? g.disco.stages : [];
+  const staged = [...new Set(stages.flatMap((st) => st.winners))].filter((id) => own(g.per, id));
+  if (staged.length) {
+    const disco = { ...g.disco, win: stages[stages.length - 1].win, stages };
+    return { ...room, phase: 'won', game: { ...g, current: null, winners: staged, endedBy: 'goal', answers: {}, disco } };
+  }
   const best = Math.max(0, ...ids.map((id) => scoreOf(g, id)));
   const winners = ids.filter((id) => scoreOf(g, id) === best);
   return { ...room, phase: 'won', game: { ...g, current: null, winners, endedBy: g.kind === 'quiz' ? 'quiz' : 'pile', answers: {} } };

@@ -76,8 +76,9 @@ test('nagekeken jaartal: dezelfde regels als de jaartalcontrole van de app', () 
   assert.deepEqual(checkedYear(1980, { via: 'isrc', year: 1985 }), { year: 1980, sure: false }, 'MusicBrainz later: Deezer blijft, niet zeker');
   assert.deepEqual(checkedYear(2011, { via: 'search', year: 1986 }), { year: 1986, sure: false }, 'gevonden via zoeken: nooit zeker');
   assert.deepEqual(checkedYear(1984, { via: 'search', year: 1986 }), { year: 1984, sure: false });
-  assert.equal(checkedYear(2011, null), null, 'niets gevonden: niet nagekeken, niet gedeeld');
-  assert.equal(checkedYear(2011, { via: 'isrc', year: 1066 }), null);
+  assert.deepEqual(checkedYear(2011, null), { year: 2011, sure: false }, 'MusicBrainz antwoordde zonder jaar (ISRC en zoeken): nagekeken, het Deezer-jaar blijft, niet zeker');
+  assert.equal(checkedYear(null, null), null, 'ook geen Deezer-jaar: niets om mee te spelen');
+  assert.deepEqual(checkedYear(2011, { via: 'isrc', year: 1066 }), { year: 2011, sure: false }, 'een onzinjaar telt als geen antwoord');
   assert.equal(checkedYear(2011, { via: 'gok', year: 1990 }), null);
 });
 
@@ -278,8 +279,10 @@ test('telefoon: kiest, kijkt na, deelt alleen nagekeken nummers, één voor éé
   assert.equal(ls.state.shared.length, 25);
   assert.equal(session.sent.length, 25, 'precies wat gedeeld is, staat in de kamer');
   assert.ok(session.sent.every((t) => t.checked === true && t.deezerId && t.isrc && Number.isInteger(t.year)), 'alleen nagekeken nummers, met Deezer-id en ISRC');
-  assert.ok(session.sent.every((t) => (t.deezerId % 10000) % 5 !== 0), 'zonder gevonden jaartal: niet gedeeld');
-  assert.ok(session.sent.every((t) => t.sure === true && t.year === 1960 + (t.deezerId % 10000)), 'jaar van MusicBrainz (ISRC), zeker');
+  const noMb = (t) => (t.deezerId % 10000) % 5 === 0; // MusicBrainz answers without a year
+  assert.ok(session.sent.some(noMb), 'MusicBrainz antwoordde zonder jaartal (ISRC en zoeken): toch nagekeken en gedeeld');
+  assert.ok(session.sent.filter(noMb).every((t) => t.sure === false && t.year === 2025), 'dan met het Deezer-jaar, niet zeker (zoals enrich.js: geen wachten op Apple)');
+  assert.ok(session.sent.filter((t) => !noMb(t)).every((t) => t.sure === true && t.year === 1960 + (t.deezerId % 10000)), 'jaar van MusicBrainz (ISRC), zeker');
   const fromSmall = session.sent.filter((t) => Math.floor(t.deezerId / 10000) === 2).length;
   assert.ok(fromSmall >= 6, `ook uit de kleine lijst (${fromSmall} van de 6 met een jaartal)`);
   assert.ok(f.calls.search.length > 0, 'zonder ISRC-jaar: zoeken op titel en artiest');

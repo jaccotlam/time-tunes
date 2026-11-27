@@ -820,7 +820,12 @@ async function discoGame(browser, rooms, server) {
     assert(true, `round ${round} (${cat}): tv marks: ${NAMES.map((n) => `${n} ${rightNames.includes(n) ? `right 🔥${X[n].streak}` : plan.how[n]}${n === expectFast ? ' ⚡' : ''}${earned[n] ? ' +🃏' : ''}`).join(', ')}`);
     assert(rows.filter((x) => x.fastest).length === (expectFast ? 1 : 0), `round ${round}: ${expectFast ? 'exactly one' : 'no'} player has the snelste mark`);
     // the spelleider's regie shows the same marks
-    assert(await H.locator('[data-testid="disco-regie"] [data-testid="fastest-mark"]').count() === (expectFast ? 1 : 0), `round ${round}: the host's regie list shows ${expectFast ? 'one' : 'no'} ⚡`);
+    // (the host tab gets the reveal on its own connection: wait for it like for the tv, then check once more)
+    await poll(`round ${round}: the host's regie list shows ${expectFast ? 'one' : 'no'} ⚡`, async () => {
+      const n = await H.locator('[data-testid="disco-regie"] [data-testid="fastest-mark"]').count();
+      return n === (expectFast ? 1 : 0) ? null : `${n} marks`;
+    });
+    assert(true, `round ${round}: the host's regie list shows ${expectFast ? 'one' : 'no'} ⚡`);
 
     // ----- the phones: verdict moment (recorded), the numbers of the view -----
     for (const n of NAMES) {

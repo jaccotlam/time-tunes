@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  orderSongs, spreadArtists, songKey, artistKey, markPlayed, nextGame, emptyHistory, cleanHistory, gameSeed, HISTORY_MAX, SPREAD_GAP,
+  orderSongs, spreadArtists, songKey, songText, hashKey, artistKey, markPlayed, nextGame, emptyHistory, cleanHistory, gameSeed, HISTORY_MAX, SPREAD_GAP,
 } from '../../app/js/multi/order.js';
 import { seededRandom, shuffle } from '../../app/js/logic.js';
 import { fitCards, MAX_CARDS, SERVER_PROTOCOL_VERSION as V } from '../../app/js/multi/server-protocol.js';
@@ -167,4 +167,88 @@ test('kamer: een nieuw potje speelt eerst de nummers die nog niet gespeeld zijn;
   const r = core2.http({ method: 'POST', path: `/rooms/${code}/restore`, origin: ORIGIN, ip: '10.0.0.1', body: JSON.stringify({ v: V, id: 'owner01', token, snap }) });
   assert.equal(r.status, 200);
   assert.equal(r.body.restored, true);
+});
+
+test('geschiedenis compact: korte hash-sleutels, oude tekst-sleutels worden omgezet, niets gekopieerd als er niets verandert', () => {
+  assert.equal(HISTORY_MAX, 1500);
+  const song = { title: 'Song - 2011 Remaster', artist: 'The Band' };
+  assert.match(songKey(song), /^[0-9a-z]{1,11}$/, 'a short hash, no text of the song');
+  assert.equal(songKey(song), hashKey(songText(song)));
+  assert.equal(songText(song), songText({ title: 'Song', artist: 'band' }));
+  assert.notEqual(songKey(song), songKey({ title: 'Other', artist: 'band' }));
+  // an old history (text keys, as stored before): the same songs count as played
+  const cards = deck(40, 40);
+  const old = { n: 2, keys: Object.fromEntries([...cards.slice(0, 10).map((c) => [songText(c), 1]), ...cards.slice(10, 20).map((c) => [songText(c), 2])]) };
+  const conv = cleanHistory(old);
+  assert.equal(Object.keys(conv.keys).length, 20);
+  assert.ok(Object.keys(conv.keys).every((k) => /^[0-9a-z]{1,11}$/.test(k)), 'converted to hashes');
+  assert.equal(conv.keys[songKey(cards[0])], 1);
+  assert.equal(conv.keys[songKey(cards[15])], 2);
+  const order = orderSongs(cards.map((c) => c.id), byId(cards), { rand: seededRandom(5), history: old });
+  const idx = (id) => Number(id.slice(1));
+  assert.ok(order.slice(0, 20).every((id) => idx(id) >= 20), 'old history: still the unplayed ones first');
+  assert.ok(order.slice(20, 30).every((id) => idx(id) < 10), 'then the oldest game');
+  // a clean history is used as it is; marking songs that are already marked copies nothing
+  assert.equal(cleanHistory(conv), conv);
+  const again = markPlayed(conv, cards.slice(10, 12));
+  assert.equal(again, conv, 'nothing new: the same object');
+  const more = markPlayed(conv, [cards[30]]);
+  assert.notEqual(more, conv);
+  assert.equal(Object.keys(more.keys).length, 21);
+  assert.equal(Object.keys(conv.keys).length, 20, 'the old object is not changed');
+  // an old history of 4000 text keys: the newest 1500 stay
+  const big = { n: 8, keys: Object.fromEntries(Array.from({ length: 4000 }, (_, i) => [`artiest ${i}|liedje ${i}`, 1 + Math.floor(i / 500)])) };
+  const cut = cleanHistory(big);
+  assert.equal(Object.keys(cut.keys).length, HISTORY_MAX);
+  assert.equal(cut.keys[hashKey('artiest 3999|liedje 3999')], 8, 'the newest kept');
+  assert.equal(cut.keys[hashKey('artiest 0|liedje 0')], undefined, 'the oldest forgotten');
+  const bytes = JSON.stringify(cut).length;
+  assert.ok(bytes < 35_000, `1500 keys: ${bytes} bytes (text keys were ${JSON.stringify(big).length})`);
+});
+
+test('kamer: een nummer telt pas als gespeeld vanaf het onthullen; de kamer blijft ruim onder de Durable Object-grens met 2000 kaarten', async (t) => {
+  const core = createRoomServer({ now: () => 7_000_000 });
+  const res = core.http({ method: 'POST', path: '/rooms', origin: ORIGIN, ip: '10.0.0.1', body: JSON.stringify({ v: V, id: 'owner01', name: 'Ilse', settings: { game: 'bingo', size: 3 } }) });
+  const { code, token } = res.body;
+  const host = ws(core, code);
+  host.send({ t: 'hello', v: V, code, id: 'owner01', token });
+  const a = ws(core, code);
+  a.send({ t: 'hello', v: V, code, id: 'playerA1', name: 'Sam' });
+  await flush();
+  const hub = core.rooms.get(code);
+  const cards = deck(30, 30).map((c) => ({ ...c, id: c.id.replace('c', '0') }));
+  host.send({ t: 'start', cards });
+  await flush();
+  const first = host.last('state').lead.song;
+  assert.equal(hub.state.played.keys[songKey(first)], undefined, 'still being answered: not played yet');
+  host.send({ t: 'reveal' });
+  await flush();
+  assert.equal(hub.state.played.keys[songKey(first)], 1, 'revealed: played');
+  const h1 = hub.state.played;
+  host.send({ t: 'settings', patch: {} });
+  a.send({ t: 'react', emoji: '🎉' });
+  await flush();
+  assert.equal(hub.state.played, h1, 'other changes: the history is not copied again');
+  host.send({ t: 'next' });
+  await flush();
+  const second = host.last('state').lead.song;
+  host.send({ t: 'lobby' }); // back to the lobby before the reveal: that song may come again
+  await flush();
+  assert.equal(hub.state.played.keys[songKey(second)], undefined);
+  assert.ok(!JSON.stringify(a.msgs).includes('"played"'), 'never to a player');
+  // the stored value of a room with a 2000-card game and a full history (Cloudflare: one value)
+  const big = Array.from({ length: MAX_CARDS }, (_, i) => ({
+    id: `k${i}`, year: 1960 + (i % 60), title: `A realistic song title number ${i} (Live)`, artist: `Some Artist Name ${i % 400}`,
+    itunesId: 1_000_000_000 + i, spotifyId: `${'4uLU6hMCjMI75M1A2tKUQC'.slice(0, 16)}${String(i).padStart(6, '0')}`, deezerId: 3_000_000 + i,
+  }));
+  const fit = fitCards(big);
+  host.send({ t: 'start', cards: fit.cards });
+  await flush();
+  assert.equal(hub.state.room.phase, 'answering', JSON.stringify(host.last('error')));
+  hub.state.played = markPlayed(nextGame(hub.state.played), Array.from({ length: HISTORY_MAX }, (_, i) => ({ title: `Gespeeld ${i}`, artist: `Band ${i}` })));
+  const value = Buffer.byteLength(JSON.stringify(hub.state));
+  const history = Buffer.byteLength(JSON.stringify(hub.state.played));
+  t.diagnostic(`room value with ${fit.cards.length} cards and ${HISTORY_MAX} played keys: ${(value / 1024).toFixed(0)} kB (history ${(history / 1024).toFixed(1)} kB); Durable Object limit 2048 kB`);
+  assert.ok(history < 35_000, `history ${history}`);
+  assert.ok(value < 1024 * 1024, `well under the 2 MiB value limit: ${value}`);
 });

@@ -262,6 +262,7 @@ function writeLater(k, w) {
 
 function writeNow(pid, list) {
   if (!list.length) return;
+  if (paused.has('storage')) return; // a request that was already on its way: asked again once there is space
   const failed0 = deps.playlists.writeFailures?.() ?? 0;
   if (typeof deps.playlists.updateTracks === 'function') deps.playlists.updateTracks(pid, list);
   else for (const { n, patch } of list) deps.playlists.updateTrack(pid, n, patch);

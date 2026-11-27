@@ -100,6 +100,30 @@ export function deckTracks(p, source = 'spotify') {
   return { tracks: all, held: [] };
 }
 
+/** First guess per checked year, until a few were measured (MusicBrainz: 1.1 s per request, up to two per song). */
+export const ETA_FIRST_GUESS_MS = 2200;
+/** No new checked song for this long: say it is slow instead of counting down. */
+export const ETA_STALL_MS = 10000;
+
+/**
+ * An honest estimate while years are checked, from the rate observed so far:
+ * done = songs checked since startedAt, left = songs still to go, lastAt = when the last one
+ * came in (startedAt when none yet). The first `warmup` songs blend in the first guess.
+ * Returns { sec, stalled }: stalled when nothing came in for ETA_STALL_MS (then sec is not
+ * meant to be shown). Pure (pass `now`), used by the playlist sheet and the guests' phones.
+ */
+export function rateEta({ done = 0, left = 0, startedAt = 0, lastAt = startedAt, now = Date.now(), firstGuessMs = ETA_FIRST_GUESS_MS, warmup = 3, stallMs = ETA_STALL_MS } = {}) {
+  const l = Math.max(0, Number(left) || 0);
+  if (!l) return { sec: 0, stalled: false };
+  const d = Math.max(0, Number(done) || 0);
+  const last = Math.max(startedAt, Number(lastAt) || startedAt);
+  const stalled = now - last >= stallMs;
+  const took = d > 0 ? Math.max(0, last - startedAt) : 0;
+  const perMs = d >= warmup ? took / d : (took + (warmup - d) * firstGuessMs) / warmup;
+  const ms = Math.max(0, l * perMs - Math.max(0, now - last));
+  return { sec: Math.ceil(ms / 1000), stalled };
+}
+
 /** How many tracks of a playlist (or any list of cards) can be played with this source. */
 export const playableTotal = (tracks, source = 'preview') => (tracks || []).reduce((n, t) => n + (playable(t, source) ? 1 : 0), 0);
 

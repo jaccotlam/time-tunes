@@ -1,13 +1,17 @@
 // Pure helpers for the music screens (the "Muziek kiezen" hub, the playlist sheet, the edit
 // screen's status header): words for counts and progress, the pick mode ("you choose music for
 // room ABCD") and how a pasted link is recognised. No DOM here, so tests/unit can pin it.
-import { MIN_TRACKS, validYear } from '../playlist-logic.js';
+import { MIN_TRACKS, validYear, rateEta } from '../playlist-logic.js';
 
 const plural = (n, one, more) => `${n} ${n === 1 ? one : more}`;
 export { plural };
 
-/** Seconds per checked year (MusicBrainz: one request per 1.1 s, measured 30 songs in 35-45 s). */
-export const SECONDS_PER_YEAR = 1.2;
+/**
+ * Seconds per checked year as a FIRST guess only (MusicBrainz: one request per 1.1 s, and a
+ * song MusicBrainz does not know by ISRC needs a second one, a search). Screens that wait show
+ * the observed rate: yearsWaitText().
+ */
+export const SECONDS_PER_YEAR = 2.2;
 
 /* ---------- pick mode: the hub opened from a room lobby ---------- */
 
@@ -89,6 +93,15 @@ export const safeImage = (url) => (typeof url === 'string' && url.length < 1200 
 export function yearsEta(checked, min) {
   const left = Math.max(0, (Number(min) || 0) - (Number(checked) || 0));
   return Math.ceil(left * SECONDS_PER_YEAR);
+}
+
+/**
+ * The line while years are checked: "nog ongeveer 40 seconden" from the rate observed so far
+ * (rateEta in playlist-logic.js), or "MusicBrainz reageert traag…" when nothing came in for 10 s.
+ */
+export function yearsWaitText(o) {
+  const e = rateEta(o);
+  return e.stalled ? 'MusicBrainz reageert traag…' : etaText(e.sec);
 }
 
 /** "nog ongeveer 40 seconden" / "nog ongeveer 2 minuten" / "bijna klaar". */

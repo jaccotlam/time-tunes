@@ -11,7 +11,13 @@
 // type-checked, length-capped and rebuilt into a fresh plain object.
 //
 // Rate: Deezer allows 50 requests per 5 s per IP. One queue starts at most ~8 requests per
-// second; the quota error (code 4, HTTP 200) pauses the queue and retries.
+// second, and at most MAX_IN_FLIGHT wait for an answer at the same time (a slow connection
+// holds the queue instead of piling up requests that all time out); the quota error (code 4,
+// HTTP 200) pauses the queue and retries.
+//
+// The frame is not trusted for long: it is replaced after a malformed answer (wrong shape,
+// too big, not JSON), after FRAME_MAX_REQUESTS requests, and after 3 timeouts in a row. Each
+// request belongs to the frame it was sent to: when that frame goes, its requests fail at once.
 import { MAX_TRACKS, validYear } from './playlist-logic.js';
 import { cleanSpotifyTitle } from './spotify-playlists.js';
 
@@ -25,6 +31,9 @@ const PAGE = 100; // songs per page (verified to work)
 const MAX_PAYLOAD = 3_000_000; // characters of JSON per answer
 const PREVIEW_TTL_MS = 10 * 60 * 1000;
 const PREVIEW_CACHE_MAX = 300;
+const MAX_IN_FLIGHT = 6; // requests waiting for an answer at the same time
+const FRAME_MAX_REQUESTS = 200; // a frame is replaced after this many requests
+const FRAME_TIMEOUTS = 3; // ... or after this many timeouts in a row
 
 /** Deezer user "Deezer Charts": the official charts as playlists (100 songs each). */
 export const CHARTS = {
@@ -159,9 +168,11 @@ function cleanTrackItem(t) {
 /* ---------- queue ---------- */
 
 let gapMs = GAP_MS;
+let maxInFlight = MAX_IN_FLIGHT;
 let nextAt = 0;
 let pausedUntil = 0;
 let pumping = false;
+let inFlight = 0; // requests handed to the transport that have not settled yet
 const waiters = [];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
@@ -171,15 +182,26 @@ async function pump() {
   if (pumping) return;
   pumping = true;
   try {
-    while (waiters.length) {
+    while (waiters.length && inFlight < maxInFlight) {
       const wait = Math.max(nextAt, pausedUntil) - Date.now();
       if (wait > 0) { await sleep(wait); continue; }
+      if (inFlight >= maxInFlight) break;
       const w = waiters.shift();
       nextAt = Date.now() + gapMs;
+      inFlight++; // released by done() in request()
       w.resolve();
     }
   } finally { pumping = false; }
 }
+
+/** A request of ours has settled: room for the next one. */
+function release() {
+  inFlight = Math.max(0, inFlight - 1);
+  pump();
+}
+
+/** Requests waiting for an answer now (tests). */
+export const inFlightCount = () => inFlight;
 
 /** Wait for our turn (urgent: ahead of the background work, e.g. a preview at play time). */
 function slot(signal, urgent = false) {
@@ -213,6 +235,8 @@ const FRAME_SCRIPT = `(function () {
     var m = ev.data;
     if (!m || m.tt !== 'dz-req' || typeof m.id !== 'string' || typeof m.url !== 'string' || !/^dzcb[0-9a-z]{6,40}$/.test(m.cb)) return;
     var target = ev.origin && ev.origin !== 'null' ? ev.origin : '*';
+    // only Deezer's API, whatever the message says (defence in depth: only the parent sends these)
+    if (m.url.length > 2000 || m.url.indexOf('${API}/') !== 0) { parent.postMessage({ tt: 'dz-res', id: m.id, ok: false, data: 'url' }, target); return; }
     var done = false;
     var s = document.createElement('script');
     function reply(ok, data) {
@@ -236,10 +260,13 @@ const FRAME_SCRIPT = `(function () {
   parent.postMessage({ tt: 'dz-ready' }, '*');
 })();`;
 
-let frame = null; // { el, win, ready: Promise }
-const pending = new Map(); // id -> { resolve, reject }
-let timeoutsInARow = 0;
+let frame = null; // the current frame: { el, win, ready, pending: Map, sent, timeouts, dead }
+const frames = new Set(); // every frame still in the page (the current one, and retired ones finishing their requests)
+const pending = new Map(); // id -> { frame, resolve, reject }
 let listening = false;
+
+/** Tests: the frame script, to run in a fake sandbox. */
+export const _FRAME_SCRIPT = FRAME_SCRIPT;
 
 const randomId = (n = 16) => {
   const c = globalThis.crypto;
@@ -247,32 +274,53 @@ const randomId = (n = 16) => {
   return Array.from({ length: n }, () => Math.floor(Math.random() * 36).toString(36)).join('');
 };
 
+const REASONS = ['json', 'size', 'nocallback', 'network', 'url'];
+
 function onMessage(ev) {
-  if (!frame || ev.source !== frame.win) return; // only our frame
+  let f = null;
+  for (const x of frames) if (ev.source === x.win) { f = x; break; }
+  if (!f) return; // only our frames
   const m = ev.data;
-  if (!isObj(m)) return;
-  if (m.tt === 'dz-ready') { frame.markReady?.(); return; }
-  if (m.tt !== 'dz-res' || typeof m.id !== 'string') return;
-  const p = pending.get(m.id);
-  if (!p) return;
-  pending.delete(m.id);
+  if (isObj(m) && m.tt === 'dz-ready' && Object.keys(m).length === 1) { f.markReady?.(); return; }
+  const p = isObj(m) && typeof m.id === 'string' ? pending.get(m.id) : null;
+  if (isObj(m) && m.tt === 'dz-res' && typeof m.id === 'string' && !p) return; // late (timed out) or a guess: nothing to answer
+  if (p && p.frame !== f) return; // an answer for another frame's request
+  // from here on the message must be exactly what FRAME_SCRIPT sends; anything else means the
+  // frame is not ours any more (a hostile remote script): it goes, with its open requests
+  const bad = (reason) => { p?.reject(new DeezerError('unavailable', { reason })); destroyFrame(f, 'unavailable'); };
+  if (!p || m.tt !== 'dz-res' || typeof m.ok !== 'boolean') { bad('message'); return; }
   if (m.ok !== true) {
-    p.reject(new DeezerError(m.data === 'network' && globalThis.navigator?.onLine === false ? 'offline' : 'unavailable', { reason: typeof m.data === 'string' ? m.data.slice(0, 20) : '' }));
+    if (!REASONS.includes(m.data)) { bad('message'); return; }
+    p.reject(new DeezerError(m.data === 'network' && globalThis.navigator?.onLine === false ? 'offline' : 'unavailable', { reason: m.data }));
     return;
   }
-  if (typeof m.data !== 'string' || m.data.length > MAX_PAYLOAD) { p.reject(new DeezerError('unavailable', { reason: 'payload' })); return; }
+  if (typeof m.data !== 'string' || m.data.length > MAX_PAYLOAD) { bad('payload'); return; }
   let json;
-  try { json = JSON.parse(m.data); } catch { p.reject(new DeezerError('unavailable', { reason: 'payload' })); return; }
+  try { json = JSON.parse(m.data); } catch { bad('payload'); return; }
+  f.timeouts = 0;
   p.resolve(json);
 }
 
-function destroyFrame() {
-  if (frame?.el?.parentNode) frame.el.parentNode.removeChild(frame.el);
-  frame = null;
+/** Remove a frame; its open requests fail at once (with `code`). */
+function destroyFrame(f = frame, code = 'unavailable') {
+  if (!f || f.dead) return;
+  f.dead = true;
+  frames.delete(f);
+  if (frame === f) frame = null;
+  if (f.el?.parentNode) f.el.parentNode.removeChild(f.el);
+  f.failReady?.();
+  for (const p of [...f.pending.values()]) p.reject(new DeezerError(code, { reason: 'frame' }));
+}
+
+/** A frame that has answered enough: new requests go to a fresh one; it leaves once its own are done. */
+function retire(f) {
+  if (frame === f) frame = null;
+  if (!f.open) destroyFrame(f);
 }
 
 function getFrame() {
-  if (frame) return frame;
+  if (frame && !frame.dead && frame.sent < FRAME_MAX_REQUESTS) return frame;
+  if (frame) retire(frame);
   if (!listening) { window.addEventListener('message', onMessage); listening = true; }
   const el = document.createElement('iframe');
   el.setAttribute('sandbox', 'allow-scripts');
@@ -283,13 +331,15 @@ function getFrame() {
   el.referrerPolicy = 'no-referrer';
   el.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden';
   el.srcdoc = `<!doctype html><meta charset="utf-8"><title>dz</title><script>${FRAME_SCRIPT}</script>`;
-  const f = { el, win: null, markReady: null, ready: null };
+  const f = { el, win: null, markReady: null, failReady: null, ready: null, pending: new Map(), sent: 0, open: 0, timeouts: 0, dead: false };
   f.ready = new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new DeezerError('unavailable', { reason: 'frame' })), READY_TIMEOUT_MS);
-    f.markReady = () => { clearTimeout(t); f.markReady = null; resolve(); };
+    f.markReady = () => { clearTimeout(t); f.markReady = null; f.failReady = null; resolve(); };
+    f.failReady = () => { clearTimeout(t); f.markReady = null; f.failReady = null; reject(new DeezerError('unavailable', { reason: 'frame' })); };
   });
-  f.ready.catch(() => { if (frame === f) destroyFrame(); });
+  f.ready.catch(() => destroyFrame(f));
   frame = f;
+  frames.add(f);
   document.body.appendChild(el);
   f.win = el.contentWindow;
   return f;
@@ -311,27 +361,40 @@ export async function jsonpTransport(path, query = {}, { signal } = {}) {
   const cb = `dzcb${randomId(12)}`;
   const url = apiUrl(path, query, { output: 'jsonp', callback: cb });
   const f = getFrame();
-  await f.ready;
+  f.sent++; // counted when chosen: a frame takes at most FRAME_MAX_REQUESTS
+  f.open++; // this request still needs the frame (a retired frame stays until it is 0)
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    f.open--;
+    if (!f.dead && frame !== f && !f.open) destroyFrame(f); // a retired frame, done
+  };
+  try { await f.ready; } catch (e) { close(); throw e; }
+  if (f.dead) { close(); throw new DeezerError('unavailable', { reason: 'frame' }); }
   return new Promise((resolve, reject) => {
     let timer = 0;
     const finish = (fn, v) => {
       clearTimeout(timer);
       signal?.removeEventListener?.('abort', onAbort);
       pending.delete(id);
+      f.pending.delete(id);
+      close();
       fn(v);
     };
     const onAbort = () => finish(reject, abortError());
     timer = setTimeout(() => {
-      // a frame that keeps timing out may be wedged by a remote script: start a fresh one
-      if (++timeoutsInARow >= 3) { timeoutsInARow = 0; destroyFrame(); }
-      finish(reject, new DeezerError(globalThis.navigator?.onLine === false ? 'offline' : 'timeout'));
+      const err = new DeezerError(globalThis.navigator?.onLine === false ? 'offline' : 'timeout');
+      // a frame that keeps timing out may be wedged by a remote script: start a fresh one (its
+      // other requests fail now too; a timeout of an older frame never counts against this one)
+      if (!f.dead && ++f.timeouts >= FRAME_TIMEOUTS) { finish(reject, err); destroyFrame(f, 'timeout'); return; }
+      finish(reject, err);
     }, TIMEOUT_MS);
     if (signal?.aborted) { onAbort(); return; }
     signal?.addEventListener?.('abort', onAbort, { once: true });
-    pending.set(id, {
-      resolve: (v) => { timeoutsInARow = 0; finish(resolve, v); },
-      reject: (e) => finish(reject, e),
-    });
+    const entry = { frame: f, resolve: (v) => finish(resolve, v), reject: (e) => finish(reject, e) };
+    pending.set(id, entry);
+    f.pending.set(id, entry);
     f.win.postMessage({ tt: 'dz-req', id, url, cb }, '*'); // opaque origin: '*' is the only target that reaches it
   });
 }
@@ -341,8 +404,9 @@ let transport = jsonpTransport;
 export function setTransport(fn) { transport = typeof fn === 'function' ? fn : jsonpTransport; }
 
 /** Tests: reset the queue and caches; optionally another gap between requests. */
-export function _reset({ gap = GAP_MS } = {}) {
-  gapMs = gap; nextAt = 0; pausedUntil = 0; waiters.length = 0; previews.clear();
+export function _reset({ gap = GAP_MS, inFlight: cap = MAX_IN_FLIGHT } = {}) {
+  gapMs = gap; maxInFlight = cap; nextAt = 0; pausedUntil = 0; waiters.length = 0; inFlight = 0; previews.clear();
+  for (const f of [...frames]) destroyFrame(f);
 }
 
 /**
@@ -359,6 +423,8 @@ export async function request(path, query = {}, { signal, urgent = false } = {})
       if (signal?.aborted) throw abortError();
       if (e instanceof DeezerError) throw e;
       throw new DeezerError(globalThis.navigator?.onLine === false ? 'offline' : 'unavailable');
+    } finally {
+      release();
     }
     if (!isObj(j)) throw new DeezerError('unavailable', { reason: 'shape' });
     const err = own(j, 'error');

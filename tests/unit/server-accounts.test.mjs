@@ -528,8 +528,11 @@ test('Node: accounts en klaargezette kamers in een bestand overleven een herstar
   const room = await prepare(one.call, token);
   const normal = one.core.http({ method: 'POST', path: '/rooms', origin: ORIGIN, ip: '10.0.0.1', body: JSON.stringify({ v: V, id: 'owner01', name: 'X' }) }).body;
   one.core.flush();
-  assert.equal(statSync(file).mode & 0o777, 0o600, 'only the owner may read it (password hashes)');
-  assert.deepEqual(readdirSync(dir), ['accounts.json'], 'written atomically: no temp file left');
+  const folder = `${file}.d`;
+  const acctFile = join(folder, `a-${Buffer.from('ilse').toString('hex')}.json`);
+  assert.equal(statSync(acctFile).mode & 0o777, 0o600, 'only the owner may read it (password hashes)');
+  assert.deepEqual(readdirSync(dir).sort(), ['accounts.json.d'], 'nothing else; no old single file was there, so no marker either');
+  assert.deepEqual(readdirSync(folder).sort(), [`a-${Buffer.from('ilse').toString('hex')}.json`, `r-${room.code}.json`], 'one file per account and per prepared room, written atomically: no temp file left');
   const two = setup({ accountsFile: file });
   const g = await two.call('GET', '/account', null, { token });
   assert.equal(g.status, 200, 'the session survives too');
@@ -545,5 +548,5 @@ test('Node: accounts en klaargezette kamers in een bestand overleven een herstar
   // a deleted room leaves the file
   await two.call('POST', `/account/rooms/${room.code}/delete`, null, { token });
   two.core.flush();
-  assert.deepEqual(Object.keys(JSON.parse(readFileSync(file, 'utf8')).rooms), []);
+  assert.deepEqual(readdirSync(folder), [`a-${Buffer.from('ilse').toString('hex')}.json`]);
 });

@@ -310,6 +310,12 @@ test('disco: automatisch naar het resultaat: 4 s na het laatste antwoord, gedeel
   host.send({ t: 'reveal' });
   await flush();
   assert.equal(a.view().phase, 'revealed');
+  // "Wacht nog" tapped just after the reveal (same round, phase already revealed): no error toast
+  const errorsBefore = host.msgs.filter((m) => m.t === 'error').length;
+  host.send({ t: 'hold', round: a.view().game.round });
+  await flush();
+  assert.equal(host.msgs.filter((m) => m.t === 'error').length, errorsBefore, 'te laat voor Wacht nog: stil genegeerd');
+  assert.equal(a.view().phase, 'revealed');
 });
 
 test('disco: automatisch resultaat stopt als iemand zonder antwoord (terug)komt; afwezig telt niet; uit in de lobby', async () => {

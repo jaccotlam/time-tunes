@@ -19,7 +19,7 @@
 import * as deezerApi from '../deezer.js';
 import * as mbApi from '../musicbrainz.js';
 import { store as lsStore } from '../ui.js';
-import { MAX_TRACKS } from '../playlist-logic.js';
+import { MAX_TRACKS, rateEta } from '../playlist-logic.js';
 import {
   spreadPlan, checkedYear, contributionTrack, idKeys, mixKey,
   MIX_PER_MESSAGE, MIX_PER_PLAYER, MIX_LISTS_MAX, LIST_COUNTS, DEFAULT_LIST_COUNT, LIST_PLAN_MAX,
@@ -33,8 +33,8 @@ const FAILS_MAX = 3; // songs in a row that could not be checked: stop and say s
 const CHECKED_MAX = 1000;
 const STORED_PLAN_MAX = 200;
 const SEARCH_LIMIT = 12;
-/** About one checked song per this many ms (MusicBrainz 1 / 1.1 s, sometimes two lookups). */
-export const MS_PER_SONG = 1300;
+/** First guess per checked song (MusicBrainz 1 / 1.1 s, two lookups when it does not know the ISRC); the estimate then follows the observed rate (rateEta). */
+export const MS_PER_SONG = 2200;
 
 export const SPOTIFY_LINK_MESSAGE = 'Spotify laat apps andermans playlists niet lezen. Zoek de lijst hierboven op naam of plak een Deezer-link.';
 export const SHORT_LINK_MESSAGE = 'Dit is een korte Deezer-link. Open hem eerst in je browser of in de Deezer-app en kopieer dan het adres waar /playlist/ in staat.';
@@ -97,6 +97,7 @@ export function createListShare({ code, session, onChange, inLobby = () => true,
   let recheck = 0;
   let plan = []; // candidates still to look at, in order
   let checked = []; // [deezerId, year | 0, sure 0|1, listId]: what this phone already decided
+  let pace = null; // { t0, n0, n, last }: songs shared since this walk started, for an honest estimate
   const tracksOf = new Map(); // listId -> songs read this session
   const info = new Map(); // deezerId -> Promise of trackInfo (looked up a little ahead)
 
@@ -214,6 +215,14 @@ export function createListShare({ code, session, onChange, inLobby = () => true,
     let fails = 0;
     st.phase = 'checking';
     st.error = '';
+    const t0 = Date.now();
+    pace = { t0, n0: st.shared.length, n: st.shared.length, last: t0 };
+    // the estimate moves on between songs (a countdown, or "MusicBrainz reageert traag…")
+    let shown = '';
+    const tick = setInterval(() => {
+      const k = `${Math.ceil(api.eta() / 5)}|${api.etaStalled()}`;
+      if (k !== shown) { shown = k; emit(); }
+    }, 1000);
     emit();
     try {
       while (alive && my === gen && st.shared.length < st.count && plan.length) {
@@ -250,6 +259,7 @@ export function createListShare({ code, session, onChange, inLobby = () => true,
           const have = sharedKeys();
           if (![...idKeys(t), mixKey(t)].some((x) => x && have.has(x))) {
             st.shared.push(t);
+            if (pace) { pace.n++; pace.last = Date.now(); }
             send([t]); // right away: nobody waits for the whole list
           }
         } else st.skipped++;
@@ -262,6 +272,7 @@ export function createListShare({ code, session, onChange, inLobby = () => true,
         emit();
       }
     } finally {
+      clearInterval(tick);
       walking = false;
       if (alive && my !== gen) Promise.resolve().then(walk); // a rebuild came in meanwhile
     }
@@ -400,10 +411,15 @@ export function createListShare({ code, session, onChange, inLobby = () => true,
 
   const api = {
     get state() { return st; },
-    /** Seconds still to go (estimate), or 0. */
+    /** Seconds still to go (estimate from the rate observed so far), or 0. */
     eta() {
-      if (st.phase !== 'checking') return 0;
-      return Math.ceil(((st.count - st.shared.length) * MS_PER_SONG) / 1000);
+      if (st.phase !== 'checking' || !pace) return 0;
+      return rateEta({ done: pace.n - pace.n0, left: st.count - st.shared.length, startedAt: pace.t0, lastAt: pace.last, firstGuessMs: MS_PER_SONG }).sec;
+    },
+    /** No new song checked for 10 s: the screen says MusicBrainz is slow instead of counting down. */
+    etaStalled() {
+      if (st.phase !== 'checking' || !pace) return false;
+      return rateEta({ done: pace.n - pace.n0, left: st.count - st.shared.length, startedAt: pace.t0, lastAt: pace.last }).stalled;
     },
     open() { st.view = 'pick'; setLinkMsg('', ''); emit(); },
     close() { searchCtrl?.abort(); st.view = 'home'; st.searching = false; setLinkMsg('', ''); emit(); },

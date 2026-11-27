@@ -16,8 +16,13 @@ import { seededRandom, shuffle } from '../logic.js';
 import { normalizeTitle, splitArtists, fold } from '../spotify-match.js';
 
 export const SPREAD_GAP = 3;
-/** Most songs a played history remembers (the oldest games are forgotten first). */
-export const HISTORY_MAX = 4000;
+/**
+ * Most songs a played history remembers (the oldest games are forgotten first). 1500 keys of
+ * ~11 characters are ~30 kB of JSON: small next to a 2000-card game in the room's stored value.
+ */
+export const HISTORY_MAX = 1500;
+/** A history key: a short hash of the song's text key (hashKey). */
+const HASH_RE = /^[0-9a-z]{1,11}$/;
 
 /** A random 32-bit seed: crypto.getRandomValues when there is one, else Math.random. */
 export function gameSeed() {
@@ -34,10 +39,10 @@ export function gameSeed() {
 export const artistKey = (song) => splitArtists(String(song?.artist || ''))[0] || fold(song?.artist || '');
 
 /**
- * A key of a song that stays the same across games and lists: artist + title (normalised),
- * else an id. Never the card's position.
+ * The text that identifies a song across games and lists: artist + title (normalised), else
+ * an id. Never the card's position. (Histories stored before the hashes used it as the key.)
  */
-export function songKey(song) {
+export function songText(song) {
   const title = normalizeTitle(String(song?.title || ''));
   const artist = artistKey(song);
   if (title && artist) return `${artist}|${title}`.slice(0, 120);
@@ -47,49 +52,95 @@ export function songKey(song) {
   return `c:${String(song?.id ?? '')}`;
 }
 
+/**
+ * A short stable hash of a text key (cyrb53: 53 bits, base 36, at most 11 characters). Two
+ * different songs share one only by chance (about 1 in 10^12 per pair): then a fresh song
+ * merely counts as played. A text key always holds '|' or ':', so it never looks like a hash.
+ */
+export function hashKey(text) {
+  const str = String(text);
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+/** The key of a song in a played history: the hash of songText (same song, same key). */
+export const songKey = (song) => hashKey(songText(song));
+
 /** An empty played history: { n: games started, keys: { songKey: number of the game } }. */
 export const emptyHistory = () => ({ n: 0, keys: {} });
 
-/** A played history from storage / a backup, checked (anything else: empty). */
-export function cleanHistory(h) {
-  if (!h || typeof h !== 'object' || Array.isArray(h) || !Number.isInteger(h.n) || h.n < 0 || !h.keys || typeof h.keys !== 'object' || Array.isArray(h.keys)) return emptyHistory();
-  const keys = {};
+const validGame = (v, n) => Number.isInteger(v) && v >= 0 && v <= n;
+
+/** Already a clean history (hash keys, valid game numbers, not too many)? Then it is used as it is. */
+function isClean(h, max) {
+  if (!h || typeof h !== 'object' || Array.isArray(h) || !Number.isInteger(h.n) || h.n < 0 || !h.keys || typeof h.keys !== 'object' || Array.isArray(h.keys)) return false;
+  if (Object.getPrototypeOf(h.keys) !== Object.prototype && Object.getPrototypeOf(h.keys) !== null) return false;
   let count = 0;
-  for (const [k, v] of Object.entries(h.keys)) {
-    if (count >= HISTORY_MAX) break;
-    if (typeof k !== 'string' || k.length > 120 || k === '__proto__' || !Number.isInteger(v) || v < 0 || v > h.n) continue;
-    keys[k] = v;
-    count++;
+  for (const k in h.keys) {
+    if (!Object.hasOwn(h.keys, k) || ++count > max || !HASH_RE.test(k) || !validGame(h.keys[k], h.n)) return false;
   }
-  return { n: h.n, keys };
+  return true;
+}
+
+/** Keep the `max` most recent entries (highest game number); insertion order follows the game number. */
+function newest(entries, max) {
+  entries.sort((a, b) => a[1] - b[1]);
+  return Object.fromEntries(entries.length > max ? entries.slice(entries.length - max) : entries);
+}
+
+/**
+ * A played history from storage / a backup, checked (anything else: empty). A clean one comes
+ * back as the same object (no copy). An old one with text keys ("artist|title") is converted
+ * to hash keys; more than HISTORY_MAX keeps the newest games.
+ */
+export function cleanHistory(h, max = HISTORY_MAX) {
+  if (isClean(h, max)) return h;
+  if (!h || typeof h !== 'object' || Array.isArray(h) || !Number.isInteger(h.n) || h.n < 0 || !h.keys || typeof h.keys !== 'object' || Array.isArray(h.keys)) return emptyHistory();
+  const keys = new Map();
+  let seen = 0;
+  for (const [k, v] of Object.entries(h.keys)) {
+    if (++seen > 20000) break; // a forged history can not keep the server busy
+    if (typeof k !== 'string' || k.length > 120 || k === '__proto__' || !validGame(v, h.n)) continue;
+    const key = HASH_RE.test(k) ? k : hashKey(k);
+    if (!(keys.get(key) >= v)) keys.set(key, v);
+  }
+  return { n: h.n, keys: newest([...keys], max) };
 }
 
 /** A new game starts: its number (the songs it plays are marked with it). */
 export function nextGame(history) {
   const h = cleanHistory(history);
-  return { ...h, n: h.n + 1 };
+  return { n: h.n + 1, keys: h.keys };
 }
 
-/** These songs were played in the current game (history.n). Bounded (`max`): the oldest go first. */
+/**
+ * These songs were played in the current game (history.n). Bounded (`max`): the oldest go
+ * first. Nothing new: the same (clean) object comes back, nothing is copied.
+ */
 export function markPlayed(history, songs, max = HISTORY_MAX) {
-  const h = cleanHistory(history);
-  const keys = { ...h.keys };
-  let changed = false;
+  const h = cleanHistory(history, Math.max(max, HISTORY_MAX));
+  const add = [];
   for (const s of songs || []) {
     if (!s) continue;
     const k = songKey(s);
-    if (keys[k] === h.n) continue;
+    if (h.keys[k] !== h.n && !add.includes(k)) add.push(k);
+  }
+  if (!add.length && Object.keys(h.keys).length <= max) return h;
+  const keys = { ...h.keys };
+  for (const k of add) {
     delete keys[k]; // re-insert: insertion order follows the game number
     keys[k] = h.n;
-    changed = true;
   }
-  if (!changed) return h;
   const entries = Object.entries(keys);
-  if (entries.length > max) {
-    entries.sort((a, b) => a[1] - b[1]);
-    return { n: h.n, keys: Object.fromEntries(entries.slice(entries.length - max)) };
-  }
-  return { n: h.n, keys };
+  return { n: h.n, keys: entries.length > max ? newest(entries, max) : keys };
 }
 
 /**

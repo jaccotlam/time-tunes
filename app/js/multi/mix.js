@@ -333,13 +333,15 @@ export function spreadPlan(lists, { rand = Math.random, max = LIST_PLAN_MAX, fir
  * from MusicBrainz (the first release of the recording). By ISRC and not later than Deezer's:
  * that year, sure. By search (a search can be a few years off): that year when earlier, not
  * sure. MusicBrainz later than Deezer: Deezer's year stays, checked but not sure. MusicBrainz
- * found nothing: null (not checked, so the song is not shared).
+ * ANSWERED without a year (ISRC and search both empty; mb = null): Deezer's year stays,
+ * checked but not sure (as enrich.js: it never waits for Apple). No Deezer year either: null
+ * (nothing to play with, not shared). A FAILED request is not an answer: the caller retries.
  */
 export function checkedYear(dz, mb) {
   const ok = (y) => Number.isInteger(y) && y >= 1900 && y <= 2100;
   const d = ok(dz) ? dz : null;
   const y = ok(mb?.year) ? mb.year : null;
-  if (y == null) return null;
+  if (y == null) return d == null ? null : { year: d, sure: false };
   if (mb.via === 'isrc') return d == null || y <= d ? { year: y, sure: true } : { year: d, sure: false };
   if (mb.via === 'search') return d == null || y < d ? { year: y, sure: false } : { year: d, sure: false };
   return null;

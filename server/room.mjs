@@ -617,7 +617,8 @@ export class RoomHub {
       case 'next': s.room = G.nextRound(r, { now: this.now() }); break;
       // Discobingo: "Wacht nog" (no automatic reveal this round), and the bingo stop's choices
       case 'hold':
-        if (!r.game || m.round !== r.game.round) return; // for an earlier round
+        // for an earlier round, or too late (the automatic reveal was just before it): nothing to hold
+        if (!r.game || m.round !== r.game.round || r.phase !== 'answering') return;
         s.room = G.holdAutoReveal(r);
         break;
       case 'continue':
@@ -787,15 +788,17 @@ export class RoomHub {
   }
 
   /**
-   * Remember the songs this game has played (the running song, and the start cards of a
-   * Tijdlijn game) in the room's history. Server state only: never in a phone's view.
+   * Remember the songs this game has played (the song of the round once it is revealed, and the
+   * start cards of a Tijdlijn game) in the room's history. Server state only: never in a
+   * phone's view. A song that is still being answered is not "played" yet (back to the lobby
+   * before the reveal: it may come again). Nothing new: s.played stays the same object.
    */
   notePlayed() {
     const s = this.state;
     const g = s?.room?.game;
     if (!g || !g.songs || s.room.phase === 'lobby' || !(s.played?.n > 0)) return;
     const ids = [];
-    if (g.current != null && s.room.phase !== 'won') ids.push(g.current);
+    if (g.current != null && s.room.phase === 'revealed') ids.push(g.current);
     if (g.round <= 1 && g.kind === 'timeline') for (const p of Object.values(g.per || {})) for (const id of p.timeline || []) ids.push(id);
     const songs = ids.map((id) => g.songs[id]).filter(Boolean);
     if (songs.length) s.played = markPlayed(s.played, songs);
