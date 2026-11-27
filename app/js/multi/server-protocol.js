@@ -48,13 +48,11 @@
 //   Refused reactions are dropped silently. A new app must not send avatar / react to a server
 //   without the 'party' feature: that one answers 'bad'.
 //
-// "Mix van de groep" from playlists (optional addition within version 4; /health `features`
-//   lists 'mix-playlists'): a mix-add track may carry `deezerId` (positive safe integer) and
-//   `isrc` instead of a `spotifyId`; such a song (from a public Deezer playlist the phone chose)
-//   must say `checked: true` (its year was checked at MusicBrainz on the phone), else it is
-//   refused like any invalid song. Duplicates are also recognised by deezerId and ISRC. An
-//   older server refuses songs without a spotifyId, so a new app offers "Kies een playlist"
-//   only when the server lists the feature.
+// "Mix van de groep" takes Spotify favourites only (mix-add tracks need a spotifyId). The
+//   short-lived 'mix-playlists' feature of v3-10 (songs from public catalogue playlists) is gone
+//   without a new version: the server no longer lists it in /health, so an app of v3-10 no longer
+//   offers it, and a song such an app still sends without a spotifyId is refused like any invalid
+//   song (error 'mix'; the room and the rest of the message are not affected).
 //
 // Version 2 (November 2026): the Quiz (settings questions/qtype/think, playing, the quiz part of
 // the view). Version 3 (November 2026): "Mix van de groep" (mix-add, mix-clear, settings.music,
@@ -66,7 +64,7 @@
 
 export const SERVER_PROTOCOL_VERSION = 5;
 /** Optional additions within this version that the server announces in /health `features`. */
-export const SERVER_FEATURES = ['screen', 'party', 'mix-playlists'];
+export const SERVER_FEATURES = ['screen', 'party'];
 /**
  * Largest message from a phone (the deck at the start of a game), in UTF-8 bytes. A start
  * with 2000 realistic cards is about 300 kB (tests/unit/big-lists.test.mjs); fitCards keeps
@@ -134,7 +132,7 @@ export function utf8Length(str) {
   return n;
 }
 
-const CARD_FIELDS = ['id', 'year', 'title', 'artist', 'previewUrl', 'itunesId', 'spotifyId', 'deezerId', 'isrc'];
+const CARD_FIELDS = ['id', 'year', 'title', 'artist', 'previewUrl', 'itunesId', 'spotifyId', 'isrc'];
 
 /**
  * Only what the server needs to run a game and the music phone needs to play a song (the
@@ -164,7 +162,7 @@ export function fitCards(cards, { maxBytes = MAX_CLIENT_MESSAGE - 4096, extra = 
   if (size(list) <= maxBytes) return { cards: list, cut: Math.max(0, (cards || []).length - list.length) };
   list = list.map((c) => {
     const o = { ...c };
-    if (o.itunesId || o.deezerId) delete o.previewUrl;
+    if (o.itunesId) delete o.previewUrl;
     if (typeof o.title === 'string') o.title = o.title.slice(0, 100);
     if (typeof o.artist === 'string') o.artist = o.artist.slice(0, 100);
     return o;
@@ -202,7 +200,6 @@ export function cleanCards(cards) {
     if (typeof c.previewUrl === 'string' && /^https:\/\/[^\s"'<>]{4,600}$/.test(c.previewUrl)) o.previewUrl = c.previewUrl;
     if (Number.isSafeInteger(Number(c.itunesId)) && Number(c.itunesId) > 0) o.itunesId = Number(c.itunesId);
     if (typeof c.spotifyId === 'string' && /^[A-Za-z0-9]{10,40}$/.test(c.spotifyId)) o.spotifyId = c.spotifyId;
-    if (Number.isSafeInteger(c.deezerId) && c.deezerId > 0) o.deezerId = c.deezerId;
     if (typeof c.isrc === 'string' && /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(c.isrc)) o.isrc = c.isrc;
     out.push(o);
   }

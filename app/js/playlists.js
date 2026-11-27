@@ -1,9 +1,10 @@
 // Own playlists in localStorage + which deck is active.
 // Data: timetunesr.playlists.v1 = { v: 1, lists: [{ id, name, created, updated, nextN, tracks }] }
 //       timetunesr.activeDeck.v1 = 'builtin' | <playlist id>
-//       a playlist may carry source: { kind: 'spotify' | 'deezer', id, name } (where it was imported from)
-// Every track: { n, itunesId, spotifyId?, deezerId?, isrc?, title, artist, album, year, yearSure, yearFixed?, yearChecked?, match? }
-// (see cleanTrack in playlist-logic.js; old data with previewUrl / trackViewUrl still loads).
+//       a playlist may carry source: { kind: 'spotify', id, name } (where it was imported from)
+// Every track: { n, itunesId, spotifyId?, isrc?, title, artist, album, year, yearSure, yearFixed?, yearChecked?, match? }
+// (see cleanTrack in playlist-logic.js; old data with previewUrl / trackViewUrl still loads, and
+// so do the Deezer imports of v3-10: see the top of playlist-logic.js).
 // `n` is the card number of the track within its playlist (stable, never reused).
 // Every change is written at once; when localStorage is full the change is undone (the list
 // stays as it was stored), the operation reports `error: 'storage'`, subscribers hear
@@ -117,7 +118,6 @@ export function remove(id) {
 
 const sameTrack = (a, b) => (a.itunesId && b.itunesId && a.itunesId === b.itunesId)
   || (a.spotifyId && b.spotifyId && a.spotifyId === b.spotifyId)
-  || (a.deezerId && b.deezerId && a.deezerId === b.deezerId)
   || (a.isrc && b.isrc && a.isrc === b.isrc);
 
 /** Lookup of the tracks of a playlist by every id (fast duplicate checks for 2000 songs). */
@@ -126,13 +126,12 @@ function trackIndex(tracks) {
   const put = (t) => {
     if (t.itunesId) m.set(`a${t.itunesId}`, t);
     if (t.spotifyId) m.set(`s${t.spotifyId}`, t);
-    if (t.deezerId) m.set(`d${t.deezerId}`, t);
     if (t.isrc) m.set(`i${t.isrc}`, t);
   };
   for (const t of tracks) put(t);
   return {
     find: (t) => (t.itunesId && m.get(`a${t.itunesId}`)) || (t.spotifyId && m.get(`s${t.spotifyId}`))
-      || (t.deezerId && m.get(`d${t.deezerId}`)) || (t.isrc && m.get(`i${t.isrc}`)) || null,
+      || (t.isrc && m.get(`i${t.isrc}`)) || null,
     put,
   };
 }
@@ -259,11 +258,11 @@ export function findBySource(kind, sourceId) {
 }
 
 /**
- * Import a Spotify or Deezer playlist: the first time a new playlist (named after the source,
+ * Import a Spotify playlist: the first time a new playlist (named after the source,
  * remembering `source`), the next time the SAME playlist is updated: new songs are added,
  * songs already there keep their card number, year and the player's fixes; only empty fields
- * (an ISRC, a Spotify / Deezer id, a missing year) are filled in. Songs that left the source
- * stay. `tracks`: anything cleanTrack takes ({ spotifyId | deezerId, title, artist, album,
+ * (an ISRC, a Spotify id, a missing year) are filled in. Songs that left the source
+ * stay. `tracks`: anything cleanTrack takes ({ spotifyId, title, artist, album,
  * year (or spYear), yearSure, isrc }). Pass yearSure: false for a year that is a guess.
  * Returns { playlist, added, duplicates, created, full, error? } (error 'storage' / 'source').
  */
@@ -279,7 +278,7 @@ export function importFromSource({ kind, id, name } = {}, tracks = []) {
   const created = !p;
   if (created) {
     // the new list is made in memory and written once, together with its songs
-    p = cleanPlaylist({ id: newId(), name: uniqueName(source.name || (source.kind === 'spotify' ? 'Spotify-playlist' : 'Deezer-playlist')), created: Date.now(), tracks: [], source });
+    p = cleanPlaylist({ id: newId(), name: uniqueName(source.name || 'Spotify-playlist'), created: Date.now(), tracks: [], source });
     read().lists.push(p);
   }
   const index = trackIndex(p.tracks);
@@ -291,7 +290,7 @@ export function importFromSource({ kind, id, name } = {}, tracks = []) {
     const have = index.find(t);
     if (have) {
       duplicates++;
-      for (const k of ['spotifyId', 'deezerId', 'isrc', 'itunesId']) if (t[k] && !have[k]) { have[k] = t[k]; touched = true; }
+      for (const k of ['spotifyId', 'isrc', 'itunesId']) if (t[k] && !have[k]) { have[k] = t[k]; touched = true; }
       if (!have.album && t.album) { have.album = t.album; touched = true; }
       if (!validYear(have.year) && validYear(t.year)) { have.year = t.year; have.yearSure = t.yearSure; touched = true; }
       index.put(have);

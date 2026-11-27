@@ -1,16 +1,17 @@
 // "Mix van de groep": every phone in a server room may add songs to the room: a part of its
 // owner's most played Spotify songs ("Doe mijn favorieten erbij"), or a random part of one or
-// more public Deezer playlists ("Kies een playlist", no login). At the start the server builds
-// the game's songs from those contributions. Pure, no DOM, no network: shared by the phones
-// (screens/room-*.js, mix-share.js, mix-lists.js) and the room server (server/room.mjs), and
-// checked by `npm test`.
+// more playlists the phone chose ("Kies een playlist", mix-lists.js: the lists come from a
+// provider, and the app has none yet, so that way is not offered). At the start the server
+// builds the game's songs from those contributions. Pure, no DOM, no network: shared by the
+// phones (screens/room-*.js, mix-share.js, mix-lists.js) and the room server
+// (server/room.mjs), and checked by `npm test`.
 //
 // Rules for building the mix (buildMix):
 // - only songs the music phone can play (playable() in playlist-logic.js): with the fragment
-//   source a song needs an Apple Music match (previewUrl or itunesId) or a Deezer id, with the
-//   Spotify source any song will do (spotifyId, ISRC or title + artist search);
-// - duplicates (same spotifyId, deezerId or ISRC, or the same artist + title after
-//   normalising) count once and keep every contributor ("favoriet van Sam & Lisa");
+//   source a song needs an Apple Music match (previewUrl or itunesId), with the Spotify source
+//   a Spotify id or an ISRC to search for is enough;
+// - duplicates (same spotifyId or ISRC, or the same artist + title after normalising) count
+//   once and keep every contributor ("favoriet van Sam & Lisa");
 // - fair: everybody gets the same quota (MIX_GAME_MAX / contributors); a player with fewer
 //   songs simply gives fewer. The quota only grows when the game would otherwise be short;
 // - within a player's songs the ones with a sure year go first (a year from Apple Music
@@ -85,31 +86,29 @@ const ctrl = /[\u0000-\u001f\u007f]/g;
 const text = (v, max) => (typeof v === 'string' ? v.slice(0, max * 4).replace(ctrl, '').replace(/\s+/g, ' ').trim().slice(0, max) : '');
 /** Own property only: a `__proto__` key in the JSON (or a polluted prototype) never counts. */
 const own = (o, k) => (Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined);
-const posInt = (v) => (Number.isSafeInteger(v) && v > 0 ? v : null);
 const isrcOf = (v) => (typeof v === 'string' && v.length <= 20 && ISRC.test(v.trim().toUpperCase()) ? v.trim().toUpperCase() : null);
 
 /**
  * Server side: check one contributed song. Returns a clean
- * { spotifyId?, deezerId?, isrc?, title, artist, year, sure, itunesId?, previewUrl? } or null.
- * A song needs a Spotify id (favourites) or a Deezer id (a playlist). A song from a catalogue
- * (no Spotify id) only counts when the phone checked its year (`checked: true`): catalogue
- * years are often the year of a re-release, and the game asks for the original year.
+ * { spotifyId?, isrc?, title, artist, year, sure, itunesId?, previewUrl? } or null.
+ * A song needs a Spotify id, or an ISRC (Spotify finds it by that) together with
+ * `checked: true`: its year was checked at MusicBrainz on the phone (catalogue years are often
+ * the year of a re-release, and the game asks for the original year). A `deezerId` (sent by an
+ * app of v3-10) is ignored: a song with nothing else is refused, the rest of the message counts.
  */
 export function cleanMixTrack(t) {
   if (!t || typeof t !== 'object' || Array.isArray(t)) return null;
   const sp = own(t, 'spotifyId');
   const spotifyId = typeof sp === 'string' && SPOTIFY_ID.test(sp) ? sp : null;
-  const deezerId = posInt(own(t, 'deezerId'));
   const title = text(own(t, 'title'), 200);
   const artist = text(own(t, 'artist'), 200);
   const yv = own(t, 'year');
   const year = typeof yv === 'number' || typeof yv === 'string' ? Number(yv) : NaN;
-  if ((!spotifyId && !deezerId) || !title || !artist || !Number.isInteger(year) || year < 1900 || year > 2100) return null;
+  const isrc = isrcOf(own(t, 'isrc'));
+  if ((!spotifyId && !isrc) || !title || !artist || !Number.isInteger(year) || year < 1900 || year > 2100) return null;
   if (!spotifyId && own(t, 'checked') !== true) return null;
   const out = { title, artist, year, sure: own(t, 'sure') === true };
   if (spotifyId) out.spotifyId = spotifyId;
-  if (deezerId) out.deezerId = deezerId;
-  const isrc = isrcOf(own(t, 'isrc'));
   if (isrc) out.isrc = isrc;
   const id = Number(own(t, 'itunesId'));
   if (Number.isSafeInteger(id) && id > 0) out.itunesId = id;
@@ -118,11 +117,10 @@ export function cleanMixTrack(t) {
   return out;
 }
 
-/** The ids that make two songs "the same recording": s:spotifyId, d:deezerId, i:isrc. */
+/** The ids that make two songs "the same recording": s:spotifyId, i:isrc. */
 export function idKeys(t) {
   const k = [];
   if (t?.spotifyId) k.push(`s:${t.spotifyId}`);
-  if (t?.deezerId) k.push(`d:${t.deezerId}`);
   if (t?.isrc) k.push(`i:${t.isrc}`);
   return k;
 }
@@ -170,7 +168,7 @@ function unique(contrib, order) {
       const hit = keys.map((k) => byKey.get(k)).find(Boolean);
       if (hit) {
         if (!hit.from.includes(pid)) hit.from.push(pid);
-        for (const k of keys) if (!byKey.has(k)) byKey.set(k, hit); // Spotify + Deezer of one song: both ids now known
+        for (const k of keys) if (!byKey.has(k)) byKey.set(k, hit); // the same song by two ids: both now known
         continue;
       }
       const e = { track: t, from: [pid] };
@@ -217,7 +215,7 @@ export class MixError extends Error {
  * Build the songs of a game from the contributions.
  * contrib: { pid: { tracks: [...] } }, names: { pid: name }.
  * Options: seed, source ('preview' | 'spotify'), need (minimum, see mixMinimum), max.
- * Returns cards { id: 'm1'.., year, title, artist, spotifyId?, deezerId?, isrc?, itunesId?, previewUrl?, from, by, unsure? }.
+ * Returns cards { id: 'm1'.., year, title, artist, spotifyId?, isrc?, itunesId?, previewUrl?, from, by, unsure? }.
  * Throws MixError 'mix' (with `have` and `need`) when there are too few songs.
  */
 export function buildMix(contrib, { seed = 1, source = 'preview', need = 1, max = MIX_GAME_MAX, names = {}, history = null } = {}) {
@@ -255,8 +253,7 @@ export function buildMix(contrib, { seed = 1, source = 'preview', need = 1, max 
     const t = e.track;
     const c = { id: `m${i + 1}`, year: t.year, title: t.title, artist: t.artist, from: e.from.slice(), by: e.from.map((pid) => names[pid] || 'Speler') };
     if (t.spotifyId) c.spotifyId = t.spotifyId;
-    if (t.deezerId) c.deezerId = t.deezerId; // fragment via Deezer (player.js), or Spotify by ISRC / title
-    if (t.isrc && !t.spotifyId) c.isrc = t.isrc;
+    if (t.isrc && !t.spotifyId) c.isrc = t.isrc; // Spotify finds it by its ISRC
     if (t.itunesId) c.itunesId = t.itunesId;
     if (t.previewUrl) c.previewUrl = t.previewUrl;
     if (!t.sure) c.unsure = true;
@@ -267,12 +264,11 @@ export function buildMix(contrib, { seed = 1, source = 'preview', need = 1, max 
 
 /**
  * Track of a contribution, as a phone sends it: after the Apple Music match (favourites), or
- * after the year check (a playlist: deezerId, isrc, `checked`).
+ * after the year check (a playlist: spotifyId and/or isrc, `checked`).
  */
-export function contributionTrack({ spotifyId, deezerId, isrc, title, artist, year, yearSure, itunesId, previewUrl, checked }) {
+export function contributionTrack({ spotifyId, isrc, title, artist, year, yearSure, itunesId, previewUrl, checked }) {
   const t = { title, artist, year, sure: !!yearSure };
   if (spotifyId) t.spotifyId = spotifyId;
-  if (deezerId) t.deezerId = deezerId;
   if (isrc) t.isrc = isrc;
   if (itunesId) t.itunesId = itunesId;
   if (previewUrl) t.previewUrl = previewUrl;
@@ -291,21 +287,33 @@ export const DEFAULT_LIST_COUNT = 25;
 export const LIST_PLAN_MAX = 400;
 
 /**
+ * The key of a candidate song of a chosen playlist: its Spotify id, else its ISRC, else
+ * artist + title ('' when it has none of these: such a song cannot be found again).
+ */
+export function candidateKey(t) {
+  if (!t || typeof t !== 'object') return '';
+  if (typeof t.spotifyId === 'string' && SPOTIFY_ID.test(t.spotifyId)) return `s:${t.spotifyId}`;
+  if (typeof t.isrc === 'string' && ISRC.test(t.isrc)) return `i:${t.isrc}`;
+  const k = mixKey(t);
+  return k ? `k:${k}` : '';
+}
+
+/**
  * The order in which a phone checks the songs of its chosen playlists: every list shuffled on
  * its own (uniform: not the first N), then taken in turn, one song per list per turn, so with
  * several lists every list gets an equal share (a 2000-song list does not drown a short one;
  * a list that runs out leaves the rest to the others). Duplicates across the lists (same
- * Deezer id, ISRC, or artist + title) count once. `first`: per list the Deezer ids already
- * decided earlier (checked songs stay first, so changing the lists keeps most of what was
- * shared). lists: [{ id, tracks: [{ deezerId, isrc, title, artist }] }].
+ * Spotify id, ISRC, or artist + title) count once. `first`: per list the candidate keys
+ * (candidateKey) already decided earlier (checked songs stay first, so changing the lists
+ * keeps most of what was shared). lists: [{ id, tracks: [{ spotifyId?, isrc?, title, artist, year? }] }].
  * Returns [{ ...track, list: id }], at most `max`.
  */
 export function spreadPlan(lists, { rand = Math.random, max = LIST_PLAN_MAX, first = {} } = {}) {
   const queues = (lists || []).map((l) => {
-    const tracks = (l?.tracks || []).filter((t) => t && posInt(t.deezerId));
-    const pre = new Map((first[l?.id] || []).map((d, i) => [d, i]));
-    const known = tracks.filter((t) => pre.has(t.deezerId)).sort((a, b) => pre.get(a.deezerId) - pre.get(b.deezerId));
-    const rest = shuffle(tracks.filter((t) => !pre.has(t.deezerId)), rand);
+    const tracks = (l?.tracks || []).filter((t) => t && typeof t.title === 'string' && t.title && typeof t.artist === 'string' && t.artist && candidateKey(t));
+    const pre = new Map((own(first, l?.id) || []).map((k, i) => [k, i]));
+    const known = tracks.filter((t) => pre.has(candidateKey(t))).sort((a, b) => pre.get(candidateKey(a)) - pre.get(candidateKey(b)));
+    const rest = shuffle(tracks.filter((t) => !pre.has(candidateKey(t))), rand);
     return { id: l?.id, list: [...known, ...rest], at: 0 };
   });
   const seen = new Set();
@@ -316,7 +324,7 @@ export function spreadPlan(lists, { rand = Math.random, max = LIST_PLAN_MAX, fir
       while (q.at < q.list.length && out.length < max) {
         const t = q.list[q.at++];
         busy = true;
-        const keys = [`d:${t.deezerId}`, ...(t.isrc ? [`i:${t.isrc}`] : []), mixKey(t)].filter((k) => k && k !== 'd:');
+        const keys = [...idKeys(t), mixKey(t)].filter(Boolean);
         if (keys.some((k) => seen.has(k))) continue; // a duplicate does not use this list's turn
         for (const k of keys) seen.add(k);
         out.push({ ...t, list: q.id });
@@ -328,18 +336,19 @@ export function spreadPlan(lists, { rand = Math.random, max = LIST_PLAN_MAX, fir
 }
 
 /**
- * The checked year of a catalogue song (the same rules as the app-wide year check, enrich.js):
- * dz = the year of the Deezer release (often a re-release), mb = { via: 'isrc'|'search', year }
- * from MusicBrainz (the first release of the recording). By ISRC and not later than Deezer's:
- * that year, sure. By search (a search can be a few years off): that year when earlier, not
- * sure. MusicBrainz later than Deezer: Deezer's year stays, checked but not sure. MusicBrainz
- * ANSWERED without a year (ISRC and search both empty; mb = null): Deezer's year stays,
- * checked but not sure (as enrich.js: it never waits for Apple). No Deezer year either: null
- * (nothing to play with, not shared). A FAILED request is not an answer: the caller retries.
+ * The checked year of a song from a playlist (the same rules as the app-wide year check,
+ * enrich.js): cat = the year the song came with from its catalogue (often a re-release),
+ * mb = { via: 'isrc'|'search', year } from MusicBrainz (the first release of the recording).
+ * By ISRC and not later than the catalogue's: that year, sure. By search (a search can be a
+ * few years off): that year when earlier, not sure. MusicBrainz later: the catalogue year
+ * stays, checked but not sure. MusicBrainz ANSWERED without a year (ISRC and search both
+ * empty; mb = null): the catalogue year stays, checked but not sure (as enrich.js: it never
+ * waits for Apple). No catalogue year either: null (nothing to play with, not shared). A
+ * FAILED request is not an answer: the caller retries.
  */
-export function checkedYear(dz, mb) {
+export function checkedYear(cat, mb) {
   const ok = (y) => Number.isInteger(y) && y >= 1900 && y <= 2100;
-  const d = ok(dz) ? dz : null;
+  const d = ok(cat) ? cat : null;
   const y = ok(mb?.year) ? mb.year : null;
   if (y == null) return d == null ? null : { year: d, sure: false };
   if (mb.via === 'isrc') return d == null || y <= d ? { year: y, sure: true } : { year: d, sure: false };

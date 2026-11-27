@@ -1,8 +1,7 @@
 // Playback for the hidden player. Two sources behind one interface:
-// - 'preview' (default): 30-second previews in the <audio> element. For every card we first
-//   look up a fresh previewUrl (preview links can expire): at Apple Music by itunesId, else (or
-//   when Apple has none) at Deezer by deezerId (deezer.trackPreview, see setDeezerPreview);
-//   when that fails we fall back to the previewUrl stored in the deck.
+// - 'preview' (default): 30-second Apple Music previews in the <audio> element. For every
+//   card we first look up a fresh previewUrl by itunesId (preview links can expire); when that
+//   fails we fall back to the previewUrl stored in the deck.
 // - 'spotify': the whole song on the user's Spotify Connect device (js/spotify.js),
 //   stopped after the chosen duration. Any Spotify failure falls back to the preview.
 // Screens only use load/play/pause/toggle/restart/stop/subscribe/state, whatever the source.
@@ -76,45 +75,8 @@ export function subscribe(fn) {
   return () => listeners.delete(fn);
 }
 
-/**
- * Where a Deezer preview comes from: fn(deezerId) -> Promise<string|null> (a fresh https URL).
- * Default: trackPreview of js/deezer.js, loaded only when a card needs it (and null when that
- * module is not there). Tests (and the Deezer module itself) may set another one.
- */
-const defaultDeezerPreview = async (id) => {
-  try {
-    const m = await import('./deezer.js');
-    return typeof m.trackPreview === 'function' ? await m.trackPreview(id) : null;
-  } catch { return null; }
-};
-let deezerPreview = defaultDeezerPreview;
-export function setDeezerPreview(fn) { deezerPreview = typeof fn === 'function' ? fn : defaultDeezerPreview; }
-
-const DEEZER_TIMEOUT_MS = 6000;
-async function deezerLookup(card) {
-  const id = Number(card.deezerId);
-  if (!Number.isSafeInteger(id) || id <= 0) return null;
-  let timer = 0;
-  try {
-    const url = await Promise.race([
-      Promise.resolve().then(() => deezerPreview(id)),
-      new Promise((r) => { timer = setTimeout(() => r(null), DEEZER_TIMEOUT_MS); }),
-    ]);
-    // never cached here: Deezer's preview links carry a token that expires (deezer.js keeps a short cache)
-    return typeof url === 'string' && /^https:\/\//.test(url) ? { previewUrl: url, trackViewUrl: `https://www.deezer.com/track/${id}` } : null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** A fresh preview for a card: Apple Music by itunesId first, else Deezer by deezerId. */
+/** A fresh preview for a card: Apple Music by itunesId. */
 async function lookupPreview(card) {
-  return (await appleLookup(card)) || deezerLookup(card);
-}
-
-async function appleLookup(card) {
   if (!card.itunesId) return null;
   if (lookupCache.has(card.itunesId)) return lookupCache.get(card.itunesId);
   const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
@@ -139,10 +101,9 @@ async function appleLookup(card) {
  * Prepare a card (and start it when autoplay is set). Resolves when the source is
  * known: true when something can play, false when it failed or was superseded.
  */
-export function load(card, { autoplay = false, preview = false } = {}) {
+export function load(card, { autoplay = false } = {}) {
   releaseSpotify();
-  // preview: always the 30-second fragment (a quick listen in the playlist sheet, not a round)
-  if (!preview && wantsSpotify()) return loadSpotify(card, { autoplay });
+  if (wantsSpotify()) return loadSpotify(card, { autoplay });
   mode = 'preview';
   return loadPreview(card, { autoplay });
 }

@@ -48,7 +48,6 @@ export function songText(song) {
   if (title && artist) return `${artist}|${title}`.slice(0, 120);
   if (song?.spotifyId) return `s:${song.spotifyId}`;
   if (song?.itunesId) return `a:${song.itunesId}`;
-  if (song?.deezerId) return `d:${song.deezerId}`;
   return `c:${String(song?.id ?? '')}`;
 }
 

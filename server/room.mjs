@@ -28,7 +28,7 @@ import {
 import { startQuizClock, quizRoundOver, quizNextEvent } from '../app/js/multi/game.js';
 import { QUIZ_START_FALLBACK_MS } from '../app/js/multi/quiz.js';
 import {
-  addToContribution, contributionTotal, mixStats, mixMinimum, buildMix, MixError, MIX_PER_PLAYER,
+  addToContribution, contributionTotal, mixStats, mixMinimum, buildMix, MixError, MIX_PER_PLAYER, cleanMixTrack,
 } from '../app/js/multi/mix.js';
 import { sha256Hex } from './sha256.mjs';
 import { cleanHistory, nextGame, markPlayed, emptyHistory, gameSeed } from '../app/js/multi/order.js';
@@ -62,6 +62,11 @@ const SPECTATOR = '!spectator';
 export function migrateState(state) {
   if (!state || typeof state !== 'object') return null;
   if (!state.mix || typeof state.mix !== 'object' || Array.isArray(state.mix)) state.mix = {};
+  // the mix takes Spotify favourites only: songs a v3-10 phone added from a public playlist
+  // (no Spotify id) go, a contribution left without songs goes too
+  state.mix = Object.fromEntries(Object.entries(state.mix)
+    .map(([mid, c]) => [mid, { ...c, tracks: Array.isArray(c?.tracks) ? c.tracks.map(cleanMixTrack).filter(Boolean) : [] }])
+    .filter(([, c]) => c.tracks.length));
   if (!state.away || typeof state.away !== 'object' || Array.isArray(state.away)) state.away = {};
   // a Discobingo game stored before "Exact jaar" (protocol 4) goes back to the lobby (G.migrateRoom)
   if (state.room && typeof state.room === 'object') state.room = G.migrateRoom(withSettings(state.room));

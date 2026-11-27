@@ -523,7 +523,7 @@ export async function playbackState() {
 /* ---------- card -> track ---------- */
 
 const ISRC_RE = /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/;
-const cacheKey = (card) => String(card.itunesId ?? card.deezerId ?? card.isrc ?? `${card.title}|${card.artist}`);
+const cacheKey = (card) => String(card.itunesId ?? card.isrc ?? `${card.title}|${card.artist}`);
 
 /**
  * The Spotify track for a card: { id, uri, durationMs } or null (no reliable match).
