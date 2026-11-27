@@ -38,24 +38,38 @@ export const STORAGE_FULL_MESSAGE = 'De opslag van deze browser is vol: de wijzi
 let lastError = null;
 /** 'storage' after a write that did not fit, null after one that did. */
 export const lastWriteError = () => lastError;
+let failures = 0;
+/** How many writes did not fit so far (a caller compares before/after its own write). */
+export const writeFailures = () => failures;
 
 /** Write everything; on a full storage roll the in-memory state back to what is stored. */
-function write(reason = 'change') {
+// The message for a full storage is shown once per "full" episode for background writes
+// (enrich.js writes years in batches: one toast, not one per batch); every write the player
+// asked for shows it again. A write that fits ends the episode.
+let fullShown = false;
+function write(reason = 'change', { background = false } = {}) {
   const ok = store.set(KEY, { v: STORE_VERSION, lists: read().lists });
   if (!ok) {
     lastError = 'storage';
+    failures++;
     cache = null; // back to what storage still holds: nothing half-done stays in memory
-    try { toast(STORAGE_FULL_MESSAGE, { kind: 'warn', ms: 8000 }); } catch { /* no page (tests) */ }
+    if (!background || !fullShown) {
+      try { toast(STORAGE_FULL_MESSAGE, { kind: 'warn', ms: 8000 }); } catch { /* no page (tests) */ }
+    }
+    fullShown = true;
     emit('storage-full');
     emit('reload'); // screens draw the list again as it is stored
     return false;
   }
   lastError = null;
+  fullShown = false;
   emit(reason);
   return true;
 }
 
-globalThis.window?.addEventListener?.('storage', (e) => { if (e.key === KEY || e.key === ACTIVE_KEY) reload(); });
+// another tab changed the stored lists (maybe freed space): read them again, and a full
+// storage is no longer a given (the background work tries again)
+globalThis.window?.addEventListener?.('storage', (e) => { if (e.key === KEY || e.key === ACTIVE_KEY) { if (e.key === KEY) lastError = null; reload(); } });
 
 export const all = () => read().lists;
 export const get = (id) => read().lists.find((p) => p.id === id) || null;
@@ -196,7 +210,7 @@ export function updateTracks(id, changes) {
   if (!changed) return 0;
   settlePlayNow(p);
   p.updated = Date.now();
-  return write('track') ? changed : 0;
+  return write('track', { background: true }) ? changed : 0;
 }
 
 /** The player typed this year: it is sure and background work never changes it again. */

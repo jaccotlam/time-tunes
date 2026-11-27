@@ -262,9 +262,12 @@ function writeLater(k, w) {
 
 function writeNow(pid, list) {
   if (!list.length) return;
+  const failed0 = deps.playlists.writeFailures?.() ?? 0;
   if (typeof deps.playlists.updateTracks === 'function') deps.playlists.updateTracks(pid, list);
   else for (const { n, patch } of list) deps.playlists.updateTrack(pid, n, patch);
-  if (storageFull()) { pause('storage'); return; } // not stored: stop instead of asking again and again
+  // this write did not fit: stop instead of asking the services again and again for it
+  const failed = deps.playlists.writeFailures ? deps.playlists.writeFailures() > failed0 : storageFull();
+  if (failed) { pause('storage'); return; }
   for (const { n, patch } of list) {
     // a store that does not keep yearChecked (yet): remember it for this session, never loop
     if (patch.yearChecked && current(pid, n)?.yearChecked !== true) checkedHere.add(key(pid, n));

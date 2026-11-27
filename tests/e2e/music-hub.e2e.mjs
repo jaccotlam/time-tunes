@@ -684,6 +684,7 @@ export default async function run() {
     await dp.getByTestId('pl-result').first().click();
     await dp.getByTestId('sheet-playlist').waitFor();
     await dp.waitForFunction(() => document.querySelectorAll('[data-testid="sheet-track"]').length === 12);
+    await dp.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))));
     const box = await dp.locator('.ms-sheet').evaluate((el) => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom, w: window.innerWidth, h: window.innerHeight }; });
     check(box.l >= 0 && box.r <= box.w && box.t >= 0 && box.b <= box.h + 1, `the sheet fits inside a 1280x800 window (${Math.round(box.l)}..${Math.round(box.r)} x ${Math.round(box.t)}..${Math.round(box.b)})`);
     check(await noSideScroll(dp), 'sheet: no sideways scrolling at 1280 px');
