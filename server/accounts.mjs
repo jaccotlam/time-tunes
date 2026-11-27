@@ -207,7 +207,7 @@ export function validatePlaylist(p) {
     for (const k of ['previewUrl', 'trackViewUrl']) if (t[k] != null && (typeof t[k] !== 'string' || !/^https:\/\/[^\s"'<>]{4,600}$/.test(t[k]))) return { error: `Een nummer in "${p.name}" heeft een ongeldig adres.` };
     if (t.deezerId != null && !(Number.isSafeInteger(t.deezerId) && t.deezerId > 0)) return { error: `Een nummer in "${p.name}" heeft een ongeldige Deezer-id.` };
     if (t.isrc != null && (typeof t.isrc !== 'string' || !/^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(t.isrc))) return { error: `Een nummer in "${p.name}" heeft een ongeldige ISRC.` };
-    if (t.yearFixed != null && typeof t.yearFixed !== 'boolean') return { error: `Een nummer in "${p.name}" is ongeldig.` };
+    if ((t.yearFixed != null && typeof t.yearFixed !== 'boolean') || (t.yearChecked != null && typeof t.yearChecked !== 'boolean')) return { error: `Een nummer in "${p.name}" is ongeldig.` };
     if (!cleanTrack(t)) return { error: `Een nummer in "${p.name}" kan nergens worden afgespeeld.` };
   }
   if (p.shareId != null && (typeof p.shareId !== 'string' || !/^[0-9a-z]{4,12}$/.test(p.shareId))) return { error: `De playlist "${p.name}" is beschadigd.` };

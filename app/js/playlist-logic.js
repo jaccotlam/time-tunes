@@ -439,8 +439,9 @@ export function cleanName(name, fallback = 'Mijn playlist') {
 /**
  * One stored track, sanitised. Returns null when it cannot be played anywhere (no Apple Music,
  * Spotify or Deezer id). Format: { n, itunesId, title, artist, album, year, yearSure,
- * spotifyId?, deezerId?, isrc?, yearFixed?, match? }. `yearFixed`: the player typed this year
- * (background work never changes it). Old data with previewUrl / trackViewUrl loads; those two
+ * spotifyId?, deezerId?, isrc?, yearFixed?, yearChecked?, match? }. `yearFixed`: the player typed
+ * this year (background work never changes it). `yearChecked`: the background year check
+ * (enrich.js) has finished for this track (only ever true). Old data with previewUrl / trackViewUrl loads; those two
  * are dropped (looked up fresh / derived, see the top of this file).
  */
 export function cleanTrack(t) {
@@ -460,6 +461,7 @@ export function cleanTrack(t) {
   const isrc = cleanIsrc(t.isrc);
   if (isrc) out.isrc = isrc;
   if (t.yearFixed === true && out.year != null) { out.yearFixed = true; out.yearSure = true; }
+  if (t.yearChecked === true) out.yearChecked = true;
   if (['pending', 'none'].includes(t.match)) out.match = t.match;
   if (!out.itunesId && !out.spotifyId && !out.deezerId) return null;
   return out;
@@ -557,9 +559,9 @@ export function exportPlaylist(p) {
     app: 'TimeTunesr', type: 'playlist', v: STORE_VERSION, exported: new Date().toISOString(),
     name: p.name,
     ...(p.source ? { source: p.source } : {}),
-    tracks: p.tracks.map(({ n, itunesId, spotifyId, deezerId, isrc, yearFixed, title, artist, album, year, yearSure }) => ({
+    tracks: p.tracks.map(({ n, itunesId, spotifyId, deezerId, isrc, yearFixed, yearChecked, title, artist, album, year, yearSure }) => ({
       n, itunesId, ...(spotifyId ? { spotifyId } : {}), ...(deezerId ? { deezerId } : {}), ...(isrc ? { isrc } : {}),
-      title, artist, album, year, yearSure, ...(yearFixed ? { yearFixed } : {}),
+      title, artist, album, year, yearSure, ...(yearFixed ? { yearFixed } : {}), ...(yearChecked ? { yearChecked } : {}),
     })),
   };
 }

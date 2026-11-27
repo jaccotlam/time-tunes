@@ -2,7 +2,7 @@
 // Data: timetunesr.playlists.v1 = { v: 1, lists: [{ id, name, created, updated, nextN, tracks }] }
 //       timetunesr.activeDeck.v1 = 'builtin' | <playlist id>
 //       a playlist may carry source: { kind: 'spotify' | 'deezer', id, name } (where it was imported from)
-// Every track: { n, itunesId, spotifyId?, deezerId?, isrc?, title, artist, album, year, yearSure, yearFixed?, match? }
+// Every track: { n, itunesId, spotifyId?, deezerId?, isrc?, title, artist, album, year, yearSure, yearFixed?, yearChecked?, match? }
 // (see cleanTrack in playlist-logic.js; old data with previewUrl / trackViewUrl still loads).
 // `n` is the card number of the track within its playlist (stable, never reused).
 // Every change is written at once; when localStorage is full the change is undone (the list

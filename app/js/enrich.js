@@ -14,8 +14,9 @@
 //           year: something to show; it does NOT make the year checked.
 //   'mb'    the year check (1 request / 1.1 s): MusicBrainz by ISRC; when MusicBrainz does not
 //           know the ISRC (or there is none) a recording search on title + artist, accepting
-//           only recordings that clearly are this song by this artist. A year earlier than or
-//           equal to ours is taken (sure); a later one leaves ours. Either way: checked.
+//           only recordings that clearly are this song by this artist. An ISRC year earlier than
+//           or equal to ours is taken (sure); a search year only when earlier, and NOT sure (a
+//           search can be a few years off). A later one leaves ours. Either way: checked.
 //           It does not wait for the Deezer year (both lanes work on the same songs at once).
 //   'apple' no itunesId -> the existing Apple Music match (fragment, and pickYear as the LAST
 //           resort for the year when MusicBrainz found nothing); match: 'none' when no match.
@@ -158,10 +159,10 @@ function mbState(t, k) {
   const isrc = isrcOf(t.isrc);
   if (isrc && !m.mb.has(isrc)) return skip.mb.has(k) ? 'failed' : 'todo';
   const byIsrc = isrc ? m.mb.get(isrc) : 0;
-  if (byIsrc) return { year: byIsrc };
+  if (byIsrc) return { year: byIsrc, via: 'isrc' };
   const sk = hasText(t.title) && hasText(t.artist) ? searchKey({ title: t.title, artist: t.artist }) : null;
   if (sk && !m.ms.has(sk)) return skip.mb.has(k) ? 'failed' : 'todo';
-  return { year: (sk && m.ms.get(sk)) || null };
+  return { year: (sk && m.ms.get(sk)) || null, via: 'search' };
 }
 
 const dzNeeded = (t) => {
@@ -334,8 +335,11 @@ async function stepMusicBrainz(job, signal) {
   const cur = current(job.pid, job.n);
   if (!cur || !pendingHere(cur, job.k)) return false; // typed by the user meanwhile, or done
   let patch;
-  if (validYear(s.year) && (!validYear(cur.year) || s.year <= cur.year)) patch = { year: s.year, yearSure: true, yearChecked: true };
-  else if (validYear(s.year)) patch = { yearChecked: true }; // MusicBrainz says later: ours stays
+  if (validYear(s.year) && s.via === 'isrc' && (!validYear(cur.year) || s.year <= cur.year)) patch = { year: s.year, yearSure: true, yearChecked: true };
+  // a title/artist search can be a few years off (measured: "Take on Me" 1986 for 1984):
+  // checked, but not sure, and only when it is earlier than what we have
+  else if (validYear(s.year) && s.via === 'search' && (!validYear(cur.year) || s.year < cur.year)) patch = { year: s.year, yearSure: false, yearChecked: true };
+  else if (validYear(s.year)) patch = { yearChecked: true }; // MusicBrainz says later (or the same): ours stays
   else if (dzNeeded(cur) || appleOk(cur, job.k)) return false; // nothing found: Deezer / Apple first
   else patch = { yearChecked: true }; // nothing found anywhere: checked, "controleer het jaar"
   writeNow(job.pid, [{ n: job.n, patch }]);

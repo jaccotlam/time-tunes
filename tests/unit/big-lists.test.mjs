@@ -94,6 +94,9 @@ test('trackformaat: deezerId, isrc, yearFixed en herkomst; een nummer blijft met
   for (const bad of ['SEAYD760102', 'SEAYD76010200', '1EAYD7601020', 'SEAYD76010A0', 42, null]) assert.equal(cleanIsrc(bad), null, `isrc ${bad}`);
   assert.equal(cleanTrack({ itunesId: 1, year: 1980, yearFixed: true, yearSure: false }).yearSure, true, 'een eigen jaar is zeker');
   assert.equal(cleanTrack({ itunesId: 1, yearFixed: true }).yearFixed, undefined, 'geen jaar, niets vast');
+  assert.equal(cleanTrack({ itunesId: 1, yearChecked: true }).yearChecked, true);
+  for (const bad of [false, 'true', 1]) assert.equal(cleanTrack({ itunesId: 1, yearChecked: bad }).yearChecked, undefined, `yearChecked ${bad}`);
+  assert.equal(migrateStore({ v: 1, lists: [{ id: 'm', name: 'M', tracks: [{ n: 1, itunesId: 1, yearChecked: true }] }] }).lists[0].tracks[0].yearChecked, true, 'blijft bij het laden');
   // old data: the addresses are dropped, everything else stays
   const old = cleanTrack(oldSong(0));
   assert.equal(old.previewUrl, undefined);
@@ -238,13 +241,14 @@ test('importFromSource: eerste keer een nieuwe lijst, daarna dezelfde lijst bijw
 });
 
 test('back-up en deellink: nieuwe velden mee, oude bestanden en links blijven werken', () => {
-  const p = cleanPlaylist({ id: 'x', name: 'Mix', source: { kind: 'deezer', id: '3155776842', name: 'Top' }, tracks: [song(0), { ...song(1), yearFixed: true }, { n: 3, deezerId: 77, title: 'Alleen Deezer', artist: 'Z', year: 1999 }] });
+  const p = cleanPlaylist({ id: 'x', name: 'Mix', source: { kind: 'deezer', id: '3155776842', name: 'Top' }, tracks: [{ ...song(0), yearChecked: true }, { ...song(1), yearFixed: true }, { n: 3, deezerId: 77, title: 'Alleen Deezer', artist: 'Z', year: 1999 }] });
   const file = JSON.parse(JSON.stringify(exportPlaylist(p)));
   const back = importBackup(file)[0];
   assert.deepEqual(back.source, p.source);
   assert.equal(back.tracks[0].isrc, song(0).isrc);
   assert.equal(back.tracks[0].deezerId, song(0).deezerId);
   assert.equal(back.tracks[1].yearFixed, true);
+  assert.equal(back.tracks[0].yearChecked, true, 'back-up houdt yearChecked');
   assert.equal(back.tracks[2].deezerId, 77);
   // a backup of the live version
   const oldFile = { app: 'TimeTunesr', type: 'playlist', v: STORE_VERSION, name: 'Oud', tracks: [{ n: 1, itunesId: 9, title: 'T', artist: 'A', album: '', year: 1971, yearSure: false }] };
@@ -481,6 +485,7 @@ test('account: een paar lijsten van 2000 nummers synchroniseren, in stukken opge
   assert.equal(up.status, 201);
   const secret = up.body.token.split('.')[2];
   const lists = Array.from({ length: 5 }, (_, i) => bigList(`p${i}`, 10 + i));
+  lists[0].tracks[0].yearChecked = true;
   const data = { playlists: lists };
   t.diagnostic(`5 lijsten van 2000 nummers: ${kB(bytes(data))} (grens per account ${kB(MAX_DATA_BYTES)}, per playlist ${kB(MAX_PLAYLIST_BYTES)}, hoogstens ${MAX_PLAYLISTS} playlists)`);
   const s1 = await box.call('save', { secret, rev: 1, data });
@@ -495,6 +500,8 @@ test('account: een paar lijsten van 2000 nummers synchroniseren, in stukken opge
   const g = await box2.call('get', { secret });
   assert.equal(g.status, 200);
   assert.deepEqual(g.body.data.playlists, s1.body.data.playlists);
+  assert.equal(g.body.data.playlists[0].tracks[0].yearChecked, true, 'yearChecked gaat mee met het account');
+  assert.ok(validateData({ playlists: [{ ...bigList('y', 1, 1), tracks: [{ ...song(0), yearChecked: 'ja' }] }] }).error, 'yearChecked alleen als boolean');
   // a delta save: one playlist changed, the others as stubs; only that one is written
   kv.writes.length = 0;
   const changed = { ...lists[2], updated: 99, name: 'Anders' };

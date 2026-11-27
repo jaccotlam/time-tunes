@@ -176,6 +176,7 @@ export default async function run() {
       const after = await page.evaluate(() => JSON.parse(localStorage.getItem('timetunesr.playlists.v1')).lists.find((p) => p.id === 'pdz1').tracks);
       const y = (id) => after.find((t) => t.deezerId === id);
       const keeps = await page.evaluate(async () => (await import('./js/playlist-logic.js')).cleanTrack({ deezerId: 1, title: 'x', year: 1990, yearChecked: true }).yearChecked === true);
+      // TODO(director): once cleanTrack keeps yearChecked, drop `keeps` and require it stored
       assert(y(101).year === 1979 && y(101).yearSure === false && (keeps ? y(101).yearChecked === true : true), `Deezer year stays "not sure" when MusicBrainz knows neither the ISRC nor the title; the check has run (${keeps ? 'stored as yearChecked' : 'cleanTrack does not keep yearChecked yet: this session only'})`);
       assert(y(102).year === 1991 && y(102).yearSure === true, `MusicBrainz first release 1991 beats Deezer's 2011 remaster (${y(102).year})`);
       assert(y(103).year === 1990, 'third song');

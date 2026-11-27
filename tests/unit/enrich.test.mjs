@@ -174,7 +174,27 @@ test('ISRC unknown (404) -> title/artist search fallback; no ISRC -> search dire
   assert.ok(l.indexOf(`mb:${isrc(3)}`) < l.indexOf('mbs:a-ha - Take on Me'), 'the ISRC first, the search after the 404');
   assert.equal(tracks[0].year, 1984);
   assert.equal(tracks[1].year, 1986);
-  assert.ok(tracks.every((t) => t.yearSure && t.yearChecked));
+  assert.ok(tracks.every((t) => t.yearChecked === true && t.yearSure === false), 'a search year is checked but NOT sure');
+  assert.ok(tracks.every((t) => !enrich.yearPending(t) && enrich.yearChecked(t)));
+});
+
+test('a search year is only taken when EARLIER than ours; an ISRC year also when equal (and then sure)', async () => {
+  const tracks = [
+    { n: 1, spotifyId: 'l'.repeat(22), title: 'Later', artist: 'A', year: 1980, yearSure: false, match: 'none' },
+    { n: 2, spotifyId: 'm'.repeat(22), title: 'Same', artist: 'A', year: 1982, yearSure: false, match: 'none' },
+    { n: 3, spotifyId: 'o'.repeat(22), title: 'None yet', artist: 'A', year: null, yearSure: true, match: 'none' },
+    { n: 4, spotifyId: 'p'.repeat(22), isrc: isrc(44), title: 'Isrc same', artist: 'A', year: 1983, yearSure: false, match: 'none' },
+  ];
+  const sv = fakeServices({ mbYear: () => 1983, mbSearch: (q) => ({ 'A - Later': 1985, 'A - Same': 1982, 'A - None yet': 1990 })[q] });
+  setup([{ id: 'p', tracks }], sv);
+  await until(done('p'));
+  assert.deepEqual(tracks.map((t) => [t.year, t.yearSure, t.yearChecked]), [
+    [1980, false, true], // search later: ours stays
+    [1982, false, true], // search the same: ours stays, still not sure
+    [1990, false, true], // no year yet: the search year, not sure
+    [1983, true, true], // ISRC lookup the same: sure
+  ]);
+  assert.ok(!sv.log.some((x) => x[0] === 'mbs' && x[1].includes('Isrc same')), 'ISRC hit: no search');
 });
 
 test('MusicBrainz finds nothing -> Apple is the last resort for the year (then checked); a sure Apple year is taken', async () => {
