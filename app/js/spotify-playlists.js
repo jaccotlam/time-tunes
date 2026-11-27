@@ -87,7 +87,8 @@ async function itemsPage(id, offset, signal) {
 
 /**
  * All songs of a playlist (paged, max `max` = MAX_IMPORT), in playlist order, without
- * duplicates. onProgress(itemsRead, total). Every track: see entryToTrack (year from Spotify,
+ * duplicates. A longer list gives its first `max` songs and the array carries capped: true and
+ * total (say so with cappedMessage). onProgress(itemsRead, total). Every track: see entryToTrack (year from Spotify,
  * ISRC when Spotify gives one).
  */
 export async function playlistTracks(id, { onProgress, signal, max = MAX_IMPORT } = {}) {
@@ -123,8 +124,13 @@ export async function playlistTracks(id, { onProgress, signal, max = MAX_IMPORT 
     onProgress?.(Math.min(read, total), total);
   }
   if (!out.length) throw new PlaylistError('empty');
+  // Spotify pages the list from the top: a longer list can only be read up to the maximum
+  if (out.length >= max && read < total) { out.capped = true; out.total = total; }
   return out;
 }
+
+/** The honest line for a list longer than the maximum (playlistTracks result has `capped`). */
+export const cappedMessage = (total, max = MAX_IMPORT) => `Deze playlist heeft ${total} nummers; alleen de eerste ${max} zijn opgehaald (Spotify geeft de lijst van boven naar beneden). Bij het spelen komt elk van deze ${max} even vaak aan de beurt.`;
 
 /** The user's own and collaborative playlists: [{ id, name, count }]. */
 export async function myPlaylists() {

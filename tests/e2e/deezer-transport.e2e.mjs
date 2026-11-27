@@ -66,7 +66,8 @@ export default async function run() {
     });
     const mbCalls = [];
     await ctx.route('https://musicbrainz.org/**', (route) => {
-      const isrc = new URL(route.request().url()).pathname.split('/').pop();
+      const u = new URL(route.request().url());
+      const isrc = u.pathname.startsWith('/ws/2/isrc/') ? u.pathname.split('/').pop() : `search:${u.searchParams.get('query')}`;
       mbCalls.push(isrc);
       const body = isrc === 'NLA010000102' ? { recordings: [{ 'first-release-date': '1991-09-10' }] } : null;
       return route.fulfill({ status: body ? 200 : 404, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(body || { error: 'Not Found' }) });
@@ -170,14 +171,18 @@ export default async function run() {
     } else {
       await page.waitForFunction(() => {
         const p = JSON.parse(localStorage.getItem('timetunesr.playlists.v1')).lists.find((x) => x.id === 'pdz1');
-        return p.tracks.every((t) => t.year) && window.__tt.enrich.status('pdz1').pending === 0;
+        return p.tracks.every((t) => t.year) && window.__tt.enrich.status('pdz1').pending === 0 && window.__tt.enrich.status('pdz1').yearsPending === 0;
       }, null, { timeout: 30000 });
       const after = await page.evaluate(() => JSON.parse(localStorage.getItem('timetunesr.playlists.v1')).lists.find((p) => p.id === 'pdz1').tracks);
       const y = (id) => after.find((t) => t.deezerId === id);
-      assert(y(101).year === 1979 && y(101).yearSure === false, 'Deezer year, "not sure" (MusicBrainz does not know it)');
+      const keeps = await page.evaluate(async () => (await import('./js/playlist-logic.js')).cleanTrack({ deezerId: 1, title: 'x', year: 1990, yearChecked: true }).yearChecked === true);
+      assert(y(101).year === 1979 && y(101).yearSure === false && (keeps ? y(101).yearChecked === true : true), `Deezer year stays "not sure" when MusicBrainz knows neither the ISRC nor the title; the check has run (${keeps ? 'stored as yearChecked' : 'cleanTrack does not keep yearChecked yet: this session only'})`);
       assert(y(102).year === 1991 && y(102).yearSure === true, `MusicBrainz first release 1991 beats Deezer's 2011 remaster (${y(102).year})`);
       assert(y(103).year === 1990, 'third song');
-      assert(mbCalls.length === 3, `MusicBrainz asked once per ISRC (${mbCalls.length})`);
+      assert(mbCalls.filter((c) => !c.startsWith('search:')).length === 3, `MusicBrainz asked once per ISRC (${mbCalls.join(', ')})`);
+      assert(mbCalls.includes('search:recording:"Lied 101" AND artist:"Band"') && !mbCalls.some((c) => c.includes('Lied 102')), 'unknown ISRC -> title/artist search; known ISRC -> no search');
+      const st = await page.evaluate(() => window.__tt.enrich.status('pdz1'));
+      assert(st.yearsChecked === 3 && st.yearsPending === 0, `status: ${st.yearsChecked} checked, ${st.yearsPending} pending`);
       await page.waitForFunction(() => !document.querySelector('[data-testid="pl-match-status"]'), null, { timeout: 30000 });
       assert(true, 'the screen shows the progress and drops it when done (Apple: no match in the fake)');
     }

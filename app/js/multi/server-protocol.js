@@ -102,6 +102,16 @@ export function parseServerMessage(raw) {
   return m && typeof m === 'object' && SERVER_TYPES.includes(m.t) ? m : null;
 }
 
+/** A uniform random sample of n items (partial Fisher-Yates), in random order. */
+function sampleOf(items, n, rand) {
+  const a = items.slice();
+  for (let i = 0; i < n && i < a.length; i++) {
+    const j = i + Math.floor(rand() * (a.length - i));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a.slice(0, n);
+}
+
 /** UTF-8 length of a string (what a WebSocket frame carries), without building the bytes. */
 export function utf8Length(str) {
   let n = 0;
@@ -134,10 +144,12 @@ export function cardsForServer(cards) {
  * rest of it): as they are when they fit; else without the previewUrl of cards that have an
  * id to look it up with, and titles / artists of at most 100 characters; else only as many
  * cards as fit (a fair random part when `rand` is given). Returns { cards, cut } (cut: how
- * many were left out).
+ * many were left out). Every card has the same chance to be in the game.
  */
 export function fitCards(cards, { maxBytes = MAX_CLIENT_MESSAGE - 4096, extra = 200, rand = Math.random } = {}) {
-  let list = cardsForServer((cards || []).slice(0, MAX_CARDS));
+  // more than a room takes: a uniform random sample, never the head of the playlist
+  const all = cards || [];
+  let list = cardsForServer(all.length > MAX_CARDS ? sampleOf(all, MAX_CARDS, rand) : all);
   const size = (l) => utf8Length(JSON.stringify(l)) + extra;
   if (size(list) <= maxBytes) return { cards: list, cut: Math.max(0, (cards || []).length - list.length) };
   list = list.map((c) => {
@@ -169,6 +181,7 @@ export function cleanCards(cards) {
   if (!Array.isArray(cards)) return [];
   const out = [];
   const seen = new Set();
+  // an app sends at most MAX_CARDS (fitCards samples a bigger deck at random); more is refused here
   for (const c of cards.slice(0, MAX_CARDS)) {
     if (!c || typeof c !== 'object') continue;
     const id = str(c.id, 40);

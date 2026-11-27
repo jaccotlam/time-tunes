@@ -94,3 +94,70 @@ test('503 backs off and retries, then gives up', async () => {
     assert.equal((await q).code, 'unavailable');
   } finally { mock.timers.reset(); }
 });
+
+const rec = (title, artist, date, extra = {}) => ({ title, 'first-release-date': date, 'artist-credit': [{ name: artist, artist: { name: artist } }], ...extra });
+
+test('searchFirstReleaseYear: the query, and only clearly matching recordings count', async () => {
+  const calls = fake(() => res(200, { count: 7, recordings: [
+    rec('Take on Me', 'a-ha', '1985-06-01'),
+    rec('Take On Me', 'a‐ha', '1984-10-19'),
+    rec('Take on Me', 'a-ha', '1983-01-01', { disambiguation: 'live, 2010-12-04: Oslo Spektrum' }),
+    rec('Take on Me (MTV Unplugged)', 'a-ha', '1980-01-01'),
+    rec('Take on Me', 'Weezer', '1970-01-01'),
+    rec('Take on Me', 'Karaoke Hits Band', '1960-01-01'),
+    rec('Take Me Home', 'a-ha', '1950-01-01'),
+  ] }));
+  assert.equal(await mb.searchFirstReleaseYear({ title: 'Take on Me - 2016 Remaster', artist: 'a-ha, Somebody' }), 1984,
+    'the original (1984); not the live take, unplugged version, the cover, karaoke or another song');
+  const u = new URL(calls[0].url);
+  assert.equal(u.origin + u.pathname, 'https://musicbrainz.org/ws/2/recording');
+  assert.equal(u.searchParams.get('query'), 'recording:"Take on Me" AND artist:"a-ha"');
+  assert.equal(u.searchParams.get('fmt'), 'json');
+  assert.equal(u.searchParams.get('limit'), '10');
+  assert.equal(await mb.searchFirstReleaseYear({ title: 'Take on Me - 2016 Remaster', artist: 'a-ha, Somebody' }), 1984);
+  assert.equal(calls.length, 1, 'cached');
+});
+
+test('searchFirstReleaseYear: a wrong-song answer is ignored; quotes escaped; nothing to search -> null', async () => {
+  const calls = fake(() => res(200, { recordings: [rec('Flashdance... What a Feeling (Remix)', 'Irene Cara', '1990'), rec('Flash', 'Queen', '1980')] }));
+  assert.equal(await mb.searchFirstReleaseYear({ title: 'Flashdance... What a Feeling', artist: 'Irene Cara' }), null);
+  await mb.searchFirstReleaseYear({ title: 'Say "Hi" \\ now', artist: 'X' });
+  assert.equal(new URL(calls[1].url).searchParams.get('query'), 'recording:"Say \\"Hi\\" \\\\ now" AND artist:"X"');
+  assert.equal(await mb.searchFirstReleaseYear({ title: '', artist: 'X' }), null);
+  assert.equal(await mb.searchFirstReleaseYear({ title: 'Y' }), null);
+  assert.equal(calls.length, 2);
+});
+
+test('searchFirstReleaseYear: hostile shapes are ignored', async () => {
+  fake(() => res(200, { recordings: [
+    { title: 'Song', 'first-release-date': '1980', 'artist-credit': 'Band' },
+    { title: ['Song'], 'first-release-date': '1981', 'artist-credit': [{ name: 'Band' }] },
+    { title: 'Song', 'first-release-date': 1982, 'artist-credit': [{ name: 'Band' }] },
+    { title: 'Song', 'first-release-date': '1983', 'artist-credit': [{ name: { x: 1 } }] },
+    null, 7,
+    { title: 'Song', 'first-release-date': '1999-05-05', 'artist-credit': [{ name: 'Band' }] },
+  ] }));
+  assert.equal(await mb.searchFirstReleaseYear({ title: 'Song', artist: 'Band' }), 1999);
+});
+
+test('searchFirstReleaseYear: 503 backs off and retries in the same 1.1 s queue as the ISRC lookups', async () => {
+  mb._reset();
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 7_000_000 });
+  try {
+    let n = 0;
+    const calls = fake((url) => (url.includes('/recording?') && ++n === 1 ? res(503, 'busy') : url.includes('/isrc/') ? res(404, {}) : res(200, { recordings: [rec('Venus', 'Bananarama', '1986-05-01')] })));
+    const a = mb.firstReleaseYear('NLA010000031');
+    const b = mb.searchFirstReleaseYear({ title: 'Venus', artist: 'Bananarama' });
+    await advance(15000, 100);
+    assert.equal(await a, null);
+    assert.equal(await b, 1986);
+    assert.equal(calls.length, 3);
+    assert.ok(calls[1].at - calls[0].at >= 1100, 'one queue for both');
+    assert.ok(calls[2].at - calls[1].at >= 3000, 'backed off after the 503');
+  } finally { mock.timers.reset(); }
+});
+
+test('MESSAGES: Dutch text per code', () => {
+  for (const c of ['offline', 'timeout', 'unavailable', 'aborted']) assert.ok(mb.MESSAGES[c], c);
+  assert.equal(mb.errorMessage({ code: 'weird' }), mb.MESSAGES.unavailable);
+});
