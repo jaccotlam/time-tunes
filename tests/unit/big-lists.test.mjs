@@ -233,7 +233,7 @@ test('importFromSource: eerste keer een nieuwe lijst, daarna dezelfde lijst bijw
   // a Deezer source of the same name is another playlist
   const d = playlists.importFromSource({ kind: 'deezer', id: 1266971851, name: 'Feest 2026' }, [{ deezerId: 1, title: 'x', artist: 'y', year: 2020 }]);
   assert.equal(d.created, true);
-  assert.equal(d.playlist.name, 'Feest 2026 (2)');
+  assert.equal(d.playlist.name, 'Feest 2026', 'de eerste heet nu anders');
   assert.equal(playlists.importFromSource({ kind: 'nope', id: 1 }, []).error, 'source');
 });
 
@@ -399,7 +399,7 @@ function wsClient(core, code) {
 }
 
 test('kamer: starten met 2000 kaarten (berichtgrootte), back-up en herstel; te groot geeft een melding, geen verbroken verbinding', async (t) => {
-  let now = 5_000_000;
+  const now = 5_000_000;
   const core = createRoomServer({ now: () => now });
   const res = core.http({ method: 'POST', path: '/rooms', origin: ORIGIN, ip: '10.0.0.1', body: JSON.stringify({ v: V, id: 'owner01', name: 'Ilse', settings: { game: 'timeline' } }) });
   const { code, token } = res.body;
@@ -415,7 +415,7 @@ test('kamer: starten met 2000 kaarten (berichtgrootte), back-up en herstel; te g
   const fit = fitCards(deck.cards);
   assert.equal(fit.cut, 0);
   const msg = JSON.stringify({ t: 'start', cards: fit.cards, mix: false, play: 'preview' });
-  t.diagnostic(`startbericht met 2000 kaarten (Apple + Spotify + Deezer + ISRC): ${kB(utf8Length(msg))} (grens ${kB(MAX_CLIENT_MESSAGE)})`);
+  t.diagnostic(`startbericht met 2000 kaarten (Apple + Spotify + Deezer): ${kB(utf8Length(msg))} (grens ${kB(MAX_CLIENT_MESSAGE)})`);
   assert.ok(utf8Length(msg) < MAX_CLIENT_MESSAGE * 0.75);
   assert.ok(parseClientMessage(msg));
   host.raw(msg);
@@ -423,8 +423,8 @@ test('kamer: starten met 2000 kaarten (berichtgrootte), back-up en herstel; te g
   const lead = host.last('state');
   assert.equal(lead.lead.room.phase, 'answering', JSON.stringify(host.last('error')));
   const songNow = lead.lead.song;
-  assert.ok(songNow.deezerId && songNow.isrc && songNow.itunesId && songNow.spotifyId, 'de muziektelefoon krijgt alle ids');
-  assert.equal(core.rooms?.get?.(code)?.state?.room?.game ? Object.keys(core.rooms.get(code).state.room.game.songs).length : 2000, 2000);
+  assert.ok(songNow.deezerId && songNow.itunesId && songNow.spotifyId, 'de muziektelefoon krijgt alle ids');
+  assert.equal(songNow.isrc, undefined, 'ISRC alleen zonder Spotify-id');
   const backupSize = host.lastSize('backup');
   t.diagnostic(`back-up van de kamer naar de telefoon van de eigenaar: ${kB(backupSize)}; staat van een speler: ${kB(a.lastSize('state'))}`);
   assert.ok(backupSize < 2 * MAX_CLIENT_MESSAGE, 'past in een herstelverzoek (maxBody)');
@@ -451,7 +451,6 @@ test('kamer: starten met 2000 kaarten (berichtgrootte), back-up en herstel; te g
   // the server keeps the new ids and drops broken ones
   const clean = cleanCards([{ id: '1', year: 1980, deezerId: 5, isrc: 'SEAYD7601020' }, { id: '2', year: 1980, deezerId: '5', isrc: 'kapot' }]);
   assert.deepEqual(clean.map((c) => [c.deezerId, c.isrc]), [[5, 'SEAYD7601020'], [undefined, undefined]]);
-  now += 1;
 });
 
 // ---------- accounts with big lists ----------

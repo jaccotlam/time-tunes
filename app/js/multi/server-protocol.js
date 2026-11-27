@@ -116,11 +116,15 @@ export function utf8Length(str) {
 
 const CARD_FIELDS = ['id', 'year', 'title', 'artist', 'previewUrl', 'itunesId', 'spotifyId', 'deezerId', 'isrc'];
 
-/** Only what the server needs to run a game and the music phone needs to play a song. */
+/**
+ * Only what the server needs to run a game and the music phone needs to play a song (the
+ * ISRC only serves to find a song on Spotify, so it stays home when there is a Spotify id).
+ */
 export function cardsForServer(cards) {
   return (cards || []).map((c) => {
     const o = {};
     for (const k of CARD_FIELDS) if (c[k] != null && c[k] !== '') o[k] = c[k];
+    if (o.spotifyId) delete o.isrc;
     return o;
   });
 }
