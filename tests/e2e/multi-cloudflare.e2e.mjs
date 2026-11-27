@@ -80,7 +80,7 @@ async function bigListsOnWorker() {
   const signup = await (await fetch(`${URL_}/account/signup`, { method: 'POST', headers: H_, body: JSON.stringify({ username: 'grootlijst', password: 'geheim-wachtwoord-1' }) })).json();
   const auth = { ...H_, authorization: `Bearer ${signup.token}` };
   const lists = ['g1', 'g2', 'g3'].map((id, k) => ({ id, name: `Groot ${id}`, created: 1, updated: 10 + k, nextN: 2001, tracks: Array.from({ length: 2000 }, (_, i) => song(i)), source: { kind: 'deezer', id: '1266971851', name: 'Top' } }));
-  const body = JSON.stringify({ rev: 1, data: { playlists: lists } });
+  const body = JSON.stringify({ rev: 1, data: { playlists: lists }, format: 2 });
   const saved = await fetch(`${URL_}/account/data`, { method: 'POST', headers: auth, body });
   const sv = await saved.json();
   assert(saved.status === 200 && sv.data?.playlists?.length === 3, `Worker: an account saves three 2000-song lists (${Math.round(body.length / 1024)} kB; ${saved.status} ${sv.message || ''})`);
@@ -89,10 +89,15 @@ async function bigListsOnWorker() {
   const g = await (await fetch(`${URL_}/account`, { headers: auth })).json();
   assert(g.data?.playlists?.length === 3 && g.data.playlists.every((p) => p.tracks.length === 2000) && g.data.playlists[1].tracks[4].isrc, 'Worker: after a restart the account has its three lists of 2000 songs (Durable Object, in pieces)');
   const changed = { ...g.data.playlists[1], updated: 99, name: 'Anders' };
-  const delta = JSON.stringify({ rev: g.rev, delta: true, data: { playlists: [{ id: 'g1', updated: 10, same: true }, changed, { id: 'g3', updated: 12, same: true }] } });
+  const delta = JSON.stringify({ rev: g.rev, delta: true, format: 2, data: { playlists: [{ id: 'g1', updated: 10, same: true }, changed, { id: 'g3', updated: 12, same: true }] } });
   const d = await (await fetch(`${URL_}/account/data`, { method: 'POST', headers: auth, body: delta })).json();
   const g2 = await (await fetch(`${URL_}/account`, { headers: auth })).json();
   assert(d.delta === true && g2.data.playlists.map((p) => p.name).join() === 'Groot g1,Anders,Groot g3' && g2.data.playlists[0].tracks.length === 2000, `Worker: a delta save sends one list (${Math.round(delta.length / 1024)} kB) and keeps the others`);
+  // an app of before (no format) that would save one of these lists shortened: refused, lists intact
+  const old = await fetch(`${URL_}/account/data`, { method: 'POST', headers: auth, body: JSON.stringify({ rev: g2.rev, data: { playlists: g2.data.playlists.map((p) => ({ ...p, tracks: p.tracks.slice(0, 500) })) } }) });
+  const ob = await old.json();
+  const g3 = await (await fetch(`${URL_}/account`, { headers: auth })).json();
+  assert(old.status === 400 && ob.code === 'oldapp' && g3.rev === g2.rev && g3.data.playlists.every((p) => p.tracks.length === 2000), `Worker: a save of an old app may not shorten the lists (${old.status} ${ob.message})`);
 }
 
 export default async function run() {

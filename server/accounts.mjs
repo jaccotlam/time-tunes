@@ -185,7 +185,7 @@ export function parseToken(value) {
 }
 
 // ---------- account data ----------
-const ALLOWED_PLAYLIST = ['id', 'name', 'created', 'updated', 'nextN', 'tracks', 'shareId', 'partsSeen', 'partsTotal', 'source'];
+const ALLOWED_PLAYLIST = ['id', 'name', 'created', 'updated', 'nextN', 'tracks', 'shareId', 'partsSeen', 'partsTotal', 'source', 'playNow'];
 const TRACK_STRINGS = ['title', 'artist', 'album'];
 const okTime = (v) => Number.isFinite(v) && v >= 0 && v < 1e14;
 
@@ -211,6 +211,7 @@ export function validatePlaylist(p) {
     if (!cleanTrack(t)) return { error: `Een nummer in "${p.name}" kan nergens worden afgespeeld.` };
   }
   if (p.shareId != null && (typeof p.shareId !== 'string' || !/^[0-9a-z]{4,12}$/.test(p.shareId))) return { error: `De playlist "${p.name}" is beschadigd.` };
+  if (p.playNow != null && typeof p.playNow !== 'boolean') return { error: `De playlist "${p.name}" is beschadigd.` };
   if (p.source != null && !cleanSource(p.source)) return { error: `De playlist "${p.name}" heeft een ongeldige herkomst.` };
   // known fields only: anything else is dropped (never stored)
   const known = Object.fromEntries(ALLOWED_PLAYLIST.filter((k) => p[k] !== undefined).map((k) => [k, p[k]]));
@@ -218,6 +219,40 @@ export function validatePlaylist(p) {
   value.updated = p.updated;
   if (byteLength(JSON.stringify(value)) > MAX_PLAYLIST_BYTES) return { error: `De playlist "${p.name}" is te groot om te bewaren (meer dan ${Math.round(MAX_PLAYLIST_BYTES / 1024)} kB). Maak hem kleiner of verdeel hem over twee playlists.` };
   return { value };
+}
+
+/** The data format of the app of 2026-11 (2000 songs, deezerId, isrc, yearChecked, source ...); a save says it with `format`. */
+export const DATA_FORMAT = 2;
+/** The most songs an app of before (format 1, v3-9) keeps of a playlist. */
+export const OLD_MAX_TRACKS = 500;
+export const OLD_APP_MESSAGE = 'Ververs de app: deze versie is te oud om je playlists te bewaren. Je playlists in je account blijven zoals ze waren.';
+
+/**
+ * Does this stored playlist need the new format? An app of before would load it shortened (500
+ * songs) or without its Deezer-only songs and new fields, and could save that back.
+ */
+export function needsNewFormat(p) {
+  if (!p || typeof p !== 'object') return false;
+  if (p.source || p.playNow) return true;
+  const tracks = Array.isArray(p.tracks) ? p.tracks : [];
+  return tracks.length > OLD_MAX_TRACKS || tracks.some((t) => t && (t.deezerId || t.isrc || t.yearChecked || t.yearFixed));
+}
+
+/**
+ * A save of an app of before (no format 2) may not touch a playlist that needs the new format:
+ * not change it, not leave it out, not delete it. Returns the name of the first such playlist, or null.
+ */
+export function oldAppConflict(current, value) {
+  const stored = (current?.playlists || []).filter(needsNewFormat);
+  if (!stored.length) return null;
+  const sent = 'playlists' in value ? new Map(value.playlists.map((p) => [p.id, p])) : null;
+  for (const p of stored) {
+    if (value.deleted && Object.hasOwn(value.deleted, p.id) && !(current.deleted && current.deleted[p.id] === value.deleted[p.id])) return p.name;
+    if (!sent) continue;
+    const s = sent.get(p.id);
+    if (!s || JSON.stringify(s) !== JSON.stringify(p)) return p.name;
+  }
+  return null;
 }
 
 /** A playlist the account already has, unchanged: { id, updated, same: true }. */
@@ -619,6 +654,9 @@ export class AccountBox {
       // a stub for a playlist the account does not have like that: merge with the current data again
       if (r.stale) return fail(409, 'conflict', 'Je account is intussen op een ander toestel gewijzigd.', { rev: this.rec.rev, data: this.rec.data });
       if (r.error) return fail(400, 'data', r.error);
+      // an app of before: the whole save is refused when it would change, drop or delete a playlist
+      // of the new format (nothing of it is stored: no half save); its other saves work as before
+      if (args.format !== DATA_FORMAT && oldAppConflict(this.rec.data, r.value)) return fail(400, 'oldapp', OLD_APP_MESSAGE);
       const delta = !!r.value.stubs;
       delete r.value.stubs;
       const next = { ...emptyData(), ...this.rec.data, ...r.value };

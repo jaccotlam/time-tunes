@@ -165,7 +165,7 @@ test('opslag: oude gegevens laden, 2000 nummers bewaren, en een volle opslag gee
   playlists.reload();
   assert.equal(playlists.get('oud').tracks.length, 500);
   assert.equal(playlists.get('oud').tracks[0].previewUrl, undefined);
-  assert.equal(playlistDeck(playlists.get('oud')).cards[0].trackViewUrl, 'https://music.apple.com/nl/song/1422648000', 'winkellink afgeleid');
+  assert.equal(playlistDeck(playlists.get('oud')).cards.find((c) => c.itunesId === 1422648001).trackViewUrl, 'https://music.apple.com/nl/song/1422648001', 'winkellink afgeleid');
   // 2000 songs in one go
   const p = playlists.create('Groot');
   const res = playlists.addTracks(p.id, Array.from({ length: 2001 }, (_, i) => song(i)));
@@ -488,7 +488,7 @@ test('account: een paar lijsten van 2000 nummers synchroniseren, in stukken opge
   lists[0].tracks[0].yearChecked = true;
   const data = { playlists: lists };
   t.diagnostic(`5 lijsten van 2000 nummers: ${kB(bytes(data))} (grens per account ${kB(MAX_DATA_BYTES)}, per playlist ${kB(MAX_PLAYLIST_BYTES)}, hoogstens ${MAX_PLAYLISTS} playlists)`);
-  const s1 = await box.call('save', { secret, rev: 1, data });
+  const s1 = await box.call('save', { secret, rev: 1, data, format: 2 });
   assert.equal(s1.status, 200, JSON.stringify(s1.body).slice(0, 300));
   assert.equal(s1.body.data.playlists.length, 5);
   const biggest = Math.max(...[...kv.map.entries()].map(([k, v]) => bytes(v) + k.length));
@@ -508,7 +508,7 @@ test('account: een paar lijsten van 2000 nummers synchroniseren, in stukken opge
   const sent = deltaData({ ...g.body.data, playlists: [...g.body.data.playlists.slice(0, 2), changed, ...g.body.data.playlists.slice(3)] }, g.body.data);
   assert.equal(sent.playlists.filter((p) => p.same).length, 4);
   t.diagnostic(`opslaan na één wijziging: ${kB(bytes({ rev: 2, data: sent, delta: true }))} verstuurd in plaats van ${kB(bytes({ rev: 2, data: { playlists: [...lists.slice(0, 2), changed, ...lists.slice(3)] } }))}`);
-  const s2 = await box2.call('save', { secret, rev: 2, data: sent, delta: true });
+  const s2 = await box2.call('save', { secret, rev: 2, data: sent, delta: true, format: 2 });
   assert.equal(s2.status, 200, JSON.stringify(s2.body).slice(0, 300));
   assert.deepEqual(s2.body, { rev: 3, delta: true }, 'antwoord zonder de gegevens');
   assert.deepEqual(kv.writes.sort(), ['account', `${PLAYLIST_KEY_PREFIX}p2`]);
@@ -516,11 +516,11 @@ test('account: een paar lijsten van 2000 nummers synchroniseren, in stukken opge
   assert.equal(g2.body.data.playlists[2].name, 'Anders');
   assert.equal(g2.body.data.playlists[0].tracks.length, 2000);
   // a stub for a version the account does not have: conflict with the current data (the client merges)
-  const stale = await box2.call('save', { secret, rev: 3, data: { playlists: [{ id: 'p0', updated: 1, same: true }] } });
+  const stale = await box2.call('save', { secret, rev: 3, data: { playlists: [{ id: 'p0', updated: 1, same: true }] }, format: 2 });
   assert.equal(stale.status, 409);
   assert.equal(stale.body.code, 'conflict');
   // a deleted playlist goes from the storage too
-  const s3 = await box2.call('save', { secret, rev: 3, data: { playlists: g2.body.data.playlists.slice(1).map((p) => ({ id: p.id, updated: p.updated, same: true })) } });
+  const s3 = await box2.call('save', { secret, rev: 3, data: { playlists: g2.body.data.playlists.slice(1).map((p) => ({ id: p.id, updated: p.updated, same: true })) }, format: 2 });
   assert.equal(s3.status, 200);
   assert.ok(!kv.map.has(`${PLAYLIST_KEY_PREFIX}p0`));
   // a record of before (everything in one value) loads and is split by the next save
@@ -533,7 +533,7 @@ test('account: een paar lijsten van 2000 nummers synchroniseren, in stukken opge
   const g3 = await box3.call('get', { secret });
   assert.equal(g3.status, 200);
   assert.equal(g3.body.data.playlists[0].tracks.length, 500);
-  const s4 = await box3.call('save', { secret, rev: g3.body.rev, data: { prefs: { hostName: 'Ilse' } } });
+  const s4 = await box3.call('save', { secret, rev: g3.body.rev, data: { prefs: { hostName: 'Ilse' } }, format: 2 });
   assert.equal(s4.status, 200);
   assert.ok(legacy.map.has(`${PLAYLIST_KEY_PREFIX}oud`) && Array.isArray(legacy.map.get('account').data.playlistIds));
   // validation stays strict: 2001 songs, or a playlist over MAX_PLAYLIST_BYTES

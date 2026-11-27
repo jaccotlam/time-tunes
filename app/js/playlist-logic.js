@@ -71,6 +71,35 @@ export function playable(t, source = 'preview') {
   return fragment || isSpId(t.spotifyId) || isIsrc(t.isrc) || (hasText(t.title) && hasText(t.artist));
 }
 
+/**
+ * Is the year of this track still waiting for the background check (enrich.js)? Catalogue years
+ * (Deezer, Spotify's album) are often a re-release, and the game asks for the year (±2 / exact).
+ * False when the player fixed it (yearFixed), the check is done (yearChecked), the year is
+ * trusted (yearSure on a valid year), or there is nothing to check with (no ISRC, no title +
+ * artist). Pure: only the stored fields. THE definition; enrich.js uses the same truth table
+ * (tests/unit/deck-rule.test.mjs pins both).
+ */
+export function yearPending(t) {
+  if (!t || typeof t !== 'object') return false;
+  if (t.yearFixed === true || t.yearChecked === true) return false;
+  if (t.yearSure === true && validYear(Number(t.year))) return false;
+  return !!(isIsrc(t.isrc) || (hasText(t.title) && hasText(t.artist)));
+}
+
+/**
+ * THE deck rule for a playlist: which of its tracks a game plays with this source.
+ * All playable tracks, except: while the year check of some is pending and at least FUN_MIN
+ * others are ready, the pending ones are held back. `playNow` on the playlist ("Speel nu
+ * toch") plays them all. Returns { tracks, held } (held: playable tracks left out for now).
+ */
+export function deckTracks(p, source = 'spotify') {
+  const all = (p?.tracks || []).filter((t) => playable(t, source));
+  if (p?.playNow === true) return { tracks: all, held: [] };
+  const ready = all.filter((t) => !yearPending(t));
+  if (ready.length >= FUN_MIN && ready.length < all.length) return { tracks: ready, held: all.filter((t) => yearPending(t)) };
+  return { tracks: all, held: [] };
+}
+
 /** How many tracks of a playlist (or any list of cards) can be played with this source. */
 export const playableTotal = (tracks, source = 'preview') => (tracks || []).reduce((n, t) => n + (playable(t, source) ? 1 : 0), 0);
 
@@ -494,6 +523,7 @@ export function cleanPlaylist(p, i = 0) {
   if (typeof p.shareId === 'string' && /^[0-9a-z]{4,12}$/.test(p.shareId)) out.shareId = p.shareId;
   if (Array.isArray(p.partsSeen)) out.partsSeen = p.partsSeen.filter((n) => Number.isInteger(n) && n > 0).slice(0, 100);
   if (Number.isInteger(p.partsTotal) && p.partsTotal > 0) out.partsTotal = p.partsTotal;
+  if (p.playNow === true) out.playNow = true; // "Speel nu toch": also the songs whose year is not checked yet
   const source = cleanSource(p.source);
   if (source) out.source = source;
   return out;
@@ -530,11 +560,12 @@ export const padN = (n) => String(n).padStart(3, '0');
  * A playlist as a deck, in the same format as data/deck.json:
  * { id, name, kind, cards, byId } with cards { id, title, artist, year, itunesId,
  * previewUrl (null: looked up at play time), trackViewUrl (derived), spotifyId?, deezerId?,
- * isrc?, code? }. Songs without a year are left out.
+ * isrc?, code? }. Which songs: deckTracks(p, source) (without a year: never; with a year
+ * still being checked: see there). Default source 'spotify': every playable song (print).
  */
-export function playlistDeck(p) {
-  const cards = (p?.tracks || [])
-    .filter((t) => validYear(t.year))
+export function playlistDeck(p, source = 'spotify') {
+  // the deck rule (deckTracks): playable with `source`, unchecked years held back while enough are ready
+  const cards = deckTracks(p, source).tracks
     .map((t) => {
       const c = {
         id: padN(t.n), title: t.title, artist: t.artist, year: t.year,

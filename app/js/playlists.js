@@ -11,7 +11,7 @@
 import { store, toast } from './ui.js';
 import {
   migrateStore, cleanPlaylist, cleanTrack, cleanName, cleanSource, BUILTIN_ID, STORE_VERSION, MAX_TRACKS, validYear,
-  playableTotal,
+  playableTotal, deckTracks, yearPending,
 } from './playlist-logic.js';
 
 export const KEY = 'timetunesr.playlists.v1';
@@ -171,6 +171,7 @@ export function updateTrack(id, n, patch) {
   const t = p?.tracks.find((x) => x.n === n);
   if (!t || !cleanTrack({ ...t, ...patch, n })) return null;
   applyPatch(t, n, patch);
+  settlePlayNow(p);
   p.updated = Date.now();
   if (!write('track')) return null;
   return get(id)?.tracks.find((x) => x.n === n) || null;
@@ -193,6 +194,7 @@ export function updateTracks(id, changes) {
     if (JSON.stringify(t) !== before) changed++;
   }
   if (!changed) return 0;
+  settlePlayNow(p);
   p.updated = Date.now();
   return write('track') ? changed : 0;
 }
@@ -320,6 +322,29 @@ export function setActive(id) {
  * playable() in playlist-logic.js). Without a source: playable with either one (as before,
  * where a Spotify id counted too); screens pass deck.musicSource().
  */
+/**
+ * For the screens: { total, playable, inDeck, held } of a playlist with this source
+ * ("Speelt met 40 van 500 nummers; de rest wordt nog nagekeken"). inDeck = what a game plays.
+ */
+export function deckCounts(p, source = 'spotify') {
+  const d = deckTracks(p, source);
+  return { total: (p?.tracks || []).length, playable: d.tracks.length + d.held.length, inDeck: d.tracks.length, held: d.held.length };
+}
+
+/** "Speel nu toch": play also the songs whose year is not checked yet (on / off). */
+export function setPlayNow(id, on) {
+  const p = get(id);
+  if (!p) return false;
+  if (on) p.playNow = true; else delete p.playNow;
+  p.updated = Date.now();
+  return write('change');
+}
+
+/** playNow ends by itself once no song of the list waits for its year check any more. */
+function settlePlayNow(p) {
+  if (p?.playNow && !p.tracks.some((t) => yearPending(t))) delete p.playNow;
+}
+
 export function playableCount(p, source) {
   const tracks = p?.tracks || [];
   if (source) return playableTotal(tracks, source);

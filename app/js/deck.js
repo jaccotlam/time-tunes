@@ -42,7 +42,7 @@ export function loadDeck() {
   const id = playlists.getActiveId();
   if (id !== BUILTIN_ID) {
     const p = playlists.get(id);
-    if (p) return Promise.resolve(playlistDeck(p));
+    if (p) return Promise.resolve(playlistDeck(p, musicSource()));
   }
   return loadBuiltinDeck();
 }

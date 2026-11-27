@@ -30,6 +30,8 @@ const HOST_NAME_KEY = 'timetunesr.multiName.v1'; // the spelleider's name (room-
 const SETTINGS_KEY = 'timetunesr.multiSettings.v1'; // the lobby's last settings (server-session.js)
 
 export const SAVE_DELAY_MS = 1500;
+/** The data format this app writes (sent with every save; an app of before sends none). */
+export const DATA_FORMAT = 2;
 const RETRY_MS = [3000, 10000, 30000, 60000];
 /** After a save of `bytes`, the next background save waits at least this long (ms). */
 export const saveGap = (bytes) => Math.min(30000, Math.round((Number(bytes) || 0) / 1024) * 30);
@@ -334,7 +336,9 @@ async function settle(remote, { tries = 3 } = {}) {
     let data = m.remote;
     if (m.remoteChanged) {
       const delta = deltaSaves();
-      const body = delta ? { rev, data: deltaData(m.remote, rem.data), delta: true } : { rev, data: m.remote };
+      // format: this app knows the playlist format of 2026-11 (2000 songs, Deezer, ISRC ...): the
+      // server lets only such an app overwrite playlists that need it (DATA_FORMAT in accounts.mjs)
+      const body = delta ? { rev, data: deltaData(m.remote, rem.data), delta: true, format: DATA_FORMAT } : { rev, data: m.remote, format: DATA_FORMAT };
       lastSent = { at: Date.now(), bytes: JSON.stringify(body).length };
       const r = await authed('POST', '/account/data', body);
       if (!r.ok && r.code === 'conflict' && r.status === 409) {
