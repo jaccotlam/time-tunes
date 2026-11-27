@@ -1,10 +1,12 @@
 // Pure game logic for TimeTunesr. No DOM access: this module is shared
 // between the browser and the Node test runner (`npm test`).
+import { orderSongs } from './multi/order.js';
 
 /**
  * Matches the card id in a scanned QR text such as https://x.y/app/#/c/042, or the
  * self-contained code of an own-playlist card: #/c/~<code> (see playlist-logic.js).
  */
+
 export const CARD_HASH_RE = /#\/c\/(~?[0-9A-Za-z]+)/;
 
 /**
@@ -64,8 +66,6 @@ export function correctSlots(years, year) {
 }
 
 /** Small deterministic PRNG (mulberry32) so games can be reproduced in tests. */
-import { orderSongs } from './multi/order.js';
-
 export function seededRandom(seed) {
   let a = seed >>> 0;
   return function rand() {

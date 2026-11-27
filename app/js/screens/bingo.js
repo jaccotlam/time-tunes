@@ -9,6 +9,8 @@ import { icons, esc, store, vibrate, reducedMotion, toast } from '../ui.js';
 import { playerViewHtml, mountPlayerView } from './playerview.js';
 import { answerHtml } from './answer.js';
 import { isPlayable, deckSnapshot } from '../deck.js';
+import { gameSeed } from '../multi/order.js';
+import * as played from '../played.js';
 import { deckLineHtml, deckLabel } from './deckline.js';
 
 export const name = 'bingo';
@@ -297,12 +299,14 @@ export function render(root, { deck }) {
 
   function newGame() {
     const fixed = store.get(SEED_KEY, null);
-    const seed = Number.isInteger(fixed) ? fixed >>> 0 : (Math.random() * 2 ** 32) >>> 0;
+    const seed = Number.isInteger(fixed) ? fixed >>> 0 : gameSeed();
     try {
       game = createBingo({
         names: setup.names, size: setup.size, seed,
-        cards: playable.map((c) => ({ id: c.id, year: c.year })),
+        cards: playable.map((c) => ({ id: c.id, year: c.year, title: c.title, artist: c.artist })),
+        history: Number.isInteger(fixed) ? null : played.historyFor(deck.id),
       });
+      played.startedGame(deck.id);
       game.deck = deckSnapshot(deck, playable);
     } catch (e) {
       toast(e.message, { kind: 'warn' });
@@ -318,6 +322,7 @@ export function render(root, { deck }) {
     selected = null;
     yearGuess = '';
     if (game.phase === 'won') { player.stop(); draw('won'); return; }
+    played.playedSong(deck.id, card(game.currentCard)); // the next game with this deck plays other songs first
     player.load(card(game.currentCard)); // prefetch while the phone is passed on
     draw('handoff');
   }

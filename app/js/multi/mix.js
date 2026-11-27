@@ -17,6 +17,7 @@ import { seededRandom, shuffle } from '../logic.js';
 import { normalizeTitle, normalizeArtist, splitArtists } from '../spotify-match.js';
 import { DISCO_MIN_SONGS } from './disco.js';
 import { playable } from '../playlist-logic.js';
+import { cleanHistory, songKey } from './order.js';
 
 /** Most songs one phone may add to a room (Spotify gives at most 50 top songs per call). */
 export const MIX_PER_PLAYER = 50;
@@ -185,14 +186,21 @@ export class MixError extends Error {
  * Returns cards { id: 'm1'.., year, title, artist, spotifyId, itunesId?, previewUrl?, from, by }.
  * Throws MixError 'mix' (with `have` and `need`) when there are too few songs.
  */
-export function buildMix(contrib, { seed = 1, source = 'preview', need = 1, max = MIX_GAME_MAX, names = {} } = {}) {
+export function buildMix(contrib, { seed = 1, source = 'preview', need = 1, max = MIX_GAME_MAX, names = {}, history = null } = {}) {
   const rand = seededRandom(((seed >>> 0) ^ 0x5bd1e995) >>> 0);
   const order = Object.keys(contrib || {}).sort();
   const all = unique(contrib || {}, order).filter((e) => playableWith(e.track, source));
-  // per player: own songs (first contributor), sure years first, each group shuffled
+  // per player: own songs (first contributor), songs not played in this room yet first (history,
+  // order.js), then sure years first, each group shuffled
+  const h = history ? cleanHistory(history) : null;
+  const playedIn = (e) => (h ? h.keys[songKey(e.track)] ?? -1 : -1);
   const lists = order.map((pid) => {
     const mine = all.filter((e) => e.from[0] === pid);
-    return [...shuffle(mine.filter((e) => e.track.sure), rand), ...shuffle(mine.filter((e) => !e.track.sure), rand)];
+    const games = [...new Set(mine.map(playedIn))].sort((a, b) => a - b);
+    return games.flatMap((gi) => {
+      const part = mine.filter((e) => playedIn(e) === gi);
+      return [...shuffle(part.filter((e) => e.track.sure), rand), ...shuffle(part.filter((e) => !e.track.sure), rand)];
+    });
   }).filter((l) => l.length);
   const have = all.length;
   const cap = Math.max(1, Math.min(max, MIX_TOTAL));

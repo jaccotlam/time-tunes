@@ -31,7 +31,7 @@ import {
   addToContribution, contributionTotal, mixStats, mixMinimum, buildMix, MixError, MIX_PER_PLAYER,
 } from '../app/js/multi/mix.js';
 import { sha256Hex } from './sha256.mjs';
-import { cleanHistory, nextGame, markPlayed, emptyHistory } from '../app/js/multi/order.js';
+import { cleanHistory, nextGame, markPlayed, emptyHistory, gameSeed } from '../app/js/multi/order.js';
 import { resetPrepared } from './prepared.mjs';
 import { isAvatar, avatarOf, isReaction, REACT_GAP_MS, REACT_ROOM_MAX, REACT_ROOM_WINDOW_MS } from '../app/js/multi/party.js';
 
@@ -551,9 +551,9 @@ export class RoomHub {
       case 'settings': s.room = G.setSettings(r, m.patch && typeof m.patch === 'object' ? m.patch : {}); break;
       case 'start': {
         if (r.phase !== 'lobby' && r.phase !== 'won') throw new G.GameError('busy', 'Het spel is al bezig.');
-        const seed = Number.isInteger(m.seed) ? m.seed >>> 0 : (Math.random() * 2 ** 32) >>> 0;
+        const seed = Number.isInteger(m.seed) ? m.seed >>> 0 : gameSeed();
         const mix = r.settings.music === 'mix';
-        const cards = mix ? this.mixCards({ seed, play: m.play }) : cleanCards(m.cards);
+        const cards = mix ? this.mixCards({ seed, play: m.play, history: s.played }) : cleanCards(m.cards);
         // a quiz from the mix takes its wrong artists / titles from the leader's own music, never
         // from other players' favourites (those would show up before they are played)
         const pool = mix && r.settings.game === 'quiz' ? cleanCards(m.cards) : null;
@@ -653,7 +653,7 @@ export class RoomHub {
   }
 
   /** Songs for a game from the "Mix van de groep" (throws a GameError when there are too few). */
-  mixCards({ seed, play }) {
+  mixCards({ seed, play, history = null }) {
     const s = this.state;
     const names = Object.fromEntries(Object.keys(s.mix).map((pid) => [pid, s.room.players.find((p) => p.id === pid)?.name || (pid === s.ownerId ? s.ownerName : 'Speler')]));
     try {
@@ -662,6 +662,7 @@ export class RoomHub {
         source: play === 'spotify' ? 'spotify' : 'preview',
         need: mixMinimum(s.room.settings, s.room.players.length),
         names,
+        history,
       });
     } catch (e) {
       if (e instanceof MixError) {

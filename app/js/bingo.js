@@ -161,7 +161,7 @@ export function bestLine(marks, size) {
  * Create a new bingo game.
  * @param {{names: string[], size?: number, cards: {id:string, year:number}[], seed?: number}} opts
  */
-export function createBingo({ names, size = DEFAULT_SIZE, cards, seed = Date.now() }) {
+export function createBingo({ names, size = DEFAULT_SIZE, cards, seed = Date.now(), history = null }) {
   const cleanNames = (names || []).map((n, i) => (String(n || '').trim() || `Speler ${i + 1}`).slice(0, 24));
   if (cleanNames.length < MIN_PLAYERS || cleanNames.length > MAX_PLAYERS) {
     throw new Error(`Kies ${MIN_PLAYERS} tot ${MAX_PLAYERS} spelers.`);
