@@ -16,12 +16,21 @@
 //           know the ISRC (or there is none) a recording search on title + artist, accepting
 //           only recordings that clearly are this song by this artist. An ISRC year earlier than
 //           or equal to ours is taken (sure); a search year only when earlier, and NOT sure (a
-//           search can be a few years off). A later one leaves ours. Either way: checked.
+//           search can be a few years off). A later one leaves ours. When both ANSWERED without
+//           an earlier year the catalogue year stays, not sure. In all these cases: checked
+//           (it never waits for Apple; a failed request is not an answer: still pending).
 //           It does not wait for the Deezer year (both lanes work on the same songs at once).
-//   'apple' no itunesId -> the existing Apple Music match (fragment, and pickYear as the LAST
-//           resort for the year when MusicBrainz found nothing); match: 'none' when no match.
-//           For a song whose year is already checked it only adds the fragment.
+//   'apple' no itunesId -> the existing Apple Music match; match: 'none' when no match. In the
+//           background, never in the critical path of the year check: it starts on a song only
+//           once MusicBrainz has answered (or failed), adds the fragment, and may LOWER a year
+//           that is not sure when pickYear finds an earlier one (never raises it). Songs that
+//           have a Deezer preview come last (their fragment is there already; Apple still adds
+//           the id the printed cards use), so the songs that need a fragment go first.
 // A year the user typed (yearFixed, or yearSure on a valid year) is never touched.
+//
+// A full localStorage stops the worker ('storage' pause, status().storageFull): nothing is
+// asked again and again for a write that cannot land; any later successful write of the
+// playlists (space freed) or a change from another tab lets it go on.
 //
 // State on the track (survives reloads, readable by other code through yearPending()):
 //   yearChecked: true  the year check has finished for this track (found or not).
@@ -173,13 +182,14 @@ export function lanesFor(t, k = '') {
   const out = [];
   const dz = dzNeeded(t);
   if (dz) out.push('dz');
+  let mbTodo = false;
   if (pendingHere(t, k)) {
     const s = mbState(t, k);
-    if (s === 'todo') out.push('mb');
-    else if (s === 'failed') { if (appleOk(t, k)) out.push('apple'); } // fragment only, the year stays pending
-    else if (s.year) out.push('mb'); // apply / finish from the answer we have (no request)
-    else if (!dz) out.push(appleOk(t, k) ? 'apple' : 'mb'); // nothing at MusicBrainz: Apple last, else finish
-  } else if (appleOk(t, k)) out.push('apple');
+    if (s === 'todo') { out.push('mb'); mbTodo = true; } else if (s !== 'failed' && (s.year || !dz)) out.push('mb'); // apply / finish from the answer we have (no request)
+    // 'failed': the year stays pending (retried in a later session)
+  }
+  // Apple: in the background, once MusicBrainz has had its turn (answered or failed)
+  if (!mbTodo && appleOk(t, k)) out.push('apple');
   return out;
 }
 
@@ -205,11 +215,18 @@ function orderedLists() {
   return lists.map((p, i) => ({ p, i, r: rank(p) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.p);
 }
 
-// paused: only the year lanes for a playlist someone waits for (prepare) go on
-const blocked = (lane) => paused.size > 0 && !(lane !== 'apple' && prepares.size > 0);
+// paused: only the year lanes for a playlist someone waits for (prepare) go on; a full
+// storage stops everything (nothing it finds could be kept)
+const blocked = (lane) => paused.has('storage') || (paused.size > 0 && !(lane !== 'apple' && prepares.size > 0));
 const busyOn = (k) => ['dz', 'mb', 'apple'].some((l) => inflight.has(`${l}|${k}`));
 
 function pick(lane) {
+  // Apple: first the songs without a fragment (no Deezer preview), then the rest
+  if (lane === 'apple') return pickFrom(lane, (t) => !posId(t.deezerId)) || pickFrom(lane, () => true);
+  return pickFrom(lane, () => true);
+}
+
+function pickFrom(lane, want) {
   for (const p of orderedLists()) {
     if (paused.size && !prepares.has(p.id)) continue;
     const tracks = p.tracks || [];
@@ -221,6 +238,7 @@ function pick(lane) {
       const k = key(p.id, t.n);
       // the Deezer year and the MusicBrainz check may run for the same song at once
       if (inflight.has(`${lane}|${k}`) || (lane !== 'dz' && (inflight.has(`mb|${k}`) || inflight.has(`apple|${k}`)))) continue;
+      if (!want(t)) continue;
       if (!lanesFor(t, k).includes(lane)) continue;
       const sk = spreadKey(i, bits);
       if (sk < bestKey) { bestKey = sk; best = t; }
@@ -246,6 +264,7 @@ function writeNow(pid, list) {
   if (!list.length) return;
   if (typeof deps.playlists.updateTracks === 'function') deps.playlists.updateTracks(pid, list);
   else for (const { n, patch } of list) deps.playlists.updateTrack(pid, n, patch);
+  if (storageFull()) { pause('storage'); return; } // not stored: stop instead of asking again and again
   for (const { n, patch } of list) {
     // a store that does not keep yearChecked (yet): remember it for this session, never loop
     if (patch.yearChecked && current(pid, n)?.yearChecked !== true) checkedHere.add(key(pid, n));
@@ -273,6 +292,8 @@ export function flush() {
 /* ---------- the steps ---------- */
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** The last write of the playlists did not fit in localStorage. */
+const storageFull = () => deps.playlists.lastWriteError?.() === 'storage';
 
 async function stepDeezer(job, signal) {
   const dzId = posId(job.t.deezerId);
@@ -336,8 +357,10 @@ async function stepMusicBrainz(job, signal) {
   // checked, but not sure, and only when it is earlier than what we have
   else if (validYear(s.year) && s.via === 'search' && (!validYear(cur.year) || s.year < cur.year)) patch = { year: s.year, yearSure: false, yearChecked: true };
   else if (validYear(s.year)) patch = { yearChecked: true }; // MusicBrainz says later (or the same): ours stays
-  else if (dzNeeded(cur) || appleOk(cur, job.k)) return false; // nothing found: Deezer / Apple first
-  else patch = { yearChecked: true }; // nothing found anywhere: checked, "controleer het jaar"
+  else if (dzNeeded(cur)) return false; // nothing earlier found: first the catalogue year from Deezer (fast)
+  // ISRC and search both answered without a year: the check is finished, the catalogue year
+  // stays, not sure (Apple may still lower it later, in the background)
+  else patch = { yearChecked: true, yearSure: false };
   writeNow(job.pid, [{ n: job.n, patch }]);
   return false;
 }
@@ -354,22 +377,21 @@ async function stepApple(job, signal) {
   const cur = current(job.pid, job.n);
   if (!cur || cur.itunesId) return false;
   const tracks = deps.playlists.get(job.pid)?.tracks || [];
-  // the year is only Apple's business when the check is still open and MusicBrainz answered
-  // without a year (Apple is the last resort); a checked or typed year is never touched
-  const yearTurn = pendingHere(cur, job.k) && mbState(cur, job.k) !== 'failed' && !dzNeeded(cur);
-  const yearMaybe = pendingHere(cur, job.k); // MusicBrainz failed this session: improve, not finish
+  // Apple never finishes the year check and never touches a typed or sure year; it may LOWER
+  // a year that is not sure (an earlier release of the same recording), never raise it
+  const mayLower = cur.yearFixed !== true && !(cur.yearSure === true && validYear(Number(cur.year)));
   let patch;
   if (hit && Number.isSafeInteger(hit.itunesId) && hit.itunesId > 0 && !tracks.some((x) => x.itunesId === hit.itunesId && x.n !== job.n)) {
     patch = { itunesId: hit.itunesId, previewUrl: hit.previewUrl || null, trackViewUrl: hit.trackViewUrl || null, match: undefined };
-    if (yearMaybe && validYear(hit.year) && (!validYear(cur.year) || hit.year <= cur.year)) {
+    if (mayLower && validYear(hit.year) && (!validYear(Number(cur.year)) || hit.year < Number(cur.year))) {
       patch.year = hit.year;
-      patch.yearSure = yearTurn ? !!hit.yearSure : false; // MusicBrainz still has to look at it
+      patch.yearSure = false;
     }
   } else {
     patch = { match: 'none' };
   }
-  if (yearTurn) patch.yearChecked = true;
   writeNow(job.pid, [{ n: job.n, patch }]);
+  if (paused.has('storage')) return false;
   appleDone.set(job.pid, (appleDone.get(job.pid) || 0) + 1);
   return false;
 }
@@ -425,7 +447,11 @@ export function start() {
     w?.addEventListener?.('offline', () => pause('offline'));
     if (globalThis.navigator?.onLine === false) paused.add('offline');
   }
-  unsubStore = deps.playlists.subscribe?.(() => { kick(); emitSoon(); }) || null;
+  unsubStore = deps.playlists.subscribe?.(() => {
+    // space again (a write that fitted, or a change from another tab): go on
+    if (paused.has('storage') && !storageFull()) resume('storage');
+    kick(); emitSoon();
+  }) || null;
   for (const [name, n] of Object.entries(CONCURRENCY)) for (let i = 0; i < n; i++) lane(name, generation);
 }
 
@@ -472,8 +498,14 @@ export function prioritise(playlistId) {
 }
 export const prioritize = prioritise;
 
-/** Dutch message for an error from prepare() (Deezer or MusicBrainz). */
+/** prepare() rejects with this (code 'storage') when localStorage is full. */
+export class StorageFullError extends Error {
+  constructor() { super('storage'); this.name = 'StorageFullError'; this.code = 'storage'; }
+}
+
+/** Dutch message for an error from prepare() (Deezer, MusicBrainz, or a full storage). */
 export function errorMessage(e) {
+  if (e?.code === 'storage') return deps.playlists.STORAGE_FULL_MESSAGE || 'De opslag van deze browser is vol.';
   if (e instanceof mbApi.MusicBrainzError || e?.name === 'MusicBrainzError') return mbApi.errorMessage(e);
   return deezerApi.errorMessage(e);
 }
@@ -495,18 +527,20 @@ function emitSoon() {
 /**
  * Progress of one playlist:
  * { total, ready, yearsChecked, yearsPending, yearsMissing, yearsUnsure, fragmentsMissing,
- *   working, pending, appleTodo, appleDone, paused }
+ *   working, pending, appleTodo, appleDone, paused, storageFull }
  * ready: songs with a year (provisional or checked); yearsChecked: songs with a year whose
  * check is finished (playable for "Jaartal"/"Exact jaar"); yearsPending: songs whose check
  * still has to run; fragmentsMissing: no itunesId and no deezerId; working: background work is
  * going on for it now; pending: songs with any step still to do; appleTodo/appleDone: the
- * Apple Music fragment search ("Fragmenten zoeken bij Apple Music: x van y").
+ * Apple Music fragment search ("Fragmenten zoeken bij Apple Music: x van y"); storageFull: the
+ * worker stopped because localStorage is full (nothing is fetched until space is freed).
  */
 export function status(playlistId) {
   const p = deps.playlists.get?.(playlistId);
   const out = {
     total: 0, ready: 0, yearsChecked: 0, yearsPending: 0, yearsMissing: 0, yearsUnsure: 0, fragmentsMissing: 0,
     working: false, pending: 0, appleTodo: 0, appleDone: appleDone.get(playlistId) || 0, paused: paused.size > 0,
+    storageFull: paused.has('storage'),
   };
   if (!p) return out;
   let busy = false;
@@ -522,7 +556,7 @@ export function status(playlistId) {
     if (busyOn(k)) { busy = true; out.pending++; } else if (lanesFor(t, k).length) out.pending++;
     if (appleOk(t, k)) out.appleTodo++;
   }
-  out.working = running && out.pending > 0 && (busy || !paused.size || prepares.has(p.id));
+  out.working = running && !out.storageFull && out.pending > 0 && (busy || !paused.size || prepares.has(p.id));
   return out;
 }
 
@@ -534,8 +568,8 @@ function yearWorkLeft(pid) {
     if (!pendingHere(t, k) && validYear(t.year)) return false;
     if (busyOn(k)) return true;
     const lanes = lanesFor(t, k);
-    // Apple counts only where it finishes the year check (not a fragment-only search)
-    return lanes.includes('dz') || lanes.includes('mb') || (lanes.includes('apple') && pendingHere(t, k) && mbState(t, k) !== 'failed');
+    // Apple never finishes a year check: only Deezer and MusicBrainz count
+    return lanes.includes('dz') || lanes.includes('mb');
   });
 }
 
@@ -575,6 +609,7 @@ export function prepare(playlistId, { min = FUN_MIN, signal, onProgress } = {}) 
       try { onProgress?.(st); } catch (e) { console.error(e); }
       if (st.yearsChecked >= Math.max(0, Number(min) || 0) || !yearWorkLeft(playlistId)) { finish(resolve, st); return; }
       if (globalThis.navigator?.onLine === false) { finish(reject, new deezerApi.DeezerError('offline')); return; }
+      if (paused.has('storage')) { finish(reject, new StorageFullError()); return; }
       for (const err of [dzErrors, mbErrors]) {
         if (err.streak >= 3 && err.last) { finish(reject, err.last instanceof Error ? err.last : new deezerApi.DeezerError('unavailable')); return; }
       }

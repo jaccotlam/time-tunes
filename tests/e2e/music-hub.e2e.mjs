@@ -564,7 +564,7 @@ export default async function run() {
     check(/Eighties Test/.test(deckLine) && deckLine.includes(`${cnt.inDeck} nummers`), `Tijdlijn: the setup names the list and counts its songs ("${deckLine}")`);
     const held = await text(page, 'deck-held');
     check(cnt.held > 0 && held === `Speelt met ${cnt.inDeck} van 120 nummers; de rest wordt nog nagekeken.`, `Tijdlijn: "${held}" matches the deck rule (${cnt.inDeck} in, ${cnt.held} held back)`);
-    check(cnt.inDeck >= 30 && cnt.inDeck + cnt.held === 120, 'the deck rule holds back only the songs still waiting for their year');
+    check(cnt.inDeck >= 30 && cnt.held > 0 && cnt.inDeck + cnt.held <= 120, `the deck rule holds back songs still waiting for their year (${cnt.inDeck} in, ${cnt.held} held, ${120 - cnt.inDeck - cnt.held} without any year yet)`);
     await page.getByTestId('start-game').click();
     await page.getByTestId('handoff').waitFor();
     check(await page.getByTestId('current-player').isVisible(), 'a solo Tijdlijn with this list starts');
@@ -615,7 +615,7 @@ export default async function run() {
     await page.getByTestId('sheet-play-now').click();
     await page.locator('[data-testid="sheet-progress"][data-phase="years"]').waitFor();
     check(await page.getByTestId('sheet-play-anyway').isVisible() && /Speel nu toch/.test(await text(page, 'sheet-play-anyway')), 'while the years are checked there is always "Speel nu toch"');
-    check(/Niet alle jaartallen zijn dan nagekeken; bij oudere nummers kan er het jaar van een heruitgave staan/.test(await text(page, 'sheet-progress') + ' ' + await page.locator('.ms-honest').textContent()), 'with the honest line about re-release years');
+    check(/niet alle jaartallen zijn dan nagekeken; bij oudere nummers kan er het jaar van een heruitgave staan/i.test(await text(page, 'sheet-progress') + ' ' + await page.locator('.ms-honest').textContent()), 'with the honest line about re-release years');
     await shot(page, 'muziek-07-years-progress');
     await page.getByTestId('sheet-play-anyway').click();
     await page.getByTestId('play-sheet').waitFor({ timeout: 60000 });
