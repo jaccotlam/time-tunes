@@ -1,10 +1,12 @@
 // Pure game logic for TimeTunesr. No DOM access: this module is shared
 // between the browser and the Node test runner (`npm test`).
+import { orderSongs } from './multi/order.js';
 
 /**
  * Matches the card id in a scanned QR text such as https://x.y/app/#/c/042, or the
  * self-contained code of an own-playlist card: #/c/~<code> (see playlist-logic.js).
  */
+
 export const CARD_HASH_RE = /#\/c\/(~?[0-9A-Za-z]+)/;
 
 /**
@@ -98,7 +100,7 @@ export function cardsNeeded(playerCount) {
  * Create a new digital game.
  * @param {{names: string[], goal?: number, cards: {id:string, year:number}[], seed?: number}} opts
  */
-export function createGame({ names, goal = DEFAULT_GOAL, cards, seed = Date.now() }) {
+export function createGame({ names, goal = DEFAULT_GOAL, cards, seed = Date.now(), history = null }) {
   const cleanNames = (names || []).map((n, i) => (String(n || '').trim() || `Speler ${i + 1}`).slice(0, 24));
   if (cleanNames.length < MIN_PLAYERS || cleanNames.length > MAX_PLAYERS) {
     throw new Error(`Kies ${MIN_PLAYERS} tot ${MAX_PLAYERS} spelers.`);
@@ -109,7 +111,8 @@ export function createGame({ names, goal = DEFAULT_GOAL, cards, seed = Date.now(
     throw new Error('Er staan te weinig kaarten in het deck voor dit aantal spelers.');
   }
   const years = Object.fromEntries(valid.map((c) => [c.id, c.year]));
-  const pile = shuffle(valid.map((c) => c.id), seededRandom(seed));
+  // random, songs not played on this phone before first, artists spread (multi/order.js)
+  const pile = orderSongs(valid.map((c) => c.id), Object.fromEntries(valid.map((c) => [c.id, c])), { rand: seededRandom(seed), history });
   const players = cleanNames.map((name) => ({ name, timeline: [pile.shift()] }));
   for (const p of players) p.timeline.sort((a, b) => years[a] - years[b]);
   return {

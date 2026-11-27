@@ -1,6 +1,7 @@
 // Pure logic for TimeTunesr Bingo. No DOM access: shared between the browser
 // (app and print page) and the Node test runner (`npm test`).
 import { seededRandom, shuffle, MIN_PLAYERS, MAX_PLAYERS } from './logic.js';
+import { orderSongs } from './multi/order.js';
 
 export { MIN_PLAYERS, MAX_PLAYERS };
 export const SIZES = [3, 4];
@@ -160,7 +161,7 @@ export function bestLine(marks, size) {
  * Create a new bingo game.
  * @param {{names: string[], size?: number, cards: {id:string, year:number}[], seed?: number}} opts
  */
-export function createBingo({ names, size = DEFAULT_SIZE, cards, seed = Date.now() }) {
+export function createBingo({ names, size = DEFAULT_SIZE, cards, seed = Date.now(), history = null }) {
   const cleanNames = (names || []).map((n, i) => (String(n || '').trim() || `Speler ${i + 1}`).slice(0, 24));
   if (cleanNames.length < MIN_PLAYERS || cleanNames.length > MAX_PLAYERS) {
     throw new Error(`Kies ${MIN_PLAYERS} tot ${MAX_PLAYERS} spelers.`);
@@ -185,7 +186,7 @@ export function createBingo({ names, size = DEFAULT_SIZE, cards, seed = Date.now
     players: cleanNames.map((name, i) => ({ name, card: grids[i], marks: Array(n * n).fill(null) })),
     current: 0,
     round: 1,
-    pile: shuffle(valid.map((c) => c.id), rand),
+    pile: orderSongs(valid.map((c) => c.id), Object.fromEntries(valid.map((c) => [c.id, c])), { rand, history }),
     years: Object.fromEntries(valid.map((c) => [c.id, c.year])),
     phase: 'turn', // 'turn' -> 'reveal' (-> 'judge' -> 'reveal') -> 'turn' | 'won'
     currentCard: null,

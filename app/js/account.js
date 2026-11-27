@@ -15,7 +15,10 @@
 // what is on this device; push() saves this device's state, and when another device saved in
 // between (409 conflict) merges with that and saves again. While logged in, startAutoSave()
 // saves changes of the playlists / Spotify Client ID by itself (debounced, retried when the
-// network is back), never blocking the screen.
+// network is back), never blocking the screen. With a server that knows 'account-delta' a save
+// sends only the playlists that changed (the others as stubs { id, updated, same: true }), and
+// after a big save the next one waits a little longer (saveGap), so a library of 2000-song lists
+// that background work keeps finishing is not sent again every few seconds.
 import { store } from './ui.js';
 import { serverBase, SERVER_HOST_KEY, BACKUP_KEY } from './multi/server-session.js';
 
@@ -27,7 +30,11 @@ const HOST_NAME_KEY = 'timetunesr.multiName.v1'; // the spelleider's name (room-
 const SETTINGS_KEY = 'timetunesr.multiSettings.v1'; // the lobby's last settings (server-session.js)
 
 export const SAVE_DELAY_MS = 1500;
+/** The data format this app writes (sent with every save; an app of before sends none). */
+export const DATA_FORMAT = 2;
 const RETRY_MS = [3000, 10000, 30000, 60000];
+/** After a save of `bytes`, the next background save waits at least this long (ms). */
+export const saveGap = (bytes) => Math.min(30000, Math.round((Number(bytes) || 0) / 1024) * 30);
 const TIMEOUT_MS = 20000;
 
 // ---------- the merge (pure) ----------
@@ -162,7 +169,7 @@ const state = { saving: false, pending: false, lastSync: 0, error: null };
 export const status = () => ({ loggedIn: !!readSession(), ...state });
 
 // ---------- HTTP ----------
-let healthCache = null; // { base, at, result }
+let healthCache = null; // { base, at, result, features }
 
 /** Can this device use accounts? { ok } or { ok: false, code: 'noserver' | 'noaccounts' | 'offline', message }. */
 export async function available({ fresh = false } = {}) {
@@ -173,8 +180,26 @@ export async function available({ fresh = false } = {}) {
   let result;
   if (r.ok) result = Array.isArray(r.data?.features) && r.data.features.includes('accounts') ? { ok: true } : { ok: false, code: 'noaccounts', message: 'Deze server kent nog geen accounts. Werk de server bij om in te loggen.' };
   else result = { ok: false, code: r.code || 'offline', message: 'De server is niet bereikbaar. Probeer het zo opnieuw.' };
-  if (r.ok) healthCache = { base: base.http, at: Date.now(), result };
+  if (r.ok) healthCache = { base: base.http, at: Date.now(), result, features: Array.isArray(r.data?.features) ? r.data.features : [] };
   return result;
+}
+
+/** Does the server take a save with stubs for unchanged playlists (health 'account-delta')? */
+const deltaSaves = () => healthCache?.base === serverBase()?.http && !!healthCache.features?.includes('account-delta');
+
+/**
+ * The data to send: every playlist that the account has exactly like this (`known`: the
+ * account's data as this device last got it, same rev) becomes a stub { id, updated, same }.
+ */
+export function deltaData(data, known) {
+  const have = new Map((known?.playlists || []).map((p) => [p.id, p]));
+  return {
+    ...data,
+    playlists: (data.playlists || []).map((p) => {
+      const k = have.get(p.id);
+      return k && k.updated === p.updated && sameJson(k, p) ? { id: p.id, updated: p.updated, same: true } : p;
+    }),
+  };
 }
 
 async function request(method, path, { body, token, timeout = TIMEOUT_MS } = {}) {
@@ -310,7 +335,12 @@ async function settle(remote, { tries = 3 } = {}) {
     let rev = rem.rev;
     let data = m.remote;
     if (m.remoteChanged) {
-      const r = await authed('POST', '/account/data', { rev, data: m.remote });
+      const delta = deltaSaves();
+      // format: this app knows the playlist format of 2026-11 (2000 songs, Deezer, ISRC ...): the
+      // server lets only such an app overwrite playlists that need it (DATA_FORMAT in accounts.mjs)
+      const body = delta ? { rev, data: deltaData(m.remote, rem.data), delta: true, format: DATA_FORMAT } : { rev, data: m.remote, format: DATA_FORMAT };
+      lastSent = { at: Date.now(), bytes: JSON.stringify(body).length };
+      const r = await authed('POST', '/account/data', body);
       if (!r.ok && r.code === 'conflict' && r.status === 409) {
         // another device saved in between: merge with that and try again
         const fresh = await authed('GET', '/account');
@@ -320,7 +350,7 @@ async function settle(remote, { tries = 3 } = {}) {
       }
       if (!r.ok) return r;
       rev = r.rev;
-      data = r.data;
+      data = r.delta ? m.remote : r.data;
     }
     s = readSession();
     if (!s) return { ok: false, code: 'loggedout', message: 'Je bent niet ingelogd.' };
@@ -355,13 +385,15 @@ export async function push() {
 let saveTimer = 0;
 let retry = 0;
 let saving = null;
+let lastSent = { at: 0, bytes: 0 }; // the last save that went out (for saveGap)
 
 /** Something changed on this device: save it a moment later (and again later when that fails). */
 export function scheduleSave(delay = SAVE_DELAY_MS) {
   if (!readSession()) return;
   state.pending = true;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { flush(); }, delay);
+  const wait = Math.max(delay, lastSent.at + saveGap(lastSent.bytes) - Date.now());
+  saveTimer = setTimeout(() => { flush(); }, wait);
 }
 
 /** Save now when there is something to save. Resolves when done (or failed: then it is retried later). */

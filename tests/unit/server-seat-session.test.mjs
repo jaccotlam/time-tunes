@@ -73,7 +73,7 @@ test('stoel: Verlaat tijdens het spel houdt de plek; terug met een nieuwe sessie
   // a right answer and a stamp in round 1
   const song = (await until(() => host.last('state')?.lead?.song, 3000, 'nummer'));
   const cat = s.view.game.disco.cat;
-  s.answer(cat === 'decade' ? { decade: Math.floor(song.year / 10) * 10 } : cat === 'year' ? { guess: song.year } : { text: cat === 'artist' ? song.artist : song.title });
+  s.answer(cat === 'exact' || cat === 'year' ? { guess: song.year } : { text: cat === 'artist' ? song.artist : song.title });
   await until(() => s.view.game.answer, 3000, 'antwoord');
   await host.send({ t: 'reveal' });
   await until(() => s.view.phase === 'revealed', 3000, 'onthuld');

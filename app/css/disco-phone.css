@@ -11,7 +11,7 @@
   transition: background-color .3s;
   animation: ph-fade .2s ease-out;
 }
-.ph[data-cat="decade"] { --c: var(--cat-decade); }
+.ph[data-cat="exact"] { --c: var(--cat-exact); }
 .ph[data-cat="artist"] { --c: var(--cat-artist); }
 .ph[data-cat="year"] { --c: var(--cat-year); }
 .ph[data-cat="title"] { --c: var(--cat-title); }
@@ -134,22 +134,6 @@
   font-weight: 700; font-size: 1rem; text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
 }
 .ph-pass:disabled { opacity: .5; text-decoration: none; }
-.ph-decades { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.ph-dec {
-  min-height: 62px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0;
-  border-radius: 16px; border: 2px solid var(--line); background: rgba(0, 0, 0, .25); color: var(--text);
-  font: inherit; cursor: pointer; touch-action: manipulation; transition: transform .12s, background-color .15s;
-}
-.ph-dec b { font-family: var(--font-display); font-size: 1.35rem; line-height: 1.1; }
-.ph-dec small { color: var(--muted); font-size: .8rem; }
-.ph-dec:active { transform: scale(.96); }
-.ph-dec.is-on { border-color: var(--c); background: var(--c); color: var(--cat-ink); box-shadow: 0 8px 22px -8px var(--c); }
-.ph-dec.is-on small { color: var(--cat-ink); }
-.ph-dec:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
-/* five or more decades: three columns keep the button in the upper half */
-.ph-decades:has(> :nth-child(5)) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.ph-decades:has(> :nth-child(5)) .ph-dec { min-height: 56px; }
-.ph-decades:has(> :nth-child(5)) .ph-dec b { font-size: 1.15rem; }
 
 /* submitted */
 .ph-m-submitted .ph-main { justify-content: center; }
@@ -226,7 +210,7 @@
 @keyframes ph-call { 50% { opacity: .75; } }
 .ph-bingo-badge {
   font-family: var(--font-display); font-weight: 900; font-size: 1.3rem; letter-spacing: .04em; padding: 2px 12px; border-radius: 999px;
-  background: linear-gradient(90deg, var(--cat-decade), var(--cat-artist), var(--cat-year), var(--cat-title)); color: var(--cat-ink);
+  background: linear-gradient(90deg, var(--cat-exact), var(--cat-artist), var(--cat-year), var(--cat-title)); color: var(--cat-ink);
 }
 .ph-explain-small { color: var(--muted); font-size: .88rem; }
 /* head, card and the lines under it sit together in the middle; on short screens the card shrinks to fit */
@@ -245,7 +229,7 @@
 .ph-m-bingo .ph-main { align-items: center; justify-content: center; gap: 10px; }
 .ph-bingo-word {
   font-family: var(--font-display); font-weight: 900; line-height: 1; letter-spacing: .04em; font-size: clamp(4rem, 23vw, 6.4rem);
-  background: linear-gradient(90deg, var(--cat-decade), var(--cat-artist), var(--cat-year), var(--cat-title));
+  background: linear-gradient(90deg, var(--cat-exact), var(--cat-artist), var(--cat-year), var(--cat-title));
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: var(--mustard);
   animation: ph-bingo .8s cubic-bezier(.2, 1.6, .4, 1) both, ph-glow 1.6s ease-in-out .8s infinite;
 }
@@ -370,3 +354,12 @@
 
 /* Verlaat confirmed: the room screen fades out on the way to the join page */
 .screen.is-leaving { opacity: 0; transition: opacity .2s ease-out; pointer-events: none; }
+
+/* round 3: exact year, the shared countdown, somebody else's bingo */
+.ph-q-hint.is-exact { color: var(--cat-exact); font-weight: 800; }
+.ph-m-submitted .disco-auto { width: min(260px, 80%); margin: 2px auto 0; text-align: center; }
+.ph-bingo-word.is-other { font-size: clamp(3rem, 16vw, 4.6rem); }
+.ph-m-stop .ph-main { justify-content: center; text-align: center; gap: 10px; }
+.ph-stop-card { width: min(230px, 70vw); margin: 4px auto 0; }
+.ph-stop-line { margin: 0 0 6px; padding: 6px 10px; border-radius: 12px; background: rgba(255, 198, 73, .16); border: 1px solid rgba(255, 198, 73, .5); font-weight: 700; text-align: center; }
+.ph-stop-line b { color: var(--mustard); letter-spacing: .04em; }

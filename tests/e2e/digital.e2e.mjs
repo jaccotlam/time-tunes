@@ -4,6 +4,46 @@ import { launch, phoneContext, startServer, useFixtureDeck, assert, shot, FIXTUR
 const deck = JSON.parse(FIXTURE_DECK);
 const byId = new Map(deck.cards.map((c) => [c.id, c]));
 
+/**
+ * Does the page show the hidden card's title or artist anywhere: in a text node OR in an
+ * attribute (aria-label, title, data-*, alt, value ...)? Matched as a whole name: not inside a
+ * longer word or number, so the hidden "Testnummer 2" is not found in the visible timeline card
+ * "Testnummer 24" (the fixture deck has such pairs; a plain substring check reported those as a
+ * leak whenever the deal put them together). Returns { hits, control, substring }: hits = where
+ * the hidden card shows (a real leak); control = the same check does find a visible timeline
+ * card (so it is not blind); substring = what a plain substring check would have flagged.
+ */
+async function hiddenLeak(page, secret, visible) {
+  return page.evaluate(([sec, shown]) => {
+    const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const whole = (x) => new RegExp(`(?<![\\p{L}\\p{N}])${esc(x)}(?![\\p{L}\\p{N}])`, 'u');
+    const needles = [sec.title, sec.artist].filter(Boolean).map((x) => [x, whole(x)]);
+    const hits = [];
+    const where = (el) => `<${el.tagName.toLowerCase()}${el.dataset?.testid ? ` data-testid="${el.dataset.testid}"` : ''}${el.className && typeof el.className === 'string' ? ` class="${el.className}"` : ''}>`;
+    for (const el of document.querySelectorAll('*')) {
+      for (const n of el.childNodes) {
+        if (n.nodeType !== 3) continue;
+        for (const [x, re] of needles) if (re.test(n.nodeValue)) hits.push(`text of ${where(el)}: "${n.nodeValue.trim().slice(0, 60)}" (${x})`);
+      }
+      for (const at of el.attributes) {
+        for (const [x, re] of needles) if (re.test(at.value)) hits.push(`${at.name} of ${where(el)}: "${at.value.slice(0, 60)}" (${x})`);
+      }
+    }
+    const nodes = [];
+    const tw = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_TEXT);
+    while (tw.nextNode()) nodes.push(tw.currentNode.nodeValue);
+    const control = shown.some((c) => nodes.some((v) => whole(c.title).test(v)));
+    const text = document.documentElement.textContent;
+    let substring = '';
+    for (const [x] of needles) {
+      if (!text.includes(x)) continue;
+      const i = text.indexOf(x);
+      substring = `"${x}" inside "${text.slice(Math.max(0, i - 5), i + x.length + 3).trim()}"`;
+    }
+    return { hits: hits.slice(0, 5), control, substring };
+  }, [{ title: secret.title, artist: secret.artist }, visible.map((c) => ({ title: c.title }))]);
+}
+
 export default async function run() {
   const server = await startServer();
   const browser = await launch();
@@ -32,6 +72,7 @@ export default async function run() {
     let sawWrong = false;
     let sawRight = false;
     let reloaded = false;
+    const substringOnly = []; // where the old plain substring check would have cried wolf
     while (turns < 60) {
       const view = await page.getByTestId('screen-game').getAttribute('data-view');
       if (view === 'won') break;
@@ -44,14 +85,21 @@ export default async function run() {
       if (view === 'place') {
         const s = await state();
         const secret = byId.get(s.currentCard);
-        const dom = await page.evaluate(() => document.documentElement.textContent);
-        if (dom.includes(secret.title) || dom.includes(secret.artist)) throw new Error('hidden card leaked in DOM');
+        const leak = await hiddenLeak(page, secret, s.players.flatMap((p) => p.timeline).map((id) => byId.get(id)));
+        if (leak.hits.length) throw new Error(`hidden card leaked in DOM: "${secret.title}" / "${secret.artist}" in ${leak.hits.join(' | ')}`);
+        if (!leak.control) throw new Error('the leak check found no visible timeline card: it would not see a leak either');
+        if (leak.substring) substringOnly.push(leak.substring);
         const tlYears = s.players[s.current].timeline.map((id) => byId.get(id).year);
-        // Anouk always right; others always pick the first gap.
+        // Anouk always right; the others pick a WRONG gap when there is one (the first gap was
+        // sometimes right by chance for the whole game: then no wrong reveal was ever seen)
+        const fits = (i) => (i === 0 || tlYears[i - 1] <= secret.year) && (i === tlYears.length || secret.year <= tlYears[i]);
         let slot = 0;
         if (s.current === 0) {
           slot = tlYears.findIndex((y) => y >= secret.year);
           if (slot < 0) slot = tlYears.length;
+        } else {
+          const wrong = [...Array(tlYears.length + 1).keys()].find((i) => !fits(i));
+          slot = wrong ?? 0;
         }
         if (!reloaded && turns >= 3) {
           // Spelstand moet een reload overleven.
@@ -81,6 +129,7 @@ export default async function run() {
       }
       throw new Error(`unexpected view ${view}`);
     }
+    if (substringOnly.length) console.log(`  (note: a plain substring check would have reported a leak ${substringOnly.length}x: ${substringOnly.slice(0, 3).join('; ')})`);
     await page.getByTestId('winner').waitFor();
     const winner = await page.getByTestId('winner-name').textContent();
     assert(/Anouk wint/.test(winner), `winner screen: "${winner}" after ${turns} turns`);

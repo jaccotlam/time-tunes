@@ -44,9 +44,66 @@ const stopWrangler = (proc) => new Promise((resolve) => {
   try { process.kill(-proc.pid, 'SIGKILL'); } catch { resolve(); }
 });
 
+/**
+ * 2000-song lists on the real Durable Objects: a room started with 2000 cards over the Worker's
+ * WebSocket, and an account with three 2000-song lists (stored in pieces, chunkedStore) that
+ * survives a restart of wrangler, then a delta save of one list.
+ */
+async function bigListsOnWorker() {
+  const H_ = { origin: URL_, 'content-type': 'application/json' };
+  const song = (i) => ({ n: i + 1, itunesId: 1422648000 + i, spotifyId: `4uLU6hMCjMI75M1A${String(i).padStart(6, '0')}`, deezerId: 3135000 + i, isrc: `NLA01${String(8000000 + i).slice(-7)}`, title: `Liedje nummer ${i + 1} (Radio Edit)`, artist: `Artiest ${i % 300} & De Band`, album: `Album ${i % 60}`, year: 1960 + (i % 60), yearSure: true });
+  // a room with 2000 cards
+  const made = await (await fetch(`${URL_}/rooms`, { method: 'POST', headers: H_, body: JSON.stringify({ v: SERVER_PROTOCOL_VERSION, id: 'bigowner1', name: 'Ilse', settings: { game: 'timeline' } }) })).json();
+  const ws = new WebSocket(`${URL_.replace('http', 'ws')}/rooms/${made.code}/ws`);
+  const got = [];
+  await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
+  ws.onmessage = (e) => { if (e.data !== 'pong') got.push(JSON.parse(e.data)); };
+  ws.send(JSON.stringify({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code: made.code, id: 'bigowner1', token: made.token }));
+  const ws2 = new WebSocket(`${URL_.replace('http', 'ws')}/rooms/${made.code}/ws`);
+  await new Promise((resolve, reject) => { ws2.onopen = resolve; ws2.onerror = reject; });
+  ws2.send(JSON.stringify({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code: made.code, id: 'bigplayer1', name: 'Sam' }));
+  const ws3 = new WebSocket(`${URL_.replace('http', 'ws')}/rooms/${made.code}/ws`);
+  await new Promise((resolve, reject) => { ws3.onopen = resolve; ws3.onerror = reject; });
+  ws3.send(JSON.stringify({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code: made.code, id: 'bigplayer2', name: 'Lisa' }));
+  await new Promise((r) => setTimeout(r, 800));
+  const { fitCards } = await import('../../app/js/multi/server-protocol.js');
+  const { playlistDeck, cleanPlaylist } = await import('../../app/js/playlist-logic.js');
+  const deck = playlistDeck(cleanPlaylist({ id: 'g', name: 'Groot', tracks: Array.from({ length: 2000 }, (_, i) => song(i)) }));
+  const msg = JSON.stringify({ t: 'start', cards: fitCards(deck.cards).cards, mix: false, play: 'preview' });
+  ws.send(msg);
+  const t0 = Date.now();
+  while (!got.some((m) => m.t === 'state' && m.lead?.room?.phase === 'answering') && Date.now() - t0 < 15000) await new Promise((r) => setTimeout(r, 100));
+  const st = got.filter((m) => m.t === 'state').pop();
+  assert(st?.lead?.room?.phase === 'answering' && st.lead.song?.deezerId, `Worker: a game starts with 2000 cards (start message ${Math.round(Buffer.byteLength(msg) / 1024)} kB), the song carries its Deezer id (${JSON.stringify(got.find((m) => m.t === 'error') || '')})`);
+  for (const w of [ws, ws2, ws3]) w.close();
+  // an account with three 2000-song lists
+  const signup = await (await fetch(`${URL_}/account/signup`, { method: 'POST', headers: H_, body: JSON.stringify({ username: 'grootlijst', password: 'geheim-wachtwoord-1' }) })).json();
+  const auth = { ...H_, authorization: `Bearer ${signup.token}` };
+  const lists = ['g1', 'g2', 'g3'].map((id, k) => ({ id, name: `Groot ${id}`, created: 1, updated: 10 + k, nextN: 2001, tracks: Array.from({ length: 2000 }, (_, i) => song(i)), source: { kind: 'deezer', id: '1266971851', name: 'Top' } }));
+  const body = JSON.stringify({ rev: 1, data: { playlists: lists }, format: 2 });
+  const saved = await fetch(`${URL_}/account/data`, { method: 'POST', headers: auth, body });
+  const sv = await saved.json();
+  assert(saved.status === 200 && sv.data?.playlists?.length === 3, `Worker: an account saves three 2000-song lists (${Math.round(body.length / 1024)} kB; ${saved.status} ${sv.message || ''})`);
+  await stopWrangler(globalThis.__ttWrangler);
+  globalThis.__ttWrangler = await startWrangler(globalThis.__ttPersist);
+  const g = await (await fetch(`${URL_}/account`, { headers: auth })).json();
+  assert(g.data?.playlists?.length === 3 && g.data.playlists.every((p) => p.tracks.length === 2000) && g.data.playlists[1].tracks[4].isrc, 'Worker: after a restart the account has its three lists of 2000 songs (Durable Object, in pieces)');
+  const changed = { ...g.data.playlists[1], updated: 99, name: 'Anders' };
+  const delta = JSON.stringify({ rev: g.rev, delta: true, format: 2, data: { playlists: [{ id: 'g1', updated: 10, same: true }, changed, { id: 'g3', updated: 12, same: true }] } });
+  const d = await (await fetch(`${URL_}/account/data`, { method: 'POST', headers: auth, body: delta })).json();
+  const g2 = await (await fetch(`${URL_}/account`, { headers: auth })).json();
+  assert(d.delta === true && g2.data.playlists.map((p) => p.name).join() === 'Groot g1,Anders,Groot g3' && g2.data.playlists[0].tracks.length === 2000, `Worker: a delta save sends one list (${Math.round(delta.length / 1024)} kB) and keeps the others`);
+  // an app of before (no format) that would save one of these lists shortened: refused, lists intact
+  const old = await fetch(`${URL_}/account/data`, { method: 'POST', headers: auth, body: JSON.stringify({ rev: g2.rev, data: { playlists: g2.data.playlists.map((p) => ({ ...p, tracks: p.tracks.slice(0, 500) })) } }) });
+  const ob = await old.json();
+  const g3 = await (await fetch(`${URL_}/account`, { headers: auth })).json();
+  assert(old.status === 400 && ob.code === 'oldapp' && g3.rev === g2.rev && g3.data.playlists.every((p) => p.tracks.length === 2000), `Worker: a save of an old app may not shorten the lists (${old.status} ${ob.message})`);
+}
+
 export default async function run() {
   const persist = mkdtempSync(join(tmpdir(), 'tt-wrangler-'));
   let wr = await startWrangler(persist);
+  globalThis.__ttPersist = persist;
   const browser = await launch();
   const local = { kind: 'server', url: URL_ };
   try {
@@ -153,7 +210,7 @@ export default async function run() {
     const dright = async () => {
       const { song } = await serverHost(DH);
       const cat = (await DP.evaluate(() => window.__ttRoom.session.view.game.disco.cat));
-      const ans = cat === 'decade' ? { decade: Math.floor(song.year / 10) * 10 } : cat === 'year' ? { guess: String(song.year) } : { text: cat === 'artist' ? song.artist : song.title };
+      const ans = cat === 'exact' || cat === 'year' ? { guess: String(song.year) } : { text: cat === 'artist' ? song.artist : song.title };
       await DP.evaluate((a) => window.__ttRoom.session.answer(a), ans); // no waiting for the ball: the server takes the answer
       await DP.waitForFunction(() => window.__ttRoom.session.view.game.answer != null);
     };
@@ -179,10 +236,10 @@ export default async function run() {
     assert(afterRestart.cat === before.cat && afterRestart.card.join() === before.card.join() && afterRestart.marks.join() === before.marks.join(), 'after the restart: same round, same category, same card, same stamp');
     await DH.waitForFunction(() => window.__ttHost.session.currentSong(), null, { timeout: 60000 });
     await dright();
-    await DH.locator('[data-testid="room-reveal"][data-ready="true"]').waitFor({ timeout: 15000 });
-    await DH.getByTestId('room-reveal').click();
-    await DP.waitForFunction(() => window.__ttRoom.session.view.phase === 'revealed' && window.__ttRoom.session.view.game.reveal.mine.verdict === 'right');
-    assert(true, 'discobingo on Cloudflare: round 2 survived the restart and was revealed');
+    // everybody answered: the Durable Object's alarm reveals by itself after the shared countdown
+    await DP.waitForFunction(() => Number.isFinite(window.__ttRoom.session.view.game.disco.autoAt), null, { timeout: 15000 });
+    await DP.waitForFunction(() => window.__ttRoom.session.view.phase === 'revealed' && window.__ttRoom.session.view.game.reveal.mine.verdict === 'right', null, { timeout: 30000 });
+    assert(true, 'discobingo on Cloudflare: round 2 survived the restart and was revealed by itself (the alarm), nobody tapped Onthul');
     assert(DH.errors.length === 0 && DP.errors.length === 0, `no page errors in discobingo (${[...DH.errors, ...DP.errors].join('; ')})`);
     // ---------- Mix van de groep: contributions survive a restart (Durable Object storage) ----------
     const mh = await mixPhone(browser, local, `${URL_}/`, ACCOUNTS.ilse, { seed: 7, token: `${PLAYBACK} ${TOP}` });
@@ -230,6 +287,9 @@ export default async function run() {
     await MP.getByTestId('room-song-by').waitFor({ timeout: 20000 });
     assert(true, 'one round from the mix over the Cloudflare version, with whose favourite it was');
     assert(MH.errors.length === 0 && MP.errors.length === 0, `no page errors in the mix part (${[...MH.errors, ...MP.errors].join('; ')})`);
+    globalThis.__ttWrangler = wr;
+    await bigListsOnWorker();
+    wr = globalThis.__ttWrangler;
     assert(H.errors.length === 0 && P.errors.length === 0, `no page errors (${[...H.errors, ...P.errors].join('; ')})`);
   } finally {
     await browser.close();

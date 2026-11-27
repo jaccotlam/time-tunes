@@ -6,6 +6,8 @@ import { viewFor, parseMessage, versionError, PROTOCOL_VERSION } from './protoco
 import { makeFreshCode, isValidCode } from './code.js';
 import { createHostTransport } from './transport.js';
 import { store } from '../ui.js';
+import { gameSeed } from './order.js';
+import * as played from '../played.js';
 
 export const HOST_KEY = 'timetunesr.multiHost.v1';
 export const HOST_ID_KEY = 'timetunesr.multiHostId.v1';
@@ -54,8 +56,23 @@ export function createHostSession() {
     for (const fn of listeners) { try { fn(api); } catch (e) { console.error(e); } }
   }
 
+  /** The deck this phone plays with (its played history is kept per deck, played.js). */
+  const activeDeckId = () => String(store.get('timetunesr.activeDeck.v1', 'builtin') || 'builtin');
+  let notedFor = '';
+  /** Remember the running song (and the start cards of a Tijdlijn game) as played. */
+  function notePlayed() {
+    const g = room?.game;
+    if (!g || room.phase === 'lobby' || room.phase === 'won') return;
+    const k = `${g.seed}:${g.round}`;
+    if (k === notedFor) return;
+    notedFor = k;
+    const ids = [g.current, ...(g.round <= 1 && g.kind === 'timeline' ? Object.values(g.per || {}).flatMap((p) => p.timeline || []) : [])];
+    for (const id of ids) if (id != null && g.songs?.[id]) played.playedSong(activeDeckId(), g.songs[id]);
+  }
+
   /** Save, notify the screen and (batched) send every connected player their view. */
   function changed() {
+    notePlayed();
     if (room) store.set(HOST_KEY, room);
     emit();
     if (pending) return;
@@ -234,8 +251,12 @@ export function createHostSession() {
     },
     start(cards) {
       const fixed = store.get(MULTI_SEED_KEY, null);
-      const seed = Number.isInteger(fixed) ? fixed >>> 0 : (Math.random() * 2 ** 32) >>> 0;
-      room = room.phase === 'won' ? G.playAgain(room, { cards, seed }) : G.startGame(room, { cards, seed });
+      const seed = Number.isInteger(fixed) ? fixed >>> 0 : gameSeed();
+      // this phone is the room: the songs it played in earlier games come last (played.js)
+      const deckId = activeDeckId();
+      const history = Number.isInteger(fixed) ? null : played.historyFor(deckId);
+      room = room.phase === 'won' ? G.playAgain(room, { cards, seed, history }) : G.startGame(room, { cards, seed, history });
+      played.startedGame(deckId);
       changed();
     },
     answer(answer) {

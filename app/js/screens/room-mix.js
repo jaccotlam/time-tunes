@@ -1,8 +1,11 @@
 // "Mix van de groep" in a server room: the counts everybody sees (never titles) and the
-// panel "Doe mijn favorieten erbij" on every phone (players and the spelleider).
-// Used by room-player.js and room-host.js; the work itself is in multi/mix-share.js.
+// panel on every phone (players and the spelleider): "Kies een playlist" (public Deezer
+// playlists, no login) and "Doe mijn favorieten erbij" (Spotify top songs, with a login).
+// Used by room-player.js and room-host.js; the work itself is in multi/mix-share.js and
+// multi/mix-lists.js. Everything from Deezer is escaped here (it is plain text from outside).
 import { icons, esc } from '../ui.js';
-import { RANGES, SHARE_COUNTS, mixMinimum, rangeLabel } from '../multi/mix.js';
+import { RANGES, SHARE_COUNTS, mixMinimum, rangeLabel, LIST_COUNTS, MIX_LISTS_MAX } from '../multi/mix.js';
+import { FEATURED } from '../deezer.js';
 import * as top from '../spotify-top.js';
 import * as spotify from '../spotify.js';
 import { setupHintHtml } from './devices.js';
@@ -11,6 +14,7 @@ const spotifyIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" foc
 const plural = (n, one, more) => `${n} ${n === 1 ? one : more}`;
 
 export const CONSENT = 'Je deelt een deel van je meest geluisterde nummers met deze kamer; de anderen zien ze pas als ze gespeeld worden.';
+export const LISTS_CONSENT = 'Je deelt willekeurige nummers uit de playlists die je kiest met deze kamer; de anderen zien de nummers pas als ze gespeeld worden.';
 
 /** "Mix van de groep: 38 nummers van 3 spelers". */
 export function mixCountsText(mix) {
@@ -25,10 +29,122 @@ export function mixCountsHtml(mix) {
 }
 
 /** What redraws the panel: everything it shows. */
-export function mixKey(ms, meta) {
+export function mixKey(ms, meta, extra = null) {
   if (!ms) return '';
   const s = ms.state;
-  return JSON.stringify([s.phase, s.error, s.done, s.total, s.tracks.length, s.skipped, s.range, s.count, meta?.mix, ms.problem()]);
+  const l = ms.lists?.state;
+  const lk = l ? [l.view, l.phase, l.error, l.lists.map((x) => x.id), l.shared.length, l.skipped, l.count, l.read,
+    Math.ceil((ms.lists.eta() || 0) / 5), !!ms.lists.etaStalled?.(), l.searching, l.searchError, l.resultsFor, l.results.map((x) => x.id), l.next, l.linkKind, l.adding, ms.listsOffered()] : null;
+  return JSON.stringify([s.phase, s.error, s.done, s.total, s.tracks.length, s.skipped, s.range, s.count, meta?.mix, ms.problem(), lk, extra]);
+}
+
+const musicIcon = icons.music;
+/** A playlist's cover (Deezer CDN only, see deezer.js), else a music note. */
+function coverHtml(p) {
+  return p.picture
+    ? `<img class="mix-cover" src="${esc(p.picture)}" alt="" width="48" height="48" loading="lazy" referrerpolicy="no-referrer">`
+    : `<span class="mix-cover mix-cover-none" aria-hidden="true">${musicIcon}</span>`;
+}
+function listSubHtml(p) {
+  const bits = [];
+  if (p.count != null) bits.push(plural(p.count, 'nummer', 'nummers'));
+  if (p.by) bits.push(`door ${esc(p.by)}`);
+  return bits.join(' · ');
+}
+
+/** The picker: search by name, quick picks, results, a pasted link (one step on its own). */
+function listPickerHtml(l) {
+  const results = l.searching && !l.results.length
+    ? '<p class="mix-note" data-testid="mix-lists-searching" role="status">Zoeken bij Deezer…</p>'
+    : l.searchError ? `<p class="set-error" data-testid="mix-lists-search-error" role="alert">${esc(l.searchError)}</p>`
+      : l.resultsFor && !l.results.length ? `<p class="mix-note" data-testid="mix-lists-none">Niets gevonden voor “${esc(l.resultsFor)}”. Probeer een ander woord.</p>`
+        : l.results.length ? `<p class="small muted mix-results-for">Playlists bij Deezer voor “${esc(l.resultsFor)}”: tik er een aan.</p>
+          <ul class="mix-results" data-testid="mix-lists-results">${l.results.map((p) => {
+    const chosen = l.lists.some((x) => x.id === p.id);
+    const busy = l.adding === p.id;
+    return `<li><button class="mix-result${chosen ? ' is-chosen' : ''}" type="button" data-mix-action="lists-add" data-id="${p.id}" data-testid="mix-lists-result" ${chosen || busy ? 'disabled' : ''}>
+              ${coverHtml(p)}<span class="mix-list-txt"><b>${esc(p.title)}</b><small>${listSubHtml(p)}</small></span>
+              <span class="mix-result-go">${chosen ? `${icons.check}<span>gekozen</span>` : busy ? '<span>…</span>' : `${icons.plus}<span>Kies</span>`}</span>
+            </button></li>`;
+  }).join('')}</ul>
+          ${l.next != null ? `<button class="btn btn-ghost btn-small" type="button" data-mix-action="lists-more" data-testid="mix-lists-more" ${l.searching ? 'disabled' : ''}>Meer playlists</button>` : ''}` : '';
+  return `<div class="mix-pick" data-testid="mix-lists-picker">
+      <div class="mix-pick-head">
+        <button class="btn btn-ghost btn-small" type="button" data-mix-action="lists-close" data-testid="mix-lists-back">${icons.back}<span>Terug</span></button>
+        <h2 class="room-h">Kies een playlist</h2>
+      </div>
+      <p class="small muted mix-pick-consent" data-testid="mix-lists-consent">${esc(LISTS_CONSENT)}</p>
+      <form class="mix-search-form" data-mix-form="search" role="search">
+        <label class="pl-label mix-search-label" for="mix-lists-q">Zoek een playlist</label>
+        <div class="mix-search">
+        <input id="mix-lists-q" type="search" name="q" data-mix-field="q" data-testid="mix-lists-q" value="${esc(l.q)}" placeholder="top 40, jaren 90, hardcore…" autocomplete="off" enterkeyhint="search" maxlength="100">
+        <button class="btn btn-primary btn-small" type="submit" data-testid="mix-lists-search">Zoek</button>
+        </div>
+      </form>
+      <div class="mix-quick" data-testid="mix-lists-quick" role="group" aria-label="Snel kiezen">${FEATURED.map((f) => `<button class="mix-chip" type="button" data-mix-action="lists-quick" data-key="${esc(f.key)}" data-testid="mix-lists-quick-${esc(f.key)}"><span aria-hidden="true">${esc(f.emoji)}</span>${esc(f.label)}</button>`).join('')}</div>
+      <div class="mix-results-box" aria-live="polite">${results}</div>
+      <form class="mix-link" data-mix-form="link">
+        <label class="pl-label" for="mix-lists-link">Of plak een link naar een Deezer-playlist</label>
+        <div class="mix-link-row">
+          <input id="mix-lists-link" type="url" name="link" data-mix-field="link" data-testid="mix-lists-link" value="${esc(l.link)}" inputmode="url" placeholder="deezer.com/…/playlist/…" autocomplete="off" maxlength="500">
+          <button class="btn btn-secondary btn-small" type="submit" data-testid="mix-lists-add-link" ${l.adding ? 'disabled' : ''}>Voeg toe</button>
+        </div>
+      </form>
+      ${l.linkMsg ? `<p class="${l.linkKind === 'spotify' || l.linkKind === 'short' ? 'mix-explain' : 'set-error'}" data-testid="mix-lists-link-msg" data-kind="${esc(l.linkKind)}" role="alert">${esc(l.linkMsg)}</p>` : ''}
+      <label class="pl-label mix-count-pick">Hoeveel nummers deel je?
+        <select data-mix="list-count" data-testid="mix-lists-count">${LIST_COUNTS.map((n) => `<option value="${n}" ${n === l.count ? 'selected' : ''}>${n} nummers</option>`).join('')}</select></label>
+    </div>`;
+}
+
+/** "Jouw playlists voor deze kamer": the chosen lists, the progress, what is shared. */
+function listHomeHtml(ms, meta, { inGame }) {
+  const l = ms.lists.state;
+  const mine = meta?.mix?.mine ?? 0;
+  const lobby = !inGame;
+  const items = `<ul class="mix-lists" data-testid="mix-lists-mine">${l.lists.map((p) => `<li class="mix-list" data-testid="mix-lists-item" data-id="${p.id}">
+      ${coverHtml(p)}<span class="mix-list-txt"><b>${esc(p.title)}</b><small>${listSubHtml(p)}</small></span>
+      ${lobby ? `<button class="icon-btn mix-list-x" type="button" data-mix-action="lists-remove" data-id="${p.id}" data-testid="mix-lists-remove" aria-label="Haal ${esc(p.title)} weg">${icons.close}</button>` : ''}
+    </li>`).join('')}</ul>`;
+  let progress = '';
+  const n = l.shared.length;
+  if (l.phase === 'reading') {
+    progress = `<div class="pl-progress" data-testid="mix-lists-progress" data-phase="reading" role="status">
+        <div class="pl-bar" aria-hidden="true"><i style="width:${l.readTotal ? Math.min(100, Math.round((l.read / l.readTotal) * 100)) : 10}%"></i></div>
+        <p class="small">De playlist${l.lists.length === 1 ? '' : 's'} lezen bij Deezer…${l.read ? ` ${l.read} nummers` : ''}</p></div>`;
+  } else if (l.phase === 'checking') {
+    const eta = ms.lists.eta();
+    const slow = ms.lists.etaStalled?.();
+    progress = `<div class="pl-progress" data-testid="mix-lists-progress" data-phase="checking" data-shared="${n}" data-target="${l.count}" role="status">
+        <div class="pl-bar" aria-hidden="true"><i style="width:${Math.round((n / l.count) * 100)}%"></i></div>
+        <p><b data-testid="mix-lists-progress-text">${n} van ${l.count} nummers nagekeken en gedeeld</b></p>
+        <p class="small muted">Van elk nummer zoekt je telefoon het echte jaartal op${slow ? ' (MusicBrainz reageert traag…)' : eta ? `, nog ongeveer ${eta < 60 ? `${Math.max(5, Math.ceil(eta / 5) * 5)} seconden` : `${Math.ceil(eta / 60)} minuten`}` : ''}. Laat dit scherm open; de nummers gaan vanzelf naar de kamer.</p></div>`;
+  } else if (l.phase === 'waiting') {
+    progress = `<p class="mix-note" data-testid="mix-lists-waiting">${n ? `${plural(n, 'nummer', 'nummers')} gedeeld. ` : ''}Tijdens het potje wacht het nakijken even; in de lobby gaat het verder.</p>`;
+  }
+  const done = n || l.phase === 'done' ? `<p class="mix-done" data-testid="mix-done" data-mine="${mine}">${icons.check}<span>Je deelt <b>${plural(mine, 'nummer', 'nummers')}</b> met deze kamer${l.phase === 'checking' || l.phase === 'reading' ? ' (er komen er nog bij)' : ''}.</span></p>` : '';
+  const skipped = l.phase === 'done' && l.skipped ? `<p class="small muted" data-testid="mix-lists-skipped">${plural(l.skipped, 'nummer doet', 'nummers doen')} niet mee: geen jaartal dat we konden nakijken.</p>` : '';
+  const short = l.phase === 'done' && n < l.count ? `<p class="small muted" data-testid="mix-lists-short">Meer nummers met een nagekeken jaartal stonden er niet in. Kies er gerust nog een playlist bij.</p>` : '';
+  const err = l.phase === 'error' ? `<p class="set-error" data-testid="mix-lists-error" role="alert">${esc(l.error)}</p>
+      <button class="btn btn-secondary btn-small" type="button" data-mix-action="lists-retry" data-testid="mix-lists-retry">Probeer opnieuw</button>` : '';
+  const own = n ? `<details class="mix-mine" data-testid="mix-mine-list"><summary>Bekijk jouw nummers (alleen op dit toestel)</summary>
+        <ul>${l.shared.map((t) => `<li><b>${esc(t.title)}</b> · ${esc(t.artist)} · ${esc(t.year)}${t.yearSure ? '' : ' <small class="pl-warn-txt">jaar niet zeker</small>'}</li>`).join('')}</ul></details>` : '';
+  const more = lobby && l.lists.length < MIX_LISTS_MAX
+    ? `<button class="btn btn-secondary btn-small" type="button" data-mix-action="lists-open" data-testid="mix-lists-add">${icons.plus}<span>Nog een playlist</span></button>` : '';
+  return `<h2 class="room-h">Jouw playlists voor deze kamer</h2>
+    ${inGame ? '<p class="small muted" data-testid="mix-next-game">Nummers die je nu deelt, doen mee vanaf het volgende potje. Playlists kiezen of weghalen kan weer in de lobby.</p>' : ''}
+    ${items}${progress}${done}${skipped}${short}${err}${own}
+    <div class="mix-actions">${more}
+      <button class="btn btn-ghost btn-small" type="button" data-action="mix-withdraw" data-testid="mix-withdraw">${icons.close}<span>Trek mijn bijdrage in</span></button>
+    </div>`;
+}
+
+/** The first step: "Kies een playlist" (no login). */
+function listStartHtml(inGame) {
+  if (inGame) return '<p class="small muted" data-testid="mix-lists-later">Een playlist kiezen voor de mix kan in de lobby, tussen de potjes door.</p>';
+  return `<div class="mix-way" data-testid="mix-lists-start">
+      <button class="btn btn-primary" type="button" data-mix-action="lists-open" data-testid="mix-lists-open">${musicIcon}<span>Kies een playlist</span></button>
+      <p class="small muted">Zonder inloggen: zoek een openbare playlist (Top 40, jaren 90, hardcore…) of plak een Deezer-link. Meer dan één mag.</p>
+    </div>`;
 }
 
 /**
@@ -37,6 +153,16 @@ export function mixKey(ms, meta) {
  */
 export function mixPanelHtml(ms, meta, { inGame = false, leader = false } = {}) {
   const s = ms.state;
+  const offered = !!ms.listsOffered?.();
+  const mode = ms.mode?.() || null;
+  if (mode === 'lists') {
+    const l = ms.lists.state;
+    const body = l.view === 'pick' && !inGame ? listPickerHtml(l) : listHomeHtml(ms, meta, { inGame });
+    return `<section class="mix-panel" data-testid="mix-panel" data-mode="lists" data-phase="${esc(l.phase)}" data-view="${esc(inGame ? 'home' : l.view)}">${body}</section>`;
+  }
+  if (offered && mode === null && ms.lists.state.view === 'pick' && !inGame) {
+    return `<section class="mix-panel" data-testid="mix-panel" data-mode="lists" data-phase="idle" data-view="pick">${listPickerHtml(ms.lists.state)}</section>`;
+  }
   const mineOnServer = meta?.mix?.mine ?? 0;
   const problem = ms.problem();
   const source = ms.clientSource?.() || null;
@@ -83,27 +209,33 @@ export function mixPanelHtml(ms, meta, { inGame = false, leader = false } = {}) 
     : 'Je logt zelf in bij Spotify, via je eigen Spotify-instelling. Logt iemand anders hier in, dan moet dat account in jouw Spotify-app staan onder “User Management” (maximaal 5 accounts).'}</p>`;
   }
   if (s.error && s.phase !== 'error' && s.phase !== 'idle') body += `<p class="set-error" data-testid="mix-error" role="alert">${esc(s.error)}</p>`;
-  return `<section class="mix-panel" data-testid="mix-panel" data-phase="${esc(s.phase)}">
-    <h2 class="room-h">Jouw favorieten</h2>
+  const lists = offered && mode === null ? listStartHtml(inGame) : '';
+  return `<section class="mix-panel" data-testid="mix-panel" data-mode="${mode === 'top' ? 'top' : ''}" data-phase="${esc(s.phase)}">
+    ${lists ? `<h2 class="room-h">Doe mee met de mix</h2>${lists}<h3 class="mix-sub">Of je eigen favorieten uit Spotify <small class="muted">(met inloggen)</small></h3>` : '<h2 class="room-h">Jouw favorieten</h2>'}
     ${inGame ? '<p class="small muted" data-testid="mix-next-game">Nummers die je nu deelt, doen mee vanaf het volgende potje.</p>' : ''}
     ${body}
   </section>`;
 }
 
 /** Lobby (and during a game, folded away): counts + this phone's panel. */
-export function mixBlockHtml(ms, meta, { inGame = false, music = 'deck', leader = false } = {}) {
+export function mixBlockHtml(ms, meta, { inGame = false, music = 'deck', leader = false, shortage = null, gameLabel = '' } = {}) {
   const head = `${mixCountsHtml(meta?.mix)}${music === 'mix' ? `<span class="pill pill-on" data-testid="mix-chosen">${inGame ? 'speelt nu' : 'gekozen'}</span>` : ''}`;
-  if (!inGame) return `<div class="mix-block" data-testid="mix-block"><div class="mix-head">${head}</div>${mixPanelHtml(ms, meta, { inGame, leader })}</div>`;
-  const open = ['connecting', 'fetching', 'matching', 'error'].includes(ms.state.phase);
+  // the spelleider's lobby: what helps when the mix is still too small to start
+  const help = leader && !inGame && shortage?.missing > 0
+    ? `<p class="mix-help" data-testid="mix-help" data-missing="${shortage.missing}">${icons.users}<span>Nog ${plural(shortage.missing, 'nummer', 'nummers')} nodig${gameLabel ? ` voor ${esc(gameLabel)}` : ''}. ${ms.listsOffered?.()
+      ? '<b>Laat iedereen een playlist kiezen</b> op de eigen telefoon (zonder inloggen), of de Spotify-favorieten delen.'
+      : 'Laat spelers op hun eigen telefoon <b>Doe mijn favorieten erbij</b> kiezen.'}</span></p>` : '';
+  if (!inGame) return `<div class="mix-block" data-testid="mix-block"><div class="mix-head">${head}</div>${help}${mixPanelHtml(ms, meta, { inGame, leader })}</div>`;
+  const open = ['connecting', 'fetching', 'matching', 'error'].includes(ms.state.phase) || ms.lists?.state.phase === 'error';
   return `<details class="mix-block" data-testid="mix-block" ${open ? 'open' : ''}>
-    <summary><span class="mix-head">${head}</span><small class="mix-tap muted">Tik hier om (ook) je eigen favorieten te delen of in te trekken.</small></summary>
+    <summary><span class="mix-head">${head}</span><small class="mix-tap muted">${ms.mode?.() === 'lists' ? 'Tik hier om je playlists en je bijdrage te zien.' : 'Tik hier om (ook) je eigen favorieten te delen of in te trekken.'}</small></summary>
     ${mixPanelHtml(ms, meta, { inGame, leader })}
   </details>`;
 }
 
 /** Without a room server (PeerJS): explain that the mix needs the server. */
 export function mixServerOnlyHtml() {
-  return '<p class="muted small mix-note" data-testid="mix-server-only">Mix van de groep (ieders meest geluisterde nummers uit Spotify) werkt alleen via de kamerserver, niet bij rechtstreeks verbinden.</p>';
+  return '<p class="muted small mix-note" data-testid="mix-server-only">Mix van de groep (ieders playlists of meest geluisterde nummers) werkt alleen via de kamerserver, niet bij rechtstreeks verbinden.</p>';
 }
 
 /** How many songs the leader's choice still needs (0 = enough). */
@@ -117,6 +249,65 @@ export function mixShortage(mix, settings, players, source) {
 export function onMixChange(ms, e) {
   const t = e.target;
   if (!ms || !t.matches?.('[data-mix]')) return false;
+  if (t.dataset.mix === 'list-count') { ms.lists.setCount(Number(t.value)); return true; }
   ms.setChoice(t.dataset.mix === 'range' ? { range: t.value } : { count: Number(t.value) });
   return true;
+}
+
+/**
+ * The playlist picker's own events on a room screen (root): taps on [data-mix-action], the two
+ * forms, typing (kept without a redraw, so the keyboard stays) and a pasted link (added at
+ * once). getMs(): the screen's current mix object. Returns a function that removes them.
+ */
+export function bindMixPanel(root, getMs) {
+  const scrollToPanel = () => requestAnimationFrame(() => {
+    root.querySelector('[data-testid="mix-panel"]')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+  });
+  const onClick = (e) => {
+    const a = e.target.closest?.('[data-mix-action]');
+    const ms = getMs();
+    if (!a || !root.contains(a) || !ms?.lists) return;
+    e.preventDefault();
+    const l = ms.lists;
+    switch (a.dataset.mixAction) {
+      case 'lists-open': l.open(); scrollToPanel(); break;
+      case 'lists-close': l.close(); scrollToPanel(); break;
+      case 'lists-quick': l.quick(a.dataset.key); break;
+      case 'lists-more': l.more(); break;
+      case 'lists-add': l.add(a.dataset.id); scrollToPanel(); break;
+      case 'lists-remove': l.remove(a.dataset.id); break;
+      case 'lists-retry': l.retry(); break;
+      default:
+    }
+  };
+  const onSubmit = (e) => {
+    const f = e.target.closest?.('form[data-mix-form]');
+    const ms = getMs();
+    if (!f || !ms?.lists) return;
+    e.preventDefault();
+    const input = f.querySelector('[data-mix-field]');
+    input?.blur(); // the keyboard goes away: the results are under it
+    if (f.dataset.mixForm === 'search') ms.lists.search(input?.value || '');
+    else ms.lists.pasted(input?.value || '');
+  };
+  const onInput = (e) => {
+    const t = e.target;
+    if (!t.matches?.('[data-mix-field]')) return;
+    getMs()?.lists?.typed(t.dataset.mixField, t.value);
+  };
+  const onPaste = (e) => {
+    const t = e.target;
+    if (!t.matches?.('[data-mix-field="link"]')) return;
+    setTimeout(() => { if (t.isConnected && t.value.trim()) getMs()?.lists?.pasted(t.value); }, 0);
+  };
+  root.addEventListener('click', onClick);
+  root.addEventListener('submit', onSubmit);
+  root.addEventListener('input', onInput);
+  root.addEventListener('paste', onPaste);
+  return () => {
+    root.removeEventListener('click', onClick);
+    root.removeEventListener('submit', onSubmit);
+    root.removeEventListener('input', onInput);
+    root.removeEventListener('paste', onPaste);
+  };
 }

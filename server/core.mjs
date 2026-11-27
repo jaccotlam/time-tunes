@@ -5,14 +5,19 @@
 // Durable Object per room.)
 //
 // Accounts (accounts.mjs, account-http.mjs) live in memory here, and with `accountsFile` also
-// in a JSON file (written atomically, a moment after each change) together with the prepared
-// rooms, so both survive a restart. Without a file a restart loses every account and prepared
-// room. http() answers the room routes synchronously as before; an /account route answers
-// with a Promise of the same { status, headers, body }.
-import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+// on disk, so they and the prepared rooms survive a restart: one small JSON file per account
+// and per prepared room in the folder `<accountsFile>.d/` (a-<hex of the name>.json,
+// r-<CODE>.json), each written atomically (temp file + rename) and asynchronously a moment
+// after it changed; only what changed is written. `accountsFile` itself is a marker { v: 2 };
+// an older single file ({ v: 1, accounts, rooms }) is still read and moved into the folder.
+// A write that fails (a full disk, data that can not become JSON) never stops the server: it
+// is logged once and tried again later. Without a file a restart loses every account and
+// prepared room. http() answers the room routes synchronously as before; an /account route
+// answers with a Promise of the same { status, headers, body }.
+import * as nodeFs from 'node:fs';
+import { dirname, join, basename } from 'node:path';
 import { RoomHub, PREPARED_IDLE_MS } from './room.mjs';
-import { AccountBox, memoryStore, PBKDF2_ITERATIONS } from './accounts.mjs';
+import { AccountBox, memoryStore, dataQuota, byteLength, PBKDF2_ITERATIONS } from './accounts.mjs';
 import { accountRoute, handleAccount, accountLimiters } from './account-http.mjs';
 import { prepareRoom, preparedOp } from './prepared.mjs';
 import {
@@ -26,8 +31,17 @@ function safely(what, fn) {
   try { return fn(); } catch (e) { console.error(`room ${what} failed:`, e?.stack || e); return undefined; }
 }
 
+/** Wait before writing what changed (ms), and before trying a failed write again (doubling up to RETRY_MAX_MS). */
+export const WRITE_DELAY_MS = 200;
+export const RETRY_MS = 5000;
+export const RETRY_MAX_MS = 60_000;
+
+const hex = (s) => Buffer.from(String(s), 'utf8').toString('hex');
+const unhex = (h) => Buffer.from(h, 'hex').toString('utf8');
+
 export function createRoomServer({
   origins = DEFAULT_ORIGINS, now = Date.now, limits = {}, log = () => {}, accountsFile = '', iterations = PBKDF2_ITERATIONS, accountLimits = {},
+  fs = nodeFs, writeDelay = WRITE_DELAY_MS, retryDelay = RETRY_MS, logError = (...a) => console.error(...a),
 } = {}) {
   const L = { ...LIMITS, ...limits };
   const allowed = parseOrigins(origins);
@@ -43,24 +57,111 @@ export function createRoomServer({
   const boxes = new Map(); // key -> AccountBox
   const preparedStates = new Map(); // code -> state of a prepared room (the hub's own object)
   const limiters = accountLimiters({ now, limits: accountLimits });
+  // the synced data of all accounts lives in this process: one budget for all of them, and a
+  // limit on how much one address may add per day (one flood must not fill it for everybody)
+  const quota = dataQuota(L.maxAccountData, { growthPerIp: L.accountGrowthPerIp, now });
+
+  // ---------- the files: one per account / prepared room, only what changed ----------
+  const dir = accountsFile ? `${accountsFile}.d` : '';
+  const fileOf = (id) => join(dir, id.startsWith('a:') ? `a-${hex(id.slice(2))}.json` : `r-${id.slice(2)}.json`);
+  const dirty = new Set(); // 'a:<key>' | 'r:<code>': written at the next write
+  const writing = new Set(); // ids an asynchronous write is busy with
+  const version = new Map(); // path -> number of the latest write started (an older one never renames over it)
+  let legacy = false; // the marker file still has to replace an old single file
   let writeTimer = 0;
+  let busy = false;
+  let failing = false; // logged once until a write works again
+  let retryMs = retryDelay;
+  let tmpSeq = 0;
+
+  /** The text of one entry (null: it is gone, remove the file). Throws when it can not become JSON. */
+  const textOf = (id) => {
+    if (id.startsWith('a:')) {
+      const k = id.slice(2);
+      return accounts.has(k) ? JSON.stringify({ v: 2, key: k, rec: accounts.get(k) }) : null;
+    }
+    const code = id.slice(2);
+    return preparedStates.has(code) ? JSON.stringify({ v: 2, code, state: preparedStates.get(code) }) : null;
+  };
+  const markerText = () => JSON.stringify({ v: 2, dir: basename(dir) });
+  const failed = (what, e) => {
+    if (!failing) logError(`accounts file not written (${what}):`, e?.message || e);
+    failing = true;
+  };
+  const tmpOf = (path) => `${path}.${process.pid}.${++tmpSeq}.tmp`;
+  const bump = (path) => { const v = (version.get(path) || 0) + 1; version.set(path, v); return v; };
+
+  /** Write one entry at once (shutdown, tests). */
+  function writeSync(id, path = fileOf(id)) {
+    const text = id === 'marker' ? markerText() : textOf(id);
+    bump(path);
+    if (text == null) { try { fs.unlinkSync(path); } catch (e) { if (e?.code !== 'ENOENT') throw e; } return; }
+    const tmp = tmpOf(path);
+    fs.writeFileSync(tmp, text, { mode: 0o600 });
+    fs.renameSync(tmp, path); // atomic: a crash leaves the old file or the new one, never half
+  }
+
+  /** Write one entry without blocking the server: the text now, the file in the background. */
+  async function writeAsync(id, path = fileOf(id)) {
+    const text = id === 'marker' ? markerText() : textOf(id);
+    const v = bump(path);
+    if (text == null) { try { await fs.promises.unlink(path); } catch (e) { if (e?.code !== 'ENOENT') throw e; } return; }
+    const tmp = tmpOf(path);
+    await fs.promises.writeFile(tmp, text, { mode: 0o600 });
+    // a newer write of the same file (flush) went first: this older text must not replace it
+    if (version.get(path) !== v) { try { await fs.promises.unlink(tmp); } catch { /* ignore */ } return; }
+    fs.renameSync(tmp, path); // sync and right after the check: nothing can come in between
+  }
+
+  const scheduleWrite = (ms = writeDelay) => {
+    if (!accountsFile || writeTimer || busy) return;
+    writeTimer = setTimeout(() => { writeTimer = 0; writeSoon(); }, ms);
+    writeTimer.unref?.();
+  };
+  const mark = (id) => { if (!accountsFile) return; dirty.add(id); scheduleWrite(); };
+
+  async function writeSoon() {
+    if (busy || !accountsFile) return;
+    busy = true;
+    let ok = true;
+    try {
+      try { await fs.promises.mkdir(dir, { recursive: true }); } catch (e) { failed('folder', e); ok = false; }
+      if (ok) {
+        const ids = [...dirty];
+        dirty.clear();
+        for (const id of ids) {
+          writing.add(id);
+          try { await writeAsync(id); } catch (e) { ok = false; dirty.add(id); failed(id.startsWith('a:') ? 'an account' : 'a room', e); }
+          writing.delete(id);
+        }
+        // every entry of an old single file is in the folder now: that file becomes the marker
+        if (ok && legacy) { try { await writeAsync('marker', accountsFile); legacy = false; } catch (e) { ok = false; failed('marker', e); } }
+      }
+    } finally { busy = false; }
+    if (ok) {
+      failing = false;
+      retryMs = retryDelay;
+      if (dirty.size) scheduleWrite();
+    } else {
+      scheduleWrite(retryMs); // try again later; the server keeps serving meanwhile
+      retryMs = Math.min(retryMs * 2, RETRY_MAX_MS);
+    }
+  }
+
+  /** Write everything that changed now, synchronously (Node: before the process stops). Never throws. */
   function writeNow() {
     clearTimeout(writeTimer);
     writeTimer = 0;
     if (!accountsFile) return;
-    const text = JSON.stringify({ v: 1, accounts: Object.fromEntries(accounts), rooms: Object.fromEntries(preparedStates) });
-    const tmp = `${accountsFile}.${process.pid}.tmp`;
-    try {
-      mkdirSync(dirname(accountsFile), { recursive: true });
-      writeFileSync(tmp, text, { mode: 0o600 });
-      renameSync(tmp, accountsFile); // atomic: a crash leaves the old file or the new one, never half
-    } catch (e) { console.error('accounts file not written:', e?.message || e); }
+    try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { failed('folder', e); return; }
+    let ok = true;
+    for (const id of new Set([...dirty, ...writing])) {
+      try { writeSync(id); dirty.delete(id); } catch (e) { ok = false; dirty.add(id); failed(id.startsWith('a:') ? 'an account' : 'a room', e); }
+    }
+    if (ok && legacy) { try { writeSync('marker', accountsFile); legacy = false; } catch (e) { ok = false; failed('marker', e); } }
+    if (ok) failing = false;
+    else scheduleWrite(retryMs);
   }
-  const scheduleWrite = () => {
-    if (!accountsFile || writeTimer) return;
-    writeTimer = setTimeout(writeNow, 200);
-    writeTimer.unref?.();
-  };
 
   const roomsAdapter = {
     async create(opts) {
@@ -89,7 +190,7 @@ export function createRoomServer({
     let box = boxes.get(key);
     if (!box) {
       if (boxes.size > 5000) for (const [k, b] of boxes) if (!b.rec && !b.locked()) boxes.delete(k);
-      box = new AccountBox(key, memoryStore(accounts, key, scheduleWrite), roomsAdapter, { now, iterations, log });
+      box = new AccountBox(key, memoryStore(accounts, key, () => mark(`a:${key}`)), roomsAdapter, { now, iterations, log, quota });
       boxes.set(key, box);
     }
     return box;
@@ -103,7 +204,7 @@ export function createRoomServer({
         save: (snap) => {
           if (snap?.prepared) preparedStates.set(code, snap);
           else if (!preparedStates.delete(code)) return;
-          scheduleWrite();
+          mark(`r:${code}`);
         },
         // Quiz: look at the question again right when its clock says so
         wake: (at) => {
@@ -131,17 +232,45 @@ export function createRoomServer({
 
   const json = (status, body, origin) => ({ status, headers: { ...corsHeaders(origin), 'content-type': 'application/json; charset=utf-8' }, body });
 
-  // the file of an earlier run: accounts, and the prepared rooms that have not expired
+  // the files of an earlier run: accounts, and the prepared rooms that have not expired
   if (accountsFile) {
+    const savedAccounts = new Map();
+    const savedRooms = new Map();
     let saved = null;
-    try { saved = JSON.parse(readFileSync(accountsFile, 'utf8')); } catch (e) { if (e?.code !== 'ENOENT') console.error('accounts file not read:', e?.message || e); }
-    for (const [k, rec] of Object.entries(saved?.accounts || {})) if (rec && typeof rec === 'object') accounts.set(k, rec);
-    for (const [code, st] of Object.entries(saved?.rooms || {})) {
-      if (!st?.prepared || !(now() - (Number(st.lastActive) || 0) < PREPARED_IDLE_MS)) continue;
+    try { saved = JSON.parse(fs.readFileSync(accountsFile, 'utf8')); } catch (e) { if (e?.code !== 'ENOENT') logError('accounts file not read:', e?.message || e); }
+    // an old single file (v1): everything in it moves to the folder at the first write
+    if (saved && (saved.accounts || saved.rooms)) {
+      legacy = true;
+      for (const [k, rec] of Object.entries(saved.accounts || {})) { savedAccounts.set(k, rec); dirty.add(`a:${k}`); }
+      for (const [code, st] of Object.entries(saved.rooms || {})) { savedRooms.set(code, st); dirty.add(`r:${code}`); }
+    }
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch (e) { if (e?.code !== 'ENOENT') logError('accounts folder not read:', e?.message || e); }
+    for (const name of names) {
+      const m = /^(a|r)-([0-9a-f]+|[A-Z]{4})\.json$/.exec(name);
+      if (!m) { if (/\.tmp$/.test(name)) { try { fs.unlinkSync(join(dir, name)); } catch { /* ignore */ } } continue; }
+      let j;
+      try { j = JSON.parse(fs.readFileSync(join(dir, name), 'utf8')); } catch (e) { logError('accounts file not read:', name, e?.message || e); continue; }
+      // a file of the folder is newer than the old single file (written after it)
+      if (m[1] === 'a' && typeof j?.key === 'string' && j.key === unhex(m[2])) { savedAccounts.set(j.key, j.rec); dirty.delete(`a:${j.key}`); }
+      if (m[1] === 'r' && j?.code === m[2]) { savedRooms.set(j.code, j.state); dirty.delete(`r:${j.code}`); }
+    }
+    for (const [k, rec] of savedAccounts) {
+      if (!rec || typeof rec !== 'object') { dirty.delete(`a:${k}`); continue; }
+      accounts.set(k, rec);
+      if (rec.data) quota.set(k, byteLength(JSON.stringify(rec.data)));
+    }
+    for (const [code, st] of savedRooms) {
+      if (!st?.prepared || !(now() - (Number(st.lastActive) || 0) < PREPARED_IDLE_MS)) {
+        // expired: its file goes at the next write
+        dirty.add(`r:${code}`);
+        continue;
+      }
       const hub = hubFor(code);
       hub.load(st);
       preparedStates.set(code, hub.state);
     }
+    if (dirty.size || legacy) scheduleWrite();
   }
 
   /** req: { method, path, origin, ip, body } -> { status, headers, body } */
@@ -155,7 +284,10 @@ export function createRoomServer({
       if (acct.op === 'signup' && accounts.size >= L.maxAccounts) {
         return Promise.resolve(json(503, { code: 'full', message: 'De server is vol: er kunnen geen accounts meer bij. Probeer het later opnieuw.' }, origin));
       }
-      return handleAccount(req, { boxFor, limiters, log }).then((out) => json(out.status, out.body, origin));
+      // a save learns the address it came from (the per-address growth limit of the quota)
+      const ip = req.ip || '?';
+      const boxWithIp = (key) => { const box = boxFor(key); return { call: (op, args) => box.call(op, op === 'save' ? { ...args, ip } : args) }; };
+      return handleAccount(req, { boxFor: boxWithIp, limiters, log }).then((out) => json(out.status, out.body, origin));
     }
     const r = route(req.method, req.path);
     if (r.kind === 'health') return json(200, { ...health(), rooms: rooms.size }, origin);
@@ -245,8 +377,14 @@ export function createRoomServer({
     http,
     upgrade,
     sweep,
-    /** Write the accounts file now (Node: before the process stops). */
+    /** Write what changed now, synchronously (Node: before the process stops). */
     flush: writeNow,
+    /** Tests: let a background write that is due run now; resolves when nothing is being written. */
+    async settle() {
+      for (let i = 0; i < 1000 && (writeTimer || busy); i++) {
+        if (writeTimer && !busy) { clearTimeout(writeTimer); writeTimer = 0; await writeSoon(); } else await new Promise((r) => setTimeout(r, 1));
+      }
+    },
     get rooms() { return rooms; },
     get accounts() { return accounts; },
     stats: () => ({ rooms: rooms.size, sockets: sockets.size }),

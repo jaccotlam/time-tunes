@@ -160,10 +160,11 @@ test('scherm: kan geen spelberichten sturen (nette weigering, verbinding blijft,
   const hub = core.rooms.get(code);
   const before = JSON.stringify(hub.state);
   const msgs = [
-    { t: 'answer', round: 1, answer: { decade: 1960 } }, { t: 'withdraw' }, { t: 'settings', patch: { game: 'quiz' } },
+    { t: 'answer', round: 1, answer: { guess: '1960' } }, { t: 'withdraw' }, { t: 'settings', patch: { game: 'quiz' } },
     { t: 'start', cards: cardsForServer(cards) }, { t: 'reveal' }, { t: 'override', pid: 'playerA1' }, { t: 'next' }, { t: 'lobby' },
     { t: 'remove', pid: 'playerA1' }, { t: 'close' }, { t: 'lead' }, { t: 'playing', round: 1 }, { t: 'mix-add', tracks: [] },
     { t: 'mix-clear' }, { t: 'stamp', round: 1, index: 3 }, { t: 'judge', pid: 'playerA1', ok: true },
+    { t: 'hold', round: 1 }, { t: 'continue', win: 'line2' }, { t: 'finish' },
   ];
   for (const m of msgs) {
     const n = scr.all('error').length;
@@ -348,6 +349,9 @@ async function noPeeking(settings, { rounds, answer, secrets = () => [], forbid 
     mark = scr.raw.length;
     host.send({ t: 'next' });
     await flush();
+    // Discobingo: a bingo stops the game; go on for the next goal (or stop after a full card)
+    const bingo = scr.view().game?.disco?.bingo;
+    if (bingo) { host.send(bingo.next.length ? { t: 'continue', win: bingo.next[0] } : { t: 'finish' }); await flush(); }
     if (scr.view().phase !== 'answering') break;
   }
   assert.ok(checked >= rounds, 'genoeg berichten gecontroleerd');
@@ -362,15 +366,15 @@ test('scherm: niet spieken bij Discobingo (categorie, draai, voortgang, wie gean
     answer: (i, view, song, round) => {
       const d = view.game.disco;
       if (i === 0) typedRounds += ['artist', 'title'].includes(d.cat) ? 1 : 0;
-      if (d.cat === 'decade') return { decade: d.decades[i % d.decades.length].decade };
-      if (d.cat === 'year') return { guess: 1900 + i };
+      if (d.cat === 'exact' || d.cat === 'year') return { guess: 1900 + i };
       return { text: secretOf(i, round) };
     },
     secrets: (a) => (a.text ? [a.text] : []),
   });
   assert.ok(typedRounds >= 2, 'er zaten getypte rondes bij');
   const d = scr.view().game.disco;
-  for (const k of ['cat', 'spin', 'spunAt', 'spinMs', 'win', 'decades', 'progress', 'pending', 'doubts']) assert.ok(k in d, `disco.${k}`);
+  for (const k of ['cat', 'spin', 'spunAt', 'spinMs', 'win', 'stages', 'bingo', 'autoAt', 'autoMs', 'autoHeld', 'chips', 'progress', 'pending', 'doubts']) assert.ok(k in d, `disco.${k}`);
+  assert.ok(!('decades' in d), 'geen decennia meer');
   assert.equal(d.choice, null);
   assert.deepEqual(d.choosable, []);
   assert.equal(d.mustChoose, false);

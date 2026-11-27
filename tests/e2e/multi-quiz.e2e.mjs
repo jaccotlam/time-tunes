@@ -63,7 +63,7 @@ async function assertNoAnswer(page, round, song, label) {
     if (m.t !== 'state' || m.view?.phase !== 'answering' || m.view.game?.round !== round) continue;
     const t = JSON.stringify(m);
     if (t.includes('"reveal":{') || /"answer":\d/.test(t)) throw new Error(`${label}: right answer before the reveal (round ${round})`);
-    if (t.includes(song.previewUrl) || t.includes('"lead":')) throw new Error(`${label}: the song reached a player (round ${round})`);
+    if (t.includes(`"itunesId":${song.itunesId}`) || t.includes('"lead":')) throw new Error(`${label}: the song reached a player (round ${round})`);
   }
 }
 
@@ -108,7 +108,7 @@ export default async function run() {
     await H.getByTestId('room-start').click();
 
     const types = new Set();
-    const titles = new Set(TRACKS.map((t) => t.previewUrl));
+    const titles = new Set(TRACKS.map((t) => t.itunesId));
     let dirk = null;
     for (let round = 1; round <= 10; round++) {
       await hostQuestion(H, round);
@@ -118,7 +118,7 @@ export default async function run() {
       const right = await rightIndex(H, A);
       const wrong = (right + 1) % 4;
       const { song } = await serverHost(H);
-      assert(titles.has(song.previewUrl), `question ${round} (${q.type}): "${song.title}" from the playlist; options ${q.options.join(' | ')}`);
+      assert(titles.has(song.itunesId), `question ${round} (${q.type}): "${song.title}" from the playlist; options ${q.options.join(' | ')}`);
       for (const p of players) await assertNoAnswer(p, round, song, 'player');
       if (round === 1) {
         await shot(A, 'quiz-02-player-question');

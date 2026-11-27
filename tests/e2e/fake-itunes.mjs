@@ -66,11 +66,28 @@ export async function installFakeItunes(ctx, { catalog = CATALOG } = {}) {
       const ids = String(u.searchParams.get('id') || '').split(',').map(Number);
       stats.lookup.push(ids);
       const results = catalog.filter((s) => ids.includes(s.trackId));
+      // the room suites' own playlists (ids 7 000 000 - 8 999 999): a playlist stores no preview
+      // address any more, so the music phone looks every song up by id, as with real Apple ids
+      for (const id of ids) {
+        if (id >= 7000000 && id < 9000000 && !results.some((r) => r.trackId === id)) {
+          results.push({ wrapperType: 'track', kind: 'song', trackId: id, previewUrl: `https://audio-ssl.itunes.apple.com/fake/${id}.m4a`, trackViewUrl: `https://music.apple.com/nl/song/${id}` });
+        }
+      }
       return json(route, { resultCount: results.length, results });
     }
     return json(route, { resultCount: 0, results: [] });
   });
   await ctx.route('https://audio-ssl.itunes.apple.com/**', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: WAV }));
+  // The background worker (enrich.js) may also ask MusicBrainz (songs with an ISRC) and
+  // Deezer: never the real services in a test. A suite can route these itself after this.
+  await ctx.route('https://musicbrainz.org/**', (route) => {
+    stats.musicbrainz = (stats.musicbrainz || 0) + 1;
+    return route.fulfill({ status: 404, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '{"error":"Not Found"}' });
+  });
+  await ctx.route('https://api.deezer.com/**', (route) => {
+    const cb = new URL(route.request().url()).searchParams.get('callback') || 'cb';
+    return route.fulfill({ status: 200, contentType: 'text/javascript', body: `${/^dzcb[0-9a-z]+$/.test(cb) ? cb : 'cb'}({"error":{"type":"DataException","message":"no data","code":800}})` });
+  });
   return stats;
 }
 

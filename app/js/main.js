@@ -20,6 +20,14 @@ import * as roomScreenScreen from './screens/room-screen.js';
 import * as accountScreen from './screens/account.js';
 import * as myRoomsScreen from './screens/my-rooms.js';
 import { initAccount } from './screens/account-bits.js';
+import * as enrich from './enrich.js';
+
+/**
+ * Screens where a round is played: the background work (enrich.js) waits meanwhile. The
+ * spelleider screen (room-host) is not in it: it pauses the work itself, only while a round is
+ * in progress, so the year check goes on while the room waits in the lobby.
+ */
+const PLAY_SCREENS = new Set(['game', 'bingo', 'card', 'scan', 'room-player', 'room-screen']);
 
 const routes = [
   { re: /^#?\/?$/, screen: startScreen, needsDeck: false },
@@ -84,6 +92,8 @@ async function route() {
     loadDeck().catch(() => {});
   }
   root.dataset.route = match.r.screen.name;
+  if (PLAY_SCREENS.has(match.r.screen.name)) enrich.pause('game');
+  else enrich.resume('game');
   document.body.dataset.route = match.r.screen.name;
   window.scrollTo(0, 0);
   cleanup = match.r.screen.render(root, { deck, params: match.m.slice(1), navigate, install });
@@ -125,6 +135,22 @@ initAccount();
 window.addEventListener('hashchange', route);
 route();
 
+// Years and fragments for the stored playlists, in the background for as long as the app is
+// open (paused during a round, and while a song plays).
+enrich.start();
+// A browser that was closed in the middle of a volume fade left Spotify quiet. fade.js keeps a
+// marker for that case; put the user's own volume back once at the next start. Without a marker
+// this does nothing (no request to Spotify).
+if (spotify.isConnected()) {
+  import('./fade.js')
+    .then((f) => f.recoverSpotifyVolume({ info: spotify.volumeInfo, setVolume: spotify.setVolume }))
+    .catch(() => { /* never in the way of starting the app */ });
+}
+player.subscribe((s) => {
+  if (s.status === 'playing' || s.status === 'loading') enrich.pause('audio');
+  else enrich.resume('audio');
+});
+
 // Service worker: network-first app shell, so updates always win when online.
 if ('serviceWorker' in navigator && window.isSecureContext && !/[?&]nosw\b/.test(location.search)) {
   window.addEventListener('load', () => {
@@ -139,4 +165,4 @@ window.addEventListener('online', () => document.body.classList.remove('is-offli
 if (navigator.onLine === false) document.body.classList.add('is-offline');
 
 // expose for debugging / e2e
-window.__tt = { navigate, player, esc, spotify };
+window.__tt = { navigate, player, esc, spotify, enrich };

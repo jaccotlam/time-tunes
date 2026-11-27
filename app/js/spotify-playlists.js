@@ -6,10 +6,15 @@
 //   playlists Spotify answers 403 (or gives metadata without items);
 // - scopes: playlist-read-private (+ playlist-read-collaborative), so a player who connected
 //   for playback only has to connect once more.
+// - pages hold at most 50 items (the documented maximum of `limit`); after the first page (which
+//   gives `total`) the next pages are fetched PAGE_PARALLEL at a time, a 429 waits Retry-After.
 import * as spotify from './spotify.js';
-import { spotifyYear } from './playlist-logic.js';
+import { spotifyYear, cleanIsrc, MAX_TRACKS } from './playlist-logic.js';
 
-export const MAX_IMPORT = 500;
+export const MAX_IMPORT = MAX_TRACKS;
+export const PAGE_SIZE = 50;
+const PAGE_PARALLEL = 3;
+const RATE_TRIES = 3;
 
 export class PlaylistError extends Error {
   constructor(code) { super(code); this.code = code; }
@@ -59,39 +64,81 @@ export function entryToTrack(entry) {
     artist: (t.artists || []).map((a) => a?.name).filter(Boolean).join(', '),
     album: String(t.album?.name || ''),
     spYear: spotifyYear(t.album?.release_date),
-    isrc: t.external_ids?.isrc || null,
+    isrc: cleanIsrc(t.external_ids?.isrc),
   };
 }
 
-/** All songs of a playlist (paged, max MAX_IMPORT). */
-export async function playlistTracks(id, { onProgress, signal } = {}) {
-  const out = [];
-  let offset = 0;
-  let total = null;
-  for (;;) {
-    if (signal?.aborted) break;
-    let j;
+const sleep = (ms, signal) => new Promise((resolve) => {
+  const t = setTimeout(resolve, ms);
+  signal?.addEventListener?.('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+});
+
+/** One page of a playlist's items (a 429 waits Retry-After, a few times). */
+async function itemsPage(id, offset, signal) {
+  for (let attempt = 0; ; attempt++) {
     try {
-      j = await spotify.api(`/playlists/${id}/items`, { query: { limit: 50, offset, additional_types: 'track' } });
-    } catch (e) { throw mapError(e, { forItems: true }); }
-    if (!j || !Array.isArray(j.items)) {
-      if (offset === 0) throw new PlaylistError('not-own'); // metadata only: not the user's playlist
-      break;
+      return await spotify.api(`/playlists/${id}/items`, { query: { limit: PAGE_SIZE, offset, additional_types: 'track' } });
+    } catch (e) {
+      if (e?.code === 'rate' && attempt < RATE_TRIES - 1 && !signal?.aborted) { await sleep(Math.min(30, e.retryAfter || 2) * 1000, signal); continue; }
+      throw mapError(e, { forItems: true });
     }
-    total = Number(j.total) || total;
-    for (const entry of j.items) {
-      const t = entryToTrack(entry);
-      if (t && !out.some((x) => x.spotifyId === t.spotifyId)) out.push(t);
-    }
-    offset += j.items.length;
-    onProgress?.(Math.min(offset, total || offset), total || offset);
-    if (!j.next || !j.items.length || out.length >= MAX_IMPORT) break;
   }
-  if (!out.length) throw new PlaylistError('empty');
-  return out.slice(0, MAX_IMPORT);
 }
 
-/** The user's own and collaborative playlists: [{ id, name, count }]. */
+/**
+ * All songs of a playlist (paged, max `max` = MAX_IMPORT), in playlist order, without
+ * duplicates. A longer list gives its first `max` songs and the array carries capped: true and
+ * total (say so with cappedMessage). onProgress(itemsRead, total). Every track: see entryToTrack (year from Spotify,
+ * ISRC when Spotify gives one).
+ */
+export async function playlistTracks(id, { onProgress, signal, max = MAX_IMPORT } = {}) {
+  const out = [];
+  const seen = new Set();
+  const take = (j) => {
+    for (const entry of j.items) {
+      const t = entryToTrack(entry);
+      if (t && !seen.has(t.spotifyId) && out.length < max) { seen.add(t.spotifyId); out.push(t); }
+    }
+  };
+  const first = await itemsPage(id, 0, signal);
+  if (!first || !Array.isArray(first.items)) throw new PlaylistError('not-own'); // metadata only: not the user's playlist
+  const total = Number(first.total) || first.items.length;
+  take(first);
+  let read = first.items.length;
+  onProgress?.(Math.min(read, total), total);
+  let more = !!first.next && first.items.length > 0;
+  let offset = read;
+  while (more && out.length < max && !signal?.aborted) {
+    // the next few pages at the same time; entries that are no song (episodes, local files) do not count
+    const offsets = [];
+    for (let i = 0; i < PAGE_PARALLEL && offset + i * PAGE_SIZE < total; i++) offsets.push(offset + i * PAGE_SIZE);
+    if (!offsets.length) break;
+    const pages = await Promise.all(offsets.map((o) => itemsPage(id, o, signal)));
+    for (const j of pages) {
+      if (!j || !Array.isArray(j.items) || !j.items.length) { more = false; break; }
+      take(j);
+      read += j.items.length;
+      if (!j.next) { more = false; break; }
+    }
+    offset = offsets[offsets.length - 1] + PAGE_SIZE;
+    onProgress?.(Math.min(read, total), total);
+  }
+  if (!out.length) throw new PlaylistError('empty');
+  // Spotify pages the list from the top: a longer list can only be read up to the maximum
+  if (out.length >= max && read < total) { out.capped = true; out.total = total; }
+  return out;
+}
+
+/** The honest line for a list longer than the maximum (playlistTracks result has `capped`). */
+export const cappedMessage = (total, max = MAX_IMPORT) => `Deze playlist heeft ${total} nummers; alleen de eerste ${max} zijn opgehaald (Spotify geeft de lijst van boven naar beneden). Bij het spelen komt elk van deze ${max} even vaak aan de beurt.`;
+
+/** Cover of a playlist: the first image when it is an https URL (shown with referrerpolicy no-referrer), else null. */
+function coverOf(p) {
+  const url = Array.isArray(p?.images) ? p.images.find((im) => typeof im?.url === 'string')?.url : null;
+  return typeof url === 'string' && url.length < 1200 && /^https:\/\/[^\s"'<>]+$/.test(url) ? url : null;
+}
+
+/** The user's own and collaborative playlists: [{ id, name, count, picture }] (picture: https or null). */
 export async function myPlaylists() {
   let me;
   try { me = await spotify.api('/me'); } catch (e) { throw mapError(e); }
@@ -104,7 +151,7 @@ export async function myPlaylists() {
       if (!p?.id) continue;
       if (p.owner?.id !== me?.id && !p.collaborative) continue;
       const count = Number(p.items?.total ?? p.tracks?.total);
-      out.push({ id: p.id, name: p.name || 'Zonder naam', count: Number.isFinite(count) ? count : null });
+      out.push({ id: p.id, name: p.name || 'Zonder naam', count: Number.isFinite(count) ? count : null, picture: coverOf(p) });
     }
     offset += (j?.items || []).length;
     if (!j?.next) break;

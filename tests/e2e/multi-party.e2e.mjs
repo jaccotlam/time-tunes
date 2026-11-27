@@ -22,7 +22,7 @@ import { createServer } from 'node:net';
 import { launch, startServer, assert, OUT } from './helpers.mjs';
 import { startRoomServer, phone, createRoom, waitForPlayers, serverHost } from './multi-helpers.mjs';
 import { installFakeItunes } from './fake-itunes.mjs';
-import { bestSquare, decadeOf, LINES } from '../../app/js/multi/disco.js';
+import { bestSquare, LINES } from '../../app/js/multi/disco.js';
 import { artistVerdict, titleVerdict } from '../../app/js/multi/match.js';
 import { AVATARS, REACTIONS, REACT_GAP_MS } from '../../app/js/multi/party.js';
 
@@ -238,6 +238,23 @@ const phoneTileAvatar = (P, name) => P.locator(`[data-testid^="room-player-"][da
 const until = (page, fn, arg, timeout = 10000) => page.waitForFunction(fn, arg, { timeout });
 const reactionsOf = (D) => D.evaluate(() => (window.__ttScreen?.session?.reactions || []).map((r) => ({ name: r.name, emoji: r.emoji, avatar: r.avatar })));
 const sendRaw = (p, obj) => p.page.evaluate((o) => window.__ws.send(JSON.stringify(o)), obj);
+/**
+ * Wait until the server's own gap (REACT_GAP_MS per player) after `name`'s last reaction is
+ * surely over. The server measures the gap from when IT accepted that reaction; the tv received
+ * it after that (the server accepts, then sends), so the tv's receivedAt (same machine clock)
+ * is at or after the accept time. A moment measured on the sending phone is NOT: with a bit of
+ * latency the next frame would still land inside the server's gap.
+ */
+async function pastServerGap(D, name, margin = 50) {
+  const at = await D.evaluate((n) => {
+    const mine = (window.__ttScreen?.session?.reactions || []).filter((r) => r.name === n);
+    return mine.length ? mine[mine.length - 1].receivedAt : 0;
+  }, name);
+  if (!at) return; // this tv saw none of theirs (a reloaded display): the callers wait for one first where it matters
+  const wait = at + REACT_GAP_MS + margin - Date.now();
+  if (wait > 0) await sleep(wait);
+}
+const countFrom = (D, name) => D.evaluate((n) => (window.__ttScreen?.session?.reactions || []).filter((r) => r.name === n).length, name);
 
 // ======================================================================================
 //  1. The lobby: avatars and reactions
@@ -381,7 +398,6 @@ async function lobbyReactions(o, H, D, code, { A, B, C }, server) {
   assert(await bar(A).isVisible() && await A.page.getByTestId('react-btn').count() === REACTIONS.length, `the reaction bar is on the phone in the lobby (${REACTIONS.length} emoji)`);
   assert(await A.page.locator('[data-testid="react-btn"]').evaluateAll((bs) => bs.map((b) => b.dataset.emoji).join('')) === REACTIONS.join(''), 'the bar offers 👏 🔥 😂 😮 🙌 🎉');
   assert(await attr(A.page, 'react-bar', 'data-cooldown') === 'false', 'the bar is ready (data-cooldown=false)');
-  const t0 = Date.now();
   await A.page.locator('[data-testid="react-btn"][data-emoji="🔥"]').click();
   assert(await attr(A.page, 'react-bar', 'data-cooldown') === 'true', 'a tap starts the cool-down');
   // the second tap inside the cool-down is not sent (nothing reaches the tv)
@@ -404,8 +420,9 @@ async function lobbyReactions(o, H, D, code, { A, B, C }, server) {
   await sleep(500);
   assert((await reactionsOf(D)).filter((r) => r.name === 'Bram').length === 1, 'three reactions of Bram inside 1.5 s: the server dropped the 2nd and 3rd');
   assert(await B.page.getByTestId('lobby-count').count() === 1, 'the dropped reactions did not disturb Bram\'s phone');
-  // after the gap it works again (positive control) and the burst cap holds
-  await sleep(Math.max(0, REACT_GAP_MS + 100 - (Date.now() - t0)));
+  // after the gap it works again (positive control), measured from when the tv got Anouk's
+  // first one (at or after the moment the server accepted it, see pastServerGap)
+  await pastServerGap(D, 'Anouk');
   await sendRaw(A, { t: 'react', emoji: '🙌' });
   await until(D, () => window.__ttScreen.session.reactions.filter((r) => r.name === 'Anouk').length === 2);
   assert(true, `after ${REACT_GAP_MS} ms the next one goes through`);
@@ -422,9 +439,15 @@ async function lobbyReactions(o, H, D, code, { A, B, C }, server) {
   await D2.close();
   // never over the QR code: a stream of reactions while the lobby (QR, 300+ px) is up
   await D.evaluate(() => { window.__rx.overlaps.length = 0; });
+  // (each round waits for the previous one to arrive and for the server's gap after it, so none
+  // of the nine is dropped by the gap; 3 per ~1.6 s stays under the room's burst cap of 8 per 2 s)
+  const who = [[A, 'Anouk'], [B, 'Bram'], [C, 'Cas']];
+  await pastServerGap(D, 'Anouk'); // her 🙌 above
   for (let i = 0; i < 3; i++) {
-    for (const [P, e] of [[A, REACTIONS[i]], [B, REACTIONS[i + 1]], [C, REACTIONS[i + 2]]]) await sendRaw(P, { t: 'react', emoji: e });
-    await sleep(REACT_GAP_MS + 120);
+    const before = await Promise.all(who.map(([, n]) => countFrom(D, n)));
+    for (const [j, [P]] of who.entries()) await sendRaw(P, { t: 'react', emoji: REACTIONS[i + j] });
+    await D.waitForFunction(([names, b]) => names.every((n, j) => (window.__ttScreen.session.reactions || []).filter((r) => r.name === n).length > b[j]), [who.map(([, n]) => n), before], { timeout: 8000 });
+    for (const [, n] of who) await pastServerGap(D, n);
   }
   await sleep(1500);
   const rx = await D.evaluate(() => ({ n: window.__rx.samples, ov: window.__rx.overlaps }));
@@ -455,11 +478,24 @@ async function poll(what, fn, timeout = 8000) {
 function answerOf(cat, song, how, round, { alt = false } = {}) {
   const real = cat === 'artist' ? song.artist : song.title;
   if (how === 'pass') return { pass: true };
-  if (cat === 'decade') return { decade: how === 'wrong' ? (decadeOf(song.year) === 1980 ? 1990 : 1980) : decadeOf(song.year) };
+  if (cat === 'exact') return { guess: how === 'wrong' ? song.year + 1 : song.year }; // exact: no margin at all
   if (cat === 'year') return { guess: how === 'wrong' ? song.year + 9 : alt ? song.year + 1 : song.year };
   return { text: how === 'wrong' ? `Raar antwoord ${round}` : how === 'doubt' ? doubtOf(cat, real) : alt ? typoOf(real) : real };
 }
 const sendAnswer = (P, a) => P.page.evaluate((x) => window.__ttRoom.session.answer(x), a);
+
+/**
+ * The spelleider goes on (room-next, or disco-finish on a bingo stop). When somebody online
+ * still has to lay a chip the in-app dialog asks first: "Toch doorgaan".
+ */
+async function goOnHost(H, testid = 'room-next') {
+  const waiting = ((await hspec(H)).game.disco.chips || []).filter((c) => c.state === 'choosing');
+  await H.getByTestId(testid).click();
+  if (waiting.length) {
+    await H.getByTestId('disco-confirm').waitFor({ timeout: 5000 });
+    await H.getByTestId('disco-confirm-go').click();
+  }
+}
 
 /** The squares of the colour (avoid: the one that builds the least towards a line; best: the engine's best square). */
 function pickSquare(view, mode, pool = null) {
@@ -497,10 +533,7 @@ async function stampFast(P, mode, { joker = false } = {}) {
 async function answerUi(P, cat, song) {
   const page = P.page;
   const locked = () => page.locator('[data-testid="disco-answer-state"][data-state="locked"]').waitFor();
-  if (cat === 'decade') {
-    await page.getByTestId(`disco-decade-${decadeOf(song.year)}`).click();
-    await page.getByTestId('disco-lock').click();
-  } else if (cat === 'year') {
+  if (cat === 'year' || cat === 'exact') {
     await page.getByTestId('disco-year-input').fill(String(song.year));
     await page.getByTestId('disco-lock').click();
   } else {
@@ -598,7 +631,10 @@ async function discoGame(browser, rooms, server) {
   for (const p of [A, B, C]) assert(AVATARS.includes((await pview(p)).you.avatar), `${p.name} has an avatar in the room`);
   assert((await pview(A)).you.avatar === '🦄', 'Anouk has the avatar she picked on the join form');
   await H.getByTestId('room-game-disco').check().catch(() => {});
-  assert((await H.locator('input[name="game"]:checked').getAttribute('value')) === 'disco', 'Discobingo is the chosen game (winnen met 1 lijn)');
+  assert((await H.locator('input[name="game"]:checked').getAttribute('value')) === 'disco', 'Discobingo is the chosen game (eerste bingo bij 1 lijn)');
+  // the script times every answer itself: the spelleider reveals by hand
+  await H.getByTestId('room-disco-auto').uncheck();
+  await H.waitForFunction(() => window.__ttHost?.session?.room?.settings?.autoReveal === false);
   await H.getByTestId('room-start').click();
 
   // ----- the story: what each player does, round by round (the category comes from the seeded ball) -----
@@ -784,7 +820,12 @@ async function discoGame(browser, rooms, server) {
     assert(true, `round ${round} (${cat}): tv marks: ${NAMES.map((n) => `${n} ${rightNames.includes(n) ? `right 🔥${X[n].streak}` : plan.how[n]}${n === expectFast ? ' ⚡' : ''}${earned[n] ? ' +🃏' : ''}`).join(', ')}`);
     assert(rows.filter((x) => x.fastest).length === (expectFast ? 1 : 0), `round ${round}: ${expectFast ? 'exactly one' : 'no'} player has the snelste mark`);
     // the spelleider's regie shows the same marks
-    assert(await H.locator('[data-testid="disco-regie"] [data-testid="fastest-mark"]').count() === (expectFast ? 1 : 0), `round ${round}: the host's regie list shows ${expectFast ? 'one' : 'no'} ⚡`);
+    // (the host tab gets the reveal on its own connection: wait for it like for the tv, then check once more)
+    await poll(`round ${round}: the host's regie list shows ${expectFast ? 'one' : 'no'} ⚡`, async () => {
+      const n = await H.locator('[data-testid="disco-regie"] [data-testid="fastest-mark"]').count();
+      return n === (expectFast ? 1 : 0) ? null : `${n} marks`;
+    });
+    assert(true, `round ${round}: the host's regie list shows ${expectFast ? 'one' : 'no'} ⚡`);
 
     // ----- the phones: verdict moment (recorded), the numbers of the view -----
     for (const n of NAMES) {
@@ -895,8 +936,9 @@ async function discoGame(browser, rooms, server) {
       assert(S.base[id].streak === X[n].streak && S.base[id].jokers === X[n].jokers - (round === 4 && n === 'Anouk' ? 1 : 0), `round ${round}: standings say ${n} 🔥${S.base[id].streak} 🃏${S.base[id].jokers}`);
     }
     if (round === 4) X.Anouk.jokers--; // the joker is spent for good now
-    const nextState = await H.getByTestId('room-next').getAttribute('data-state');
-    if (nextState === 'won') {
+    // a bingo stops the game at once; the spelleider stops it (to the prize ceremony)
+    const stopNow = !!(await hspec(H)).game.disco.bingo;
+    if (stopNow) {
       won = true;
       S.wonRound = round;
       if (round <= 10) throw new Error(`ASSERT: the game ended already in round ${round} (a line too early for the script)`);
@@ -907,7 +949,7 @@ async function discoGame(browser, rooms, server) {
       assert((await pview(P.Bram)).game.disco.choice == null, 'round 4: Bram has not chosen a square');
     }
     // the second display (and the host) saw it all
-    await H.getByTestId('room-next').click();
+    await goOnHost(H, stopNow ? 'disco-finish' : 'room-next');
     if (round === 4) {
       await P.Bram.page.waitForFunction(() => window.__ttRoom.session.view.phase === 'answering' && window.__ttRoom.session.view.game.round === 5, null, { timeout: 15000 });
       const bv = await pview(P.Bram);
@@ -1075,6 +1117,7 @@ async function ceremony(R, X, S) {
   await shot(A.page, 'prizes');
   // reactions on the winner moment
   assert(await A.page.getByTestId('react-bar').count() === 1, 'the reaction bar is on the winner moment');
+  await pastServerGap(D, 'Anouk'); // (normally long over: no wait)
   await A.page.locator('[data-testid="react-btn"][data-emoji="🎉"]').click();
   await D.locator('[data-testid="screen-reaction"][data-emoji="🎉"][data-from="Anouk"]').first().waitFor({ state: 'attached', timeout: 8000 });
   assert(true, 'a reaction from the winner screen floats on the tv');
@@ -1157,9 +1200,9 @@ async function quickGame(R, max = 30) {
     await H.getByTestId('room-reveal').click();
     for (const n of NAMES) await P[n].page.waitForFunction((r) => { const v = window.__ttRoom.session.view; return v.phase === 'revealed' && v.game.round === r; }, round, { timeout: 15000 });
     for (const n of NAMES) await stampFast(P[n], 'best');
-    const st = await H.getByTestId('room-next').getAttribute('data-state');
-    await H.getByTestId('room-next').click();
-    if (st === 'won') { await H.locator('[data-testid="screen-room-host"][data-view="won"]').waitFor({ timeout: 15000 }); return round; }
+    const stop = !!(await hspec(H)).game.disco.bingo;
+    await goOnHost(H, stop ? 'disco-finish' : 'room-next');
+    if (stop) { await H.locator('[data-testid="screen-room-host"][data-view="won"]').waitFor({ timeout: 15000 }); return round; }
   }
   throw new Error('ASSERT: the quick game never ended');
 }
@@ -1219,6 +1262,7 @@ async function otherGames(R, { fresh = false } = {}) {
   await A.page.evaluate(() => window.__ttRoom.session.answer({ pass: true }));
   await A.page.getByTestId('react-bar').waitFor({ timeout: 10000 });
   assert(true, 'bingo: after answering the bar is there');
+  await pastServerGap(D, 'Anouk'); // her 🔥 of the quiz (normally long over: no wait)
   await A.page.locator('[data-testid="react-btn"][data-emoji="😮"]').click();
   await D.locator('[data-testid="screen-reaction"][data-emoji="😮"][data-from="Anouk"]').first().waitFor({ state: 'attached', timeout: 8000 });
   await H.locator('[data-testid="host-reaction"][data-emoji="😮"]').first().waitFor({ state: 'attached', timeout: 8000 });

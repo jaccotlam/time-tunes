@@ -12,7 +12,7 @@ import { createRoomServer } from '../../server/core.mjs';
 import { ROOM_IDLE_MS, PREPARED_IDLE_MS } from '../../server/room.mjs';
 import {
   hashPassword, verifyPassword, timingSafeEqual, parseToken, usernameProblem, validateData, PBKDF2_ITERATIONS,
-  SESSION_MS, LOGIN_FAILS, MAX_PREPARED_ROOMS, MAX_DATA_BYTES,
+  SESSION_MS, LOGIN_FAILS, MAX_PREPARED_ROOMS, MAX_DATA_BYTES, MAX_PLAYLIST_BYTES,
 } from '../../server/accounts.mjs';
 import { SERVER_PROTOCOL_VERSION } from '../../app/js/multi/server-protocol.js';
 
@@ -203,18 +203,29 @@ test('account-gegevens: playlists, Spotify Client ID en voorkeuren veld voor vel
     ['voorkeur fout type', { prefs: { hostPlays: 'ja' } }],
     ['__proto__', JSON.parse(`{"prefs": {"__proto__": {"admin": true}}}`)],
     ['constructor in nummer', { playlists: [{ ...playlist('p2', 1), tracks: [{ n: 1, itunesId: 5, constructor: { x: 1 } }] }] }],
+    ['deezer-id tekst', { playlists: [{ ...playlist('p2', 1), tracks: [{ n: 1, deezerId: '12' }] }] }],
+    ['deezer-id negatief', { playlists: [{ ...playlist('p2', 1), tracks: [{ n: 1, itunesId: 5, deezerId: -3 }] }] }],
+    ['isrc kapot', { playlists: [{ ...playlist('p2', 1), tracks: [{ n: 1, itunesId: 5, isrc: 'usrc1760783' }] }] }],
+    ['herkomst onbekend', { playlists: [playlist('p2', 1, 2, { source: { kind: 'youtube', id: 'x', name: 'y' } })] }],
+    ['herkomst spotify-id kapot', { playlists: [playlist('p2', 1, 2, { source: { kind: 'spotify', id: 'kort', name: 'y' } })] }],
+    ['stub van onbekende playlist', { playlists: [{ id: 'nope', updated: 1, same: true }] }],
+    ['te veel nummers', { playlists: [playlist('p2', 1, 2001)] }],
+    ['een playlist te groot', { playlists: [{ ...playlist('p2', 1, 2000), tracks: playlist('p2', 1, 2000).tracks.map((t) => ({ ...t, title: 'T'.repeat(200), artist: 'A'.repeat(200), album: 'B'.repeat(200) })) }] }],
   ];
   for (const [why, data] of refused) {
     const r = await save(data);
-    assert.equal(r.status, 400, why);
+    if (why === 'stub van onbekende playlist') { assert.equal(r.status, 409, why); assert.equal(r.body.code, 'conflict', why); continue; }
+    assert.equal(r.status, 400, `${why}: ${JSON.stringify(r.body).slice(0, 200)}`);
     assert.equal(r.body.code, 'data', why);
     assert.ok(r.body.message, why);
   }
   assert.equal(({}).admin, undefined, 'nothing polluted');
   // too big in total: 413 (each playlist is fine on its own)
-  const big = Array.from({ length: 16 }, (_, i) => playlist(`b${i}`, 1, 500));
+  const long = (id) => ({ ...playlist(id, 1, 2000), tracks: playlist(id, 1, 2000).tracks.map((t) => ({ ...t, previewUrl: null, title: `${'T'.repeat(150)}${t.n}`, artist: 'A'.repeat(60) })) });
+  const big = Array.from({ length: 11 }, (_, i) => long(`b${i}`));
+  assert.ok(JSON.stringify(big[0]).length < MAX_PLAYLIST_BYTES);
   const tooBig = await save({ playlists: big });
-  assert.equal(tooBig.status, 413);
+  assert.equal(tooBig.status, 413, JSON.stringify(tooBig.body).slice(0, 200));
   assert.ok(JSON.stringify(big).length > MAX_DATA_BYTES);
   // the account is unchanged after all refusals
   const g = await call('GET', '/account', null, { token });
@@ -517,8 +528,11 @@ test('Node: accounts en klaargezette kamers in een bestand overleven een herstar
   const room = await prepare(one.call, token);
   const normal = one.core.http({ method: 'POST', path: '/rooms', origin: ORIGIN, ip: '10.0.0.1', body: JSON.stringify({ v: V, id: 'owner01', name: 'X' }) }).body;
   one.core.flush();
-  assert.equal(statSync(file).mode & 0o777, 0o600, 'only the owner may read it (password hashes)');
-  assert.deepEqual(readdirSync(dir), ['accounts.json'], 'written atomically: no temp file left');
+  const folder = `${file}.d`;
+  const acctFile = join(folder, `a-${Buffer.from('ilse').toString('hex')}.json`);
+  assert.equal(statSync(acctFile).mode & 0o777, 0o600, 'only the owner may read it (password hashes)');
+  assert.deepEqual(readdirSync(dir).sort(), ['accounts.json.d'], 'nothing else; no old single file was there, so no marker either');
+  assert.deepEqual(readdirSync(folder).sort(), [`a-${Buffer.from('ilse').toString('hex')}.json`, `r-${room.code}.json`], 'one file per account and per prepared room, written atomically: no temp file left');
   const two = setup({ accountsFile: file });
   const g = await two.call('GET', '/account', null, { token });
   assert.equal(g.status, 200, 'the session survives too');
@@ -534,5 +548,5 @@ test('Node: accounts en klaargezette kamers in een bestand overleven een herstar
   // a deleted room leaves the file
   await two.call('POST', `/account/rooms/${room.code}/delete`, null, { token });
   two.core.flush();
-  assert.deepEqual(Object.keys(JSON.parse(readFileSync(file, 'utf8')).rooms), []);
+  assert.deepEqual(readdirSync(folder), [`a-${Buffer.from('ilse').toString('hex')}.json`]);
 });

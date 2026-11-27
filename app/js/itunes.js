@@ -31,7 +31,9 @@ export const MESSAGES = {
 export const errorMessage = (e) => MESSAGES[e?.code] || MESSAGES.http;
 
 const gap = () => {
-  const g = Number(store.get(GAP_KEY, null));
+  // (Number(null) is 0: an unset key must not mean "no gap")
+  const raw = store.get(GAP_KEY, null);
+  const g = typeof raw === 'number' || (typeof raw === 'string' && raw.trim() !== '') ? Number(raw) : NaN;
   return Number.isFinite(g) && g >= 0 ? g : DEFAULT_GAP_MS;
 };
 

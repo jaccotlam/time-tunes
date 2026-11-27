@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import { launch, startServer, assert, OUT } from './helpers.mjs';
 import { startRoomServer, phone, createRoom, joinRoom, waitForPlayers, serverHost } from './multi-helpers.mjs';
 import { installFakeItunes } from './fake-itunes.mjs';
-import { bestSquare, decadeOf } from '../../app/js/multi/disco.js';
+import { bestSquare } from '../../app/js/multi/disco.js';
 import { artistVerdict, titleVerdict } from '../../app/js/multi/match.js';
 
 // ---------- a playlist of 30 songs with names that can be typed wrongly ----------
@@ -212,7 +212,7 @@ const send = (p, ans) => p.page.evaluate((a) => window.__ttRoom.session.answer(a
 /** What a phone sends for `how` in a Discobingo round of category `cat`. */
 function discoAnswer(cat, song, how, round) {
   if (how === 'pass') return { pass: true };
-  if (cat === 'decade') return { decade: how === 'wrong' ? (decadeOf(song.year) === 1980 ? 1990 : 1980) : decadeOf(song.year) };
+  if (cat === 'exact') return { guess: how === 'wrong' ? song.year + 1 : song.year };
   if (cat === 'year') return { guess: how === 'wrong' ? song.year + 8 : song.year };
   const real = cat === 'artist' ? song.artist : song.title;
   return { text: how === 'wrong' ? `Raar antwoord ${round}` : how === 'doubt' ? doubtOf(cat, real) : real };
@@ -325,7 +325,11 @@ async function mainGame(browser, rooms, server) {
     await D.locator(`[data-testid="screen-game"][data-game="${val}"]`).waitFor({ timeout: 10000 });
     assert((await D.getByTestId('screen-game').textContent()).includes(label), `the host picks ${label}: the display says ${label} (${(await D.getByTestId('screen-game').textContent()).trim()})`);
   }
-  assert(/1 lijn/.test(await D.getByTestId('screen-game').textContent()), 'Discobingo on the display: "winnen met 1 lijn"');
+  assert(/eerste bingo bij 1 lijn/.test(await D.getByTestId('screen-game').textContent()), 'Discobingo on the display: "eerste bingo bij 1 lijn"');
+  // this game reveals by hand (the automatic reveal has its own game in multi-disco.e2e.mjs)
+  await H.getByTestId('room-disco-auto').evaluate((e) => e.scrollIntoView({ block: 'center' }));
+  await H.getByTestId('room-disco-auto').uncheck();
+  await D.waitForFunction(() => window.__ttScreen?.session?.view?.settings?.autoReveal === false, null, { timeout: 10000 });
   await shot(D, '02-lobby-players');
   await noScroll(D, 'lobby');
 
@@ -465,7 +469,8 @@ async function mainGame(browser, rooms, server) {
       if (hows[nm] !== 'right' || (nm === 'Cas' && S.left && !S.returned)) continue;
       stamped[nm] = await stampBest(p);
     }
-    if (stamped.Anouk != null) await D.locator('[data-testid="screen-result"][data-name="Anouk"][data-stamp="stamped"]').waitFor({ timeout: 8000 });
+    // (a chip that makes bingo switches the display to the bingo stop instead)
+    if (stamped.Anouk != null) await D.locator('[data-testid="screen-result"][data-name="Anouk"][data-stamp="stamped"], [data-testid="screen-bingo"]').first().waitFor({ timeout: 8000 });
     assert(stamped.Anouk != null, `round ${round}: Anouk stamped square ${stamped.Anouk}, the display says "afgestempeld"`);
 
     // ----- the ranking moment: when it gets exciting, at a bingo, every third round -----
@@ -474,9 +479,18 @@ async function mainGame(browser, rooms, server) {
     const bingoNow = prog.some((p) => p.bingo) || (sv.game.reveal.roundWinners || []).length > 0;
     const closeNow = prog.filter((p) => !p.bingo && p.toGo === 1).map((p) => p.name);
     const reason = bingoNow ? 'bingo' : closeNow.length ? 'close' : round % 3 === 0 ? 'round' : '';
-    const nextState = await attr(H, 'room-next', 'data-state');
-    assert(!bingoNow || nextState === 'won', `round ${round}: a bingo: the host's button reads "Naar de uitslag" (${nextState})`);
-    if (reason && !S.reasons.has(reason)) {
+    if (bingoNow) {
+      // a bingo stops the game: BINGO on the display at once, with the winner's card and line
+      await D.locator('[data-testid="screen-display"][data-moment="bingo"]').waitFor({ timeout: 8000 });
+      const bn = sv.game.disco.bingo.winners[0].name;
+      assert(new RegExp(`${bn} heeft 1 lijn`).test(await D.getByTestId('screen-bingo-who').textContent()), `round ${round}: the display says "${bn} heeft 1 lijn"`);
+      assert(await D.locator('[data-testid="screen-bingo-card-0"] [data-goal="true"]').count() >= 5, 'the winning line is lit on the winner\'s card on the display');
+      assert(/doorgaan voor 2 lijnen of een volle kaart, of stoppen/.test(await D.getByTestId('screen-bingo-next').textContent()), 'the display says what the leader may choose');
+      assert(await H.getByTestId('room-next').count() === 0 && await H.getByTestId('disco-finish').isVisible(), 'the host: no next song, but the bingo choices');
+      await shot(D, '05-bingo-stop');
+      await noScroll(D, 'bingo stop');
+      S.reasons.add('bingo');
+    } else if (reason && !S.reasons.has(reason)) {
       S.reasons.add(reason);
       await D.locator('[data-testid="screen-display"][data-moment="ranking"]').waitFor({ timeout: 16000 });
       const rk = D.getByTestId('screen-ranking');
@@ -506,11 +520,18 @@ async function mainGame(browser, rooms, server) {
     const seqOk = (seq, want) => JSON.stringify(seq.filter((x, i) => x && seq.indexOf(x) === i)) === JSON.stringify(want);
     if (round !== reloadRound) assert(seqOk(answering, ['spin', 'listen']), `round ${round}: the display's moments while the song plays: ${answering.join(' > ')} (spin > listen)`);
     else assert(answering.includes('listen') && !answering.includes('ranking') && !answering.includes('answers'), `round ${round}: the display's moments while the song plays: ${answering.join(' > ')}`);
-    assert(revealed[0] === 'answers' && !revealed.slice(1).some((m) => m !== 'ranking' && m !== 'answers'), `round ${round}: after the reveal: ${revealed.join(' > ')} (answers first, ranking after)`);
+    assert(revealed[0] === 'answers' && !revealed.slice(1).some((m) => m !== 'ranking' && m !== 'answers' && m !== 'bingo'), `round ${round}: after the reveal: ${revealed.join(' > ')} (answers first, ranking or the bingo after)`);
     assert(!answering.includes('ranking'), `round ${round}: no ranking while a song plays`);
     from = D.frames.length;
-    await H.getByTestId('room-next').click();
-    if (bingoNow) { finished = true; await D.locator('[data-testid="screen-display"][data-phase="won"]').waitFor({ timeout: 10000 }); }
+    // going on while an online player still has to lay a chip: the dialog first ("Toch doorgaan")
+    const waitingNow = ((await sview(D)).game.disco.chips || []).filter((c) => c.state === 'choosing').length;
+    await H.getByTestId(bingoNow ? 'disco-finish' : 'room-next').click();
+    if (waitingNow) { await H.getByTestId('disco-confirm').waitFor({ timeout: 5000 }); await H.getByTestId('disco-confirm-go').click(); }
+    if (bingoNow) {
+      // "Stop: naar de prijsuitreiking"
+      finished = true;
+      await D.locator('[data-testid="screen-display"][data-phase="won"]').waitFor({ timeout: 10000 });
+    }
   }
   assert(finished, 'the game ended with a bingo');
   assert(S.reasons.has('bingo') && S.reasons.has('close'), `rankings seen on the display: ${[...S.reasons].join(', ')} (close and bingo)`);
@@ -547,7 +568,8 @@ async function mainGame(browser, rooms, server) {
   assert(await X.getByTestId('screen-display').getAttribute('data-status') === 'prompt', '#/scherm shows the code prompt');
   await X.getByTestId('screen-code-input').fill(code.toLowerCase());
   await X.getByTestId('screen-code-submit').click();
-  await X.locator(`[data-testid="screen-display"][data-code="${code}"][data-status="online"]`).waitFor({ timeout: 15000 });
+  // (online can come a moment before the first state: wait for the phase too)
+  await X.locator(`[data-testid="screen-display"][data-code="${code}"][data-status="online"][data-phase="won"]`).waitFor({ timeout: 15000 });
   assert(X.url().endsWith(`#/scherm/${code}`) && await attr(X, 'screen-display', 'data-phase') === 'won', 'typing the code goes to the display of that room (here: the finished game)');
   // the 4th and 5th display
   const more = [];

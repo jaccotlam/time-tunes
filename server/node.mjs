@@ -77,7 +77,9 @@ export function startNodeServer({
     });
   });
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_CLIENT_MESSAGE, perMessageDeflate: false });
+  // a little room above the largest valid message: the room answers a too big deck with a
+  // clear error instead of `ws` closing the connection (above this `ws` still closes it)
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 2 * MAX_CLIENT_MESSAGE, perMessageDeflate: false });
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://x');
     const check = core.upgrade({ path: url.pathname, origin: req.headers.origin || '', ip: clientIp(req) });

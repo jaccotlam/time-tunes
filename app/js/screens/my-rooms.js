@@ -9,8 +9,8 @@
 import * as account from '../account.js';
 import * as playlists from '../playlists.js';
 import * as spotify from '../spotify.js';
-import { loadBuiltinDeck } from '../deck.js';
-import { BUILTIN_NAME, playlistDeck } from '../playlist-logic.js';
+import { loadBuiltinDeck, musicSource } from '../deck.js';
+import { BUILTIN_NAME, playlistDeck, playable } from '../playlist-logic.js';
 import { playableCards, normalizeSettings, PREFERRED_GAME } from '../multi/game.js';
 import { DISCO_MIN_SONGS } from '../multi/disco.js';
 import { QUIZ_COUNTS, QUIZ_TIMES, QUIZ_MIN_SONGS } from '../multi/quiz.js';
@@ -41,12 +41,12 @@ let cache = null; // { ok, rooms, max, at, user }
 let justMade = ''; // code of the room that was just prepared (the Deel page says so)
 
 /** Songs the lobby would count for this music (same filter as the host screen). */
-const songCount = (cards) => playableCards((cards || []).filter((c) => c.previewUrl || c.itunesId || c.spotifyId)).length;
+const songCount = (cards) => playableCards((cards || []).filter((c) => playable(c, musicSource()))).length;
 
-/** "Discobingo · winnen met 2 lijnen" */
+/** "Discobingo · eerste bingo bij 2 lijnen" */
 export function gameSummary(s) {
   if (!s) return '';
-  if (s.game === 'disco') return `Discobingo · winnen met ${winText(s.win)}`;
+  if (s.game === 'disco') return `Discobingo · eerste bingo bij ${winText(s.win)}`;
   if (s.game === 'bingo') return `Bingo · kaart van ${s.size}×${s.size}`;
   if (s.game === 'quiz') return `Quiz · ${quizSettingsText(s)}`;
   return `Tijdlijn · doel ${s.goal} kaarten`;
@@ -255,7 +255,7 @@ export function render(root, { params = [], navigate }) {
           ${musicOpt('mix', 'Mix van de groep', 'de favorieten van de spelers', 'prep-music-mix')}
         </div>
         ${needHtml(s, form.music)}
-        ${lists.length ? '' : '<p class="muted small">Eigen muziek? Maak eerst een <a href="#/playlists">playlist</a>; die komt dan hier te staan.</p>'}
+        <p class="muted small" data-testid="prep-music-hint">${lists.length ? 'Staat je lijst er niet bij? Kies of zoek hem eerst bij <a href="#/playlists" data-testid="prep-music-pick">Muziek kiezen</a> (bewaar hem daar); dan staat hij hier.' : 'Eigen muziek, of een hitlijst zoals de Top 40? Zoek of maak hem eerst bij <a href="#/playlists" data-testid="prep-music-pick">Muziek kiezen</a> (bewaar hem daar); dan staat hij hier.'}</p>
       </fieldset>
       <fieldset>
         <legend>Hoe klinkt de muziek?</legend>

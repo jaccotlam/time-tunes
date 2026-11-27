@@ -13,7 +13,7 @@
 import { MULTI_SERVER_URL } from '../../config.js';
 import { store } from '../ui.js';
 import {
-  SERVER_PROTOCOL_VERSION, serverBases, parseServerMessage, cardsForServer, PING_TEXT, PONG_TEXT, CLIENT_PING_MS, STALE_MS,
+  SERVER_PROTOCOL_VERSION, serverBases, parseServerMessage, fitCards, PING_TEXT, PONG_TEXT, CLIENT_PING_MS, STALE_MS,
 } from './server-protocol.js';
 import { playerId, JOIN_KEY, PLAYER_ID_KEY } from './client-session.js';
 import { HOST_ID_KEY, MULTI_SEED_KEY } from './host-session.js';
@@ -721,7 +721,12 @@ export function createServerHostSession() {
           if (closing) return;
           if (received.length < 3000) received.push(m);
           if (m.t === 'react') { reactions.push(m); return; }
-          if (m.t === 'backup' && m.snap && ident && m.snap.code === ident.code) { store.set(BACKUP_KEY, { code: ident.code, snap: m.snap }); return; }
+          if (m.t === 'backup' && m.snap && ident && m.snap.code === ident.code) {
+            // a big deck (2000 songs: ~400 kB) may not fit next to the playlists: then no copy at
+            // all rather than an older one that would bring back an earlier round
+            if (!store.set(BACKUP_KEY, { code: ident.code, snap: m.snap })) store.remove(BACKUP_KEY);
+            return;
+          }
           if (m.t === 'error') {
             if (m.code === 'notfound') { link.retry({ force: true }); return; }
             if (FATAL.includes(m.code)) { fatal({ code: m.code, message: m.message }); return; }
@@ -796,8 +801,14 @@ export function createServerHostSession() {
     /** Start a game: with `mix` the server takes the songs from the "Mix van de groep" (play: the music source here). */
     start(cards, { mix = false, play = 'preview' } = {}) {
       const fixed = store.get(MULTI_SEED_KEY, null);
-      // with the mix the own music still goes along: a quiz takes its wrong answers from it
-      send({ t: 'start', cards: cardsForServer(cards), mix, play, ...(Number.isInteger(fixed) ? { seed: fixed >>> 0 } : {}) });
+      // with the mix the own music still goes along: a quiz takes its wrong answers from it.
+      // The deck always fits in one message (fitCards); a very big one goes along in part.
+      const fit = fitCards(cards);
+      if (fit.cut > 0) {
+        notice = { message: `Deze lijst is te groot om in één keer naar de server te sturen: ${fit.cards.length} van de ${fit.cards.length + fit.cut} nummers doen mee (willekeurig gekozen).` };
+        emit();
+      }
+      send({ t: 'start', cards: fit.cards, mix, play, ...(Number.isInteger(fixed) ? { seed: fixed >>> 0 } : {}) });
     },
     mixAdd(tracks) { return !!link?.send({ t: 'mix-add', tracks }); },
     mixClear() { return !!link?.send({ t: 'mix-clear' }); },
@@ -838,6 +849,11 @@ export function createServerHostSession() {
     serverNow: () => Date.now() + clock,
     override(pid) { send({ t: 'override', pid }); },
     next() { send({ t: 'next' }); },
+    /** Discobingo: "Wacht nog" (no automatic reveal this round). */
+    hold() { const g = st?.view?.game; if (g) send({ t: 'hold', round: g.round }); },
+    /** Discobingo, on a bingo stop: go on for 'line2' / 'full', or stop (the prize ceremony). */
+    goOn(win) { send({ t: 'continue', win }); },
+    finish() { send({ t: 'finish' }); },
     toLobby() { send({ t: 'lobby' }); },
     remove(pid) { send({ t: 'remove', pid }); },
     /** The owner takes the lead back. */

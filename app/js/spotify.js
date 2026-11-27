@@ -4,7 +4,7 @@
 import { SPOTIFY_CLIENT_ID } from '../config.js';
 import { store, toast } from './ui.js';
 import * as pkce from './pkce.js';
-import { bestMatch, searchQueries, isSpotifyId } from './spotify-match.js';
+import { bestMatch, isrcMatch, searchQueries, isSpotifyId } from './spotify-match.js';
 import { codeForApi, codeForToken, codeForCallback, looksLikeClientId as isClientId } from './spotify-setup.js';
 
 const API = 'https://api.spotify.com/v1';
@@ -482,6 +482,31 @@ export function seek(positionMs) {
   return api('/me/player/seek', { method: 'PUT', query: { position_ms: Math.max(0, Math.round(positionMs)), ...(d ? { device_id: d.id } : {}) } });
 }
 
+/**
+ * The volume of the device that plays (or the chosen one): { volume, supports } or null.
+ * `supports` is Spotify's supports_volume: only then may fade.js change it. `deviceId`: that device.
+ */
+export async function volumeInfo() {
+  const j = await api('/me/player');
+  let d = j?.device || null;
+  if (!d) {
+    const id = getDevice()?.id;
+    const list = (await api('/me/player/devices'))?.devices || [];
+    d = list.find((x) => x?.id === id) || list.find((x) => x?.is_active) || null;
+  }
+  if (!d) return null;
+  const volume = Number(d.volume_percent);
+  // deviceId: fade.js remembers which device it lowered (a tab killed mid-fade: fixed at the next start)
+  return { volume, supports: d.supports_volume !== false && Number.isFinite(volume), deviceId: typeof d.id === 'string' ? d.id : null };
+}
+
+/** Set the device volume (0-100). Used for the fades of fade.js, which always puts the user's volume back. */
+export function setVolume(percent, { keepalive = false } = {}) {
+  const d = getDevice();
+  const v = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+  return api('/me/player/volume', { method: 'PUT', query: { volume_percent: v, ...(d ? { device_id: d.id } : {}) }, keepalive });
+}
+
 /** Current playback: { isPlaying, progressMs, uri, durationMs, deviceId } or null. */
 export async function playbackState() {
   const j = await api('/me/player');
@@ -497,12 +522,14 @@ export async function playbackState() {
 
 /* ---------- card -> track ---------- */
 
-const cacheKey = (card) => String(card.itunesId ?? `${card.title}|${card.artist}`);
+const ISRC_RE = /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/;
+const cacheKey = (card) => String(card.itunesId ?? card.deezerId ?? card.isrc ?? `${card.title}|${card.artist}`);
 
 /**
  * The Spotify track for a card: { id, uri, durationMs } or null (no reliable match).
- * Uses card.spotifyId when present, else searches with the user's token and caches
- * the result per card id in localStorage.
+ * Uses card.spotifyId when present; else an exact search on the card's ISRC (isrc:XXX) when it
+ * has one, then the title / artist searches, with the user's token; the result is cached per
+ * card id in localStorage.
  */
 export async function resolveTrack(card, { wantDuration = false } = {}) {
   if (isSpotifyId(card.spotifyId)) {
@@ -519,10 +546,17 @@ export async function resolveTrack(card, { wantDuration = false } = {}) {
     if (hit.none && Date.now() - (hit.t || 0) < NO_MATCH_RETRY_MS) return null;
   }
   let match = null;
-  for (const q of searchQueries(card)) {
-    const j = await api('/search', { query: { q, type: 'track', limit: 10, market: MARKET } });
-    match = bestMatch(card, j?.tracks?.items);
-    if (match) break;
+  const isrc = typeof card.isrc === 'string' && ISRC_RE.test(card.isrc) ? card.isrc : null;
+  if (isrc) {
+    const j = await api('/search', { query: { q: `isrc:${isrc}`, type: 'track', limit: 10, market: MARKET } });
+    match = isrcMatch(card, j?.tracks?.items);
+  }
+  if (!match && String(card.title || '').trim() && String(card.artist || '').trim()) {
+    for (const q of searchQueries(card)) {
+      const j = await api('/search', { query: { q, type: 'track', limit: 10, market: MARKET } });
+      match = bestMatch(card, j?.tracks?.items);
+      if (match) break;
+    }
   }
   const fresh = store.get(K.matches, {}) || {};
   fresh[card.id] = match

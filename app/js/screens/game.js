@@ -8,6 +8,8 @@ import { icons, esc, store, vibrate, reducedMotion, toast } from '../ui.js';
 import { playerViewHtml, mountPlayerView } from './playerview.js';
 import { answerHtml } from './answer.js';
 import { isPlayable, deckSnapshot } from '../deck.js';
+import { gameSeed } from '../multi/order.js';
+import * as played from '../played.js';
 import { deckLineHtml, deckLabel } from './deckline.js';
 
 export const name = 'game';
@@ -255,9 +257,11 @@ export function render(root, { deck }) {
     try {
       game = createGame({
         names: setup.names, goal: setup.goal,
-        cards: playable.map((c) => ({ id: c.id, year: c.year })),
-        seed: (Math.random() * 2 ** 32) >>> 0,
+        cards: playable.map((c) => ({ id: c.id, year: c.year, title: c.title, artist: c.artist })),
+        seed: gameSeed(),
+        history: played.historyFor(deck.id),
       });
+      played.startedGame(deck.id);
       game.deck = deckSnapshot(deck, playable);
     } catch (e) {
       toast(e.message, { kind: 'warn' });
@@ -272,6 +276,7 @@ export function render(root, { deck }) {
     game = startTurn(game);
     save();
     if (game.phase === 'won') { player.stop(); draw('won'); return; }
+    played.playedSong(deck.id, card(game.currentCard)); // the next game with this deck plays other songs first
     player.load(card(game.currentCard)); // prefetch while the phone is passed on
     selectedSlot = null;
     draw('handoff');

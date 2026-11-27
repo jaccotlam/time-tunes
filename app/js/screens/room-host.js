@@ -3,6 +3,8 @@
 // along on the same device; that panel is built from the same player view as a phone.
 import * as player from '../player.js';
 import { playableCards, PREFERRED_GAME } from '../multi/game.js';
+import { playable, playlistDeck } from '../playlist-logic.js';
+import { musicSource } from '../deck.js';
 import { DISCO_MIN_SONGS } from '../multi/disco.js';
 import { createHostSession, storedRoom } from '../multi/host-session.js';
 import { usesServer, createServerHostSession, storedServerHost, copyText } from '../multi/server-session.js';
@@ -11,7 +13,7 @@ import { QUIZ_COUNTS, QUIZ_TIMES, QUIZ_MIN_SONGS, quizTypesFor } from '../multi/
 import * as spotify from '../spotify.js';
 import { createMixShare, forgetMixShare } from '../multi/mix-share.js';
 import {
-  mixBlockHtml, mixServerOnlyHtml, mixKey, onMixChange, mixShortage,
+  mixBlockHtml, mixServerOnlyHtml, mixKey, onMixChange, mixShortage, bindMixPanel,
 } from './room-mix.js';
 import { icons, esc, toast, vibrate, store } from '../ui.js';
 import { playerViewHtml, mountPlayerView } from './playerview.js';
@@ -24,11 +26,51 @@ import {
 import {
   createDiscoStage, discoLandedAt, discoController, discoAnswerHtml, discoCardHtml, cardStatsHtml, spinWaitHtml,
   discoMyResultHtml, regieHtml, discoProgressHtml, nextButtonHtml, discoLobbyHtml,
+  bingoStopHtml, chipSummary, confirmGoOn, autoTimerHtml, tickAutoTimers, stagesHtml,
 } from './room-disco.js';
+import { createRoundMusic, FADE_OUT_MS } from '../fade.js';
 import { createFloatLayer, awardsListHtml, avatarSheetHtml, avatarHtml } from './party-ui.js';
 import { hostLobbyAccountHtml, hostSetupAccountHtml, accountName } from './account-bits.js';
+import { setPick, clearPick, takePicked } from './music-bits.js';
+import { heldNoteHtml } from './deckline.js';
+import * as playlists from '../playlists.js';
+import * as enrich from '../enrich.js';
 
 export const name = 'room-host';
+
+/*
+ * "Andere muziek kiezen" (lobby, via the room server): the hub (#/playlists) opens in pick mode
+ * while this phone stays IN the room. The live session is parked here instead of destroyed, so
+ * the connection, the code, the players and the lead stay exactly as they are (nobody sees the
+ * spelleider as away); coming back to #/spelleider picks the same session up again. A parked
+ * session that is not picked up (another screen, or after PARK_MS) is closed the normal way
+ * (as when the screen is left: the server then counts the spelleider as away).
+ */
+const PARK_MS = 20 * 60 * 1000;
+let parked = null; // { session, timer, onHash }
+function parkSession(s) {
+  dropParked();
+  const onHash = () => {
+    const h = location.hash || '#/';
+    if (!/^#\/playlists(?:\/[A-Za-z0-9_-]+)?\/?$/.test(h) && !/^#\/spelleider\/?$/.test(h)) dropParked();
+  };
+  parked = { session: s, timer: setTimeout(dropParked, PARK_MS), onHash };
+  window.addEventListener('hashchange', onHash);
+}
+function takeParked() {
+  if (!parked) return null;
+  const { session: s, timer, onHash } = parked;
+  clearTimeout(timer);
+  window.removeEventListener('hashchange', onHash);
+  parked = null;
+  return s;
+}
+function dropParked() {
+  const s = takeParked();
+  if (s) { try { s.destroy(); } catch (e) { console.error(e); } }
+}
+/** Tests / diagnostics: is a room session parked while the hub chooses music? */
+export const parkedCode = () => parked?.session?.code || null;
 const HOST_NAME_KEY = 'timetunesr.multiName.v1';
 const SETTINGS_KEY = 'timetunesr.multiSettings.v1';
 /** Set once the lobby has switched to Discobingo for this phone (version 2 default, one time). */
@@ -39,11 +81,37 @@ const wide = () => typeof matchMedia === 'function' && matchMedia('(min-width: 9
 const screenLink = (code) => `${appBase()}#/scherm/${code}`;
 const tvIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="2.5" y="4.5" width="19" height="12.5" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 20.5h8M12 17v3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
-export function render(root, { deck, navigate }) {
-  const cards = playableCards(deck.cards.filter((c) => c.previewUrl || c.itunesId || c.spotifyId));
+/** A round of a game is in progress: the background year check (enrich.js) waits meanwhile. */
+const ROUND_PHASES = new Set(['answering', 'revealed']);
+
+export function render(root, { deck: firstDeck, navigate }) {
+  // The deck of an own playlist is LIVE here: the year check goes on in the lobby (and on the
+  // winner screen), and every song it checks joins the deck the next game starts with.
+  let deck = firstDeck;
+  const cardsOf = (d) => playableCards(d.cards.filter((c) => playable(c, musicSource())));
+  let cards = cardsOf(deck);
+  /** Rebuild the deck of the own playlist from the store (the same rule as loadDeck()). */
+  function refreshDeck() {
+    if (deck?.kind !== 'playlist') return;
+    const p = playlists.get(deck.id);
+    if (!p) return;
+    deck = playlistDeck(p, musicSource());
+    cards = cardsOf(deck);
+    quizTypes = quizTypesFor(cards);
+  }
+  /** What the lobby shows of the deck (count, held back): a change redraws it. */
+  const deckKey = () => {
+    const p = deck?.kind === 'playlist' ? playlists.get(deck.id) : null;
+    return `${cards.length}|${p ? JSON.stringify(playlists.deckCounts(p, musicSource())) : ''}`;
+  };
   // with a room server the server holds the room; without one this phone does (PeerJS)
   const viaServer = usesServer();
-  let session = viaServer ? createServerHostSession() : createHostSession();
+  // back from "Andere muziek kiezen": the same, still connected session
+  const resumed = viaServer ? takeParked() : null;
+  let session = resumed || (viaServer ? createServerHostSession() : createHostSession());
+  let parking = false; // leaving for the music hub: keep the session alive (see parkSession)
+  let picked = takePicked(); // the hub chose music for this room: say so once in the lobby
+  clearPick();
   let unsub = session.subscribe(() => {
     const n = session.takeNotice?.();
     if (n) toast(n.message, { kind: 'warn' });
@@ -66,7 +134,7 @@ export function render(root, { deck, navigate }) {
     msFor = key;
     if (!key) return;
     const s = session;
-    ms = createMixShare({ code, memberId: () => s.memberId, session: s, returnHash: '#/spelleider', onChange: () => draw() });
+    ms = createMixShare({ code, memberId: () => s.memberId, session: s, returnHash: '#/spelleider', onChange: () => draw(), inLobby: () => s.room?.phase === 'lobby' });
   }
   let viewName = null;
   let drawnKind = '';
@@ -100,7 +168,13 @@ export function render(root, { deck, navigate }) {
     refresh: () => draw(),
   });
   let stage = null;
-  let discoPlayFor = null; // "round:songId" that starts playing once the ball has landed
+  let discoPlayFor = null; // "round:songId" that starts playing once the ball has landed (a round this page did not start)
+  // Discobingo's music: fade-in during the spin, fade-out at the end, the user's Spotify volume always restored
+  let music = null;
+  const roundMusic = () => (music ??= createRoundMusic({ player, spotifyApi: { info: spotify.volumeInfo, setVolume: spotify.setVolume, pause: () => spotify.pause() } }));
+  let switching = false; // the previous round's song is fading out before the next one loads
+  let stopFadedFor = null; // the round whose music faded out for the bingo stop
+  let confirming = false; // the "nog niet iedereen heeft een fiche gelegd" dialog is open
   /** Discobingo is running (not the lobby). */
   const inDisco = () => session?.room?.game?.kind === 'disco' && session.room.phase !== 'lobby';
 
@@ -108,7 +182,7 @@ export function render(root, { deck, navigate }) {
   /** A quiz is running (not the lobby). */
   const inQuiz = () => session?.room?.game?.kind === 'quiz' && session.room.phase !== 'lobby';
   const serverNow = () => (session?.serverNow ? session.serverNow() : Date.now());
-  const quizTypes = quizTypesFor(cards);
+  let quizTypes = quizTypesFor(cards);
   let reportedFor = { key: '', at: 0 }; // when this phone last told the server that the music plays
   let quizSending = null; // round of an own quiz answer on its way
   /** Via the server: may this phone run the room (reveal, next ...)? */
@@ -203,12 +277,33 @@ export function render(root, { deck, navigate }) {
     const r = session.room;
     const g = r?.game;
     const song = g && r.phase !== 'won' && r.phase !== 'lobby' ? session.currentSong() : null;
+    if (switching) return; // the old song is still fading out: the next one follows by itself
     if (!song) {
-      if (loadedFor) { player.stop(); loadedFor = null; }
+      if (loadedFor) {
+        // Discobingo (the winner screen, back to the lobby): a short fade instead of a cut
+        if (g?.kind === 'disco' && music) { switching = true; loadedFor = null; music.fadeOutThen(() => { player.stop(); }).finally(() => { switching = false; draw(); }); return; }
+        player.stop(); loadedFor = null;
+      }
       discoPlayFor = null;
       return;
     }
     const k = `${g.round}:${song.id}`;
+    // Discobingo, a bingo stop: the music fades out (once) while everybody looks at the bingo
+    const stopNow = g.kind === 'disco' && !!spectator()?.game?.disco?.bingo;
+    if (stopNow && k === loadedFor && stopFadedFor !== g.round) {
+      stopFadedFor = g.round;
+      discoPlayFor = null;
+      // fade out what plays; a song still loading does not start any more
+      if (player.state.status === 'playing') roundMusic().fadeOutThen(() => player.pause());
+      else player.pause();
+      return;
+    }
+    // Discobingo, the next round while the last song still plays: fade it out first
+    if (g.kind === 'disco' && k !== loadedFor && loadedFor && player.state.status === 'playing') {
+      switching = true;
+      roundMusic().fadeOutThen(() => { player.stop(); loadedFor = null; }, FADE_OUT_MS).finally(() => { switching = false; draw(); });
+      return;
+    }
     if (k === loadedFor) {
       // Discobingo: the music starts when the ball has landed (the round was started by a tap here)
       // (only while answering: after an early Onthul the music is not started any more)
@@ -217,12 +312,18 @@ export function render(root, { deck, navigate }) {
       return;
     }
     loadedFor = k;
-    if (g.kind === 'disco' && r.phase === 'answering') {
-      // load now (so it is ready), play once the ball lands; the tap that started the round unlocked the audio
+    if (g.kind === 'disco') {
+      // the round was started by a tap here (that tap unlocked the audio): the song starts at
+      // once, silent, and fades in to full volume by the time the ball lands. Revealed already
+      // (an early Onthul while the last song was still fading out) or a bingo: it does not start.
       player.load(song, { autoplay: false });
-      discoPlayFor = startedHere ? k : null;
+      const here = startedHere;
       startedHere = false;
-      if (discoPlayFor && discoLanded()) { discoPlayFor = null; player.play(); }
+      discoPlayFor = null;
+      if (here && !stopNow && r.phase === 'answering') {
+        const landAt = discoLandedAt(spectator()?.game?.disco);
+        roundMusic().fadeInPlay(Math.max(0, Math.min(5000, landAt - serverNow())));
+      }
       return;
     }
     discoPlayFor = null;
@@ -231,8 +332,14 @@ export function render(root, { deck, navigate }) {
     startedHere = false;
   }
 
+  /** The year check pauses only while a round is in progress (and while it connects: unknown yet). */
+  function syncWorker(vn) {
+    if (vn === 'connecting' || ROUND_PHASES.has(vn)) enrich.pause('game');
+    else enrich.resume('game');
+  }
   function draw() {
     const vn = currentView();
+    syncWorker(vn);
     const kind = session.room?.game?.kind || '';
     if (vn !== viewName || kind !== drawnKind) { viewName = vn; drawnKind = kind; skeleton(vn); window.scrollTo(0, 0); }
     const landed = syncStage(vn);
@@ -258,18 +365,21 @@ export function render(root, { deck, navigate }) {
     if (regions.pv) regions.pv.hidden = !leads() || (inDisco() && vn === 'answering' && !landed);
     ensureMix();
     const mixMeta = viaServer ? JSON.stringify([m?.mix, playSource()]) : '';
-    region('mix', `${vn}|${r.settings.music}|${viaServer ? mixKey(ms, m) : 'p2p'}`, () => {
+    // the spelleider's lobby says what helps while the mix is too small to start
+    const mixShort = viaServer && vn === 'lobby' && leads() ? mixShortage(m?.mix, r.settings, r.players.length, playSource()) : null;
+    region('mix', `${vn}|${r.settings.music}|${viaServer ? mixKey(ms, m, [mixShort?.missing, r.settings.game]) : 'p2p'}`, () => {
       if (!viaServer) return vn === 'lobby' ? mixServerOnlyHtml() : '';
-      return ms ? mixBlockHtml(ms, m, { inGame: vn !== 'lobby', music: r.settings.music, leader: true }) : '';
+      return ms ? mixBlockHtml(ms, m, { inGame: vn !== 'lobby', music: r.settings.music, leader: true, shortage: mixShort, gameLabel: gameName(r.settings.game) }) : '';
     });
     if (vn === 'lobby') {
-      region('main', JSON.stringify([r.settings, r.players.length, mixMeta, leads()]), lobbyHtml);
-      region('cta', JSON.stringify([r.players.length, r.settings, leads(), mixMeta]), () => (leads() ? lobbyCta() : ''));
+      const dk = deckKey();
+      region('main', JSON.stringify([r.settings, r.players.length, mixMeta, leads(), dk]), lobbyHtml);
+      region('cta', JSON.stringify([r.players.length, r.settings, leads(), mixMeta, dk]), () => (leads() ? lobbyCta() : ''));
     } else if (vn === 'answering' && kind === 'disco') {
       region('progress', JSON.stringify([sv.game.disco.progress]), () => `<h2 class="room-h">Voortgang</h2>${discoProgressHtml(sv)}`);
       const hv = session.hostView();
       region('own', `${dctl.key()}|${landed}`, () => (hv ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw antwoord, ${esc(hv.you.name)}</h2>${landed ? discoAnswerHtml(hv, dctl.local) : spinWaitHtml()}${hv.game?.mine ? discoCardHtml(hv.game.mine, { cat: landed ? hv.game.disco.cat : null, testid: 'host-disco-card', name: hv.you.name }) : ''}</section>` : ''));
-      region('cta', JSON.stringify([sv.players, leads()]), () => (leads() ? revealCta(sv) : ''));
+      region('cta', JSON.stringify([sv.players, leads(), sv.game.disco.autoAt, sv.game.disco.autoHeld]), () => (leads() ? revealCta(sv) : ''));
     } else if (vn === 'answering' && kind === 'quiz') {
       const now = serverNow();
       const q = sv.game.quiz;
@@ -292,7 +402,7 @@ export function render(root, { deck, navigate }) {
     } else if (vn === 'revealed' && kind === 'disco') {
       region('song', JSON.stringify([sv.game.reveal?.song]), () => songHtml(sv));
       region('progress', JSON.stringify([sv.game.disco.progress]), () => `<h2 class="room-h">Voortgang</h2>${discoProgressHtml(sv)}`);
-      region('main', JSON.stringify([sv.game.reveal, sv.game.disco]), () => regieHtml(sv));
+      region('main', JSON.stringify([sv.game.reveal, sv.game.disco]), () => `${sv.game.disco.bingo ? `${confettiHtml()}${bingoStopHtml(sv)}` : ''}${stagesHtml(sv.game.disco)}${regieHtml(sv)}`);
       const hv = session.hostView();
       region('own', JSON.stringify([hv?.game?.reveal?.mine, hv?.game?.disco, hv?.game?.mine]), () => (hv?.game?.mine ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw ronde, ${esc(hv.you.name)}</h2>${discoMyResultHtml(hv)}${ownCard(hv)}</section>` : ''));
       region('cta', JSON.stringify([sv.game.disco, sv.game.reveal?.roundWinners, left(r.game), leads()]), () => (leads() ? nextButtonHtml(sv, { left: left(r.game) }) : ''));
@@ -506,12 +616,14 @@ export function render(root, { deck, navigate }) {
         <legend>Welke muziek?</legend>
         <div class="size-pick">
           <label class="size-opt"><input type="radio" name="music" value="deck" ${!isMix ? 'checked' : ''} data-testid="room-music-deck">
-            <span class="size-box"><b>Jouw muziek</b><small>${esc(deck.name || 'TimeTunesr-deck')} · ${cards.length} nummers</small></span></label>
+            <span class="size-box"><b>Jouw muziek</b><small data-testid="room-music-name">${esc(deck.name || 'TimeTunesr-deck')} · ${cards.length} nummers</small></span></label>
           <label class="size-opt"><input type="radio" name="music" value="mix" ${isMix ? 'checked' : ''} ${can || isMix ? '' : 'disabled'} data-testid="room-music-mix">
             <span class="size-box"><b>Mix van de groep</b><small data-testid="room-mix-have" data-have="${short.have}">${short.have} nummers van ${mix?.contributors || 0} ${mix?.contributors === 1 ? 'speler' : 'spelers'}</small></span></label>
         </div>
-        ${can ? (isMix ? `<p class="muted small" data-testid="room-mix-ok">Genoeg nummers: de server stelt de lijst eerlijk samen uit ieders favorieten (dubbele één keer, zekere jaartallen eerst).${esc(extra)}</p>` : '')
-    : `<p class="${isMix ? 'warn' : 'muted'} small mix-need" data-testid="room-mix-need" data-missing="${short.missing}">${isMix ? 'Te weinig nummers in de mix. ' : ''}Voor ${esc(gameName(s.game))}${s.game === 'bingo' ? ` ${s.size}×${s.size}` : s.game === 'quiz' ? ` (${s.questions} vragen)` : s.game === 'disco' ? '' : ` (doel ${s.goal})`} zijn er minstens ${short.need} nodig: nog ${short.missing}. Laat spelers op hun eigen telefoon <b>Doe mijn favorieten erbij</b> kiezen.${esc(extra)}</p>`}
+        <button class="btn btn-ghost btn-small room-music-other" type="button" data-action="music-other" data-testid="room-music-other">${icons.music}<span>Andere muziek kiezen</span></button>
+        ${!isMix ? heldNoteHtml(deck) : ''}
+        ${can ? (isMix ? `<p class="muted small" data-testid="room-mix-ok">Genoeg nummers: de server stelt de lijst eerlijk samen uit ieders playlists en favorieten (dubbele één keer, zekere jaartallen eerst).${esc(extra)}</p>` : '')
+    : `<p class="${isMix ? 'warn' : 'muted'} small mix-need" data-testid="room-mix-need" data-missing="${short.missing}">${isMix ? 'Te weinig nummers in de mix. ' : ''}Voor ${esc(gameName(s.game))}${s.game === 'bingo' ? ` ${s.size}×${s.size}` : s.game === 'quiz' ? ` (${s.questions} vragen)` : s.game === 'disco' ? '' : ` (doel ${s.goal})`} zijn er minstens ${short.need} nodig: nog ${short.missing}. Laat iedereen op de eigen telefoon <b>een playlist kiezen</b> (zonder inloggen) of zijn Spotify-favorieten delen.${esc(extra)}</p>`}
       </fieldset>`;
   }
 
@@ -533,9 +645,30 @@ export function render(root, { deck, navigate }) {
     const online = sv.players.filter((p) => p.playing && p.online);
     const ready = online.length > 0 && online.every((p) => p.answered);
     const done = online.filter((p) => p.answered).length;
+    // Discobingo: everybody answered -> the shared, subtle countdown to the automatic reveal
+    const d = sv.game.kind === 'disco' ? sv.game.disco : null;
+    const auto = d && Number.isFinite(d.autoAt) ? `<div class="disco-auto-row" data-testid="disco-auto-row">${autoTimerHtml(d, serverNow())}<button class="btn btn-small btn-ghost" type="button" data-action="disco-hold" data-testid="disco-hold">Wacht nog</button></div>` : '';
+    const held = d?.autoHeld ? '<p class="muted small disco-auto-held" data-testid="disco-auto-held">Deze ronde onthul je zelf.</p>' : '';
     return `<div class="sticky-cta">
+      ${auto}${held}
       <button class="btn btn-primary btn-xl room-reveal ${ready ? 'is-ready' : ''}" type="button" data-action="reveal" data-testid="room-reveal" data-ready="${ready}">${icons.eye}<span>${ready ? 'Iedereen is klaar: onthul!' : `Onthul (${done}/${online.length})`}</span></button>
     </div>`;
+  }
+
+  /**
+   * Discobingo: going on while online players still have to lay their chip asks first (an
+   * in-app dialog naming them); away players and an empty list never ask. Then `go()`.
+   */
+  function goOnChecked(go) {
+    const sv = spectator();
+    const waiting = sv?.game?.disco ? chipSummary(sv.game.disco).waiting : [];
+    if (!waiting.length) { go(); return; }
+    if (confirming) return;
+    confirming = true;
+    confirmGoOn(waiting, { host: root.querySelector('[data-testid="screen-room-host"]') || root }).then((ok) => {
+      confirming = false;
+      if (ok && session?.room?.phase === 'revealed') go();
+    });
   }
 
   function hostResults(sv) {
@@ -603,6 +736,7 @@ export function render(root, { deck, navigate }) {
     const hv = session.hostView();
     return `${confettiHtml()}
       ${quiz ? quizPodiumHtml(sv) : sv.game.kind === 'disco' ? `${winnerHtml(sv)}
+      ${stagesHtml(sv.game.disco, { testid: 'host-stages' })}
       ${sv.game.disco?.awards?.length ? `<section class="host-awards" data-testid="host-awards-box"><h2 class="room-h">Prijzen</h2>${awardsListHtml(sv.game.disco.awards, { testid: 'host-awards', itemTestid: 'host-award', cls: 'is-host' })}</section>` : ''}
       ${discoProgressHtml(sv)}
       ${hv?.game?.mine ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw kaart, ${esc(hv.you.name)}</h2>${ownCard(hv)}</section>` : ''}` : `${winnerHtml(sv)}
@@ -671,6 +805,7 @@ export function render(root, { deck, navigate }) {
       case 'again':
         startedHere = true;
         player.unlock();
+        refreshDeck(); // the songs checked up to this moment play along
         guard(() => (viaServer ? session.start(cards, { mix: session.room?.settings.music === 'mix', play: playSource() }) : session.start(cards)));
         window.scrollTo(0, 0);
         break;
@@ -687,11 +822,23 @@ export function render(root, { deck, navigate }) {
         if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus({ preventScroll: true }); el.classList.remove('is-called'); void el.offsetWidth; el.classList.add('is-called'); }
         break;
       }
-      case 'next':
-        startedHere = true;
-        guard(() => session.next());
-        window.scrollTo(0, 0);
+      case 'next': {
+        const go = () => {
+          startedHere = true;
+          player.unlock();
+          guard(() => session.next());
+          window.scrollTo(0, 0);
+        };
+        if (inDisco()) goOnChecked(go); else go();
         break;
+      }
+      case 'disco-hold': guard(() => session.hold()); break;
+      case 'disco-continue': {
+        const win = a.dataset.win;
+        goOnChecked(() => { startedHere = true; player.unlock(); guard(() => session.goOn(win)); window.scrollTo(0, 0); });
+        break;
+      }
+      case 'disco-finish': goOnChecked(() => guard(() => session.finish())); break;
       case 'lobby': guard(() => session.toLobby()); break;
       case 'remove':
         if (window.confirm(`${a.dataset.name} uit de kamer verwijderen?`)) guard(() => session.remove(a.dataset.id));
@@ -705,6 +852,14 @@ export function render(root, { deck, navigate }) {
         session.copyDiag?.().then((ok) => toast(ok ? 'Diagnose gekopieerd. Plak hem in een bericht.' : 'Kopiëren lukte niet.', { kind: ok ? 'info' : 'warn' }));
         break;
       case 'reclaim': guard(() => session.reclaim()); break;
+      case 'music-other': {
+        // the hub in pick mode; this phone stays in the room meanwhile (the session is parked)
+        const code = session.room?.code || session.code;
+        if (!code || !setPick({ kind: 'room', code, back: '#/spelleider' })) { navigate('#/playlists'); break; }
+        parking = true;
+        navigate('#/playlists');
+        break;
+      }
       case 'mix-share': ms?.share(); break;
       case 'mix-withdraw': ms?.withdraw(); break;
       case 'close-room':
@@ -727,6 +882,7 @@ export function render(root, { deck, navigate }) {
     else if (t.name === 'qtype') guard(() => session.setSettings({ qtype: t.value }));
     else if (t.name === 'qtime') guard(() => session.setSettings({ think: Number(t.value) }));
     else if (t.name === 'win') guard(() => session.setSettings({ win: t.value }));
+    else if (t.name === 'autoReveal') guard(() => session.setSettings({ autoReveal: !!t.checked }));
   }
 
   function onSubmit(e) {
@@ -760,21 +916,42 @@ export function render(root, { deck, navigate }) {
   const onInput = (e) => (inDisco() ? dctl.onInput(e) : ctl.onInput(e));
   root.addEventListener('input', onInput);
   root.addEventListener('keydown', onKey);
+  const offMixPanel = bindMixPanel(root, () => ms); // "Kies een playlist" (room-mix.js)
 
   const releaseAwake = keepAwake(); // the host plays the music: keep the screen (and the connection) alive
-  if (viaServer ? storedServerHost() : storedRoom()) session.resume();
+  if (!resumed && (viaServer ? storedServerHost() : storedRoom())) session.resume();
   draw();
+  // back from the hub with a new choice: the room plays "Jouw muziek" (the list just chosen)
+  if (picked) {
+    const applyPick = () => {
+      if (!picked || !session?.room || session.room.phase !== 'lobby') return false;
+      if (picked === session.room.code && session.room.settings?.music === 'mix') guard(() => session.setSettings({ music: 'deck' }));
+      picked = null;
+      return true;
+    };
+    if (!applyPick()) { const offPick = session.subscribe(() => { if (applyPick()) offPick?.(); }); }
+  }
   // the connection steps count seconds while something is busy
   const ticker = viaServer ? setInterval(() => { if (session && (session.connecting || diagVisible(session.diag, session.status))) draw(); }, 1000) : 0;
   // the quiz clock runs on screen between server messages; when it runs out the buttons close
   const quizTicker = viaServer ? setInterval(() => {
+    // Discobingo's countdown to the automatic reveal moves on between server messages
+    if (session && inDisco() && session.room.phase === 'answering') tickAutoTimers(root, serverNow());
     if (!session || !inQuiz() || session.room.phase !== 'answering') return;
     reportPlaying();
     if (tickQuizClocks(root, serverNow())) draw();
   }, 250) : 0;
   const offPlayer = player.subscribe(() => { if (session && inQuiz()) reportPlaying(); });
 
-  window.__ttHost = { get session() { return session; } };
+  // the year check goes on in the lobby: newly checked songs join the deck (and the count)
+  const offPlaylists = playlists.subscribe(() => {
+    if (!session || ROUND_PHASES.has(currentView())) return;
+    refreshDeck();
+    draw();
+  });
+  if (deck?.kind === 'playlist') enrich.prioritise(deck.id);
+
+  window.__ttHost = { get session() { return session; }, get cards() { return cards; } };
 
   return () => {
     root.removeEventListener('click', onClick);
@@ -782,18 +959,23 @@ export function render(root, { deck, navigate }) {
     root.removeEventListener('submit', onSubmit);
     root.removeEventListener('input', onInput);
     root.removeEventListener('keydown', onKey);
+    offMixPanel();
     releaseAwake();
     clearInterval(ticker);
     clearInterval(quizTicker);
     offPlayer();
+    offPlaylists();
     offReact?.();
     hostFloats.destroy();
     document.body.classList.remove('tt-quiz', 'tt-disco');
     stage?.destroy();
     if (unmountPv) unmountPv();
+    music?.destroy(); // the user's Spotify volume back, the fragment at full volume
+    music = null;
     unsub?.();
     ms?.destroy();
-    session.destroy();
+    if (parking && session) parkSession(session);
+    else session.destroy();
     session = null;
     unsub = null;
     player.stop();

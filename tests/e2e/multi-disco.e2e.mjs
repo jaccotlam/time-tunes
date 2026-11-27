@@ -1,25 +1,32 @@
-// Discobingo through the Node room server. Three games and two small checks:
+// Discobingo through the Node room server. Four games and two small checks:
 //
 //  1. the lobby: Discobingo is the default and listed first, a deck of 10 songs says
 //     "nog 15 nodig (10 van 25)" and blocks the start;
 //  2. a whole game with a fixed seed: the spelleider does not play (1280×720, the music
 //     phone), two phones, a third joins halfway. Win with 1 line. Per round: the same category
-//     on every screen, the answer form only after the ball landed, the host's audio only after
-//     landing, nothing about the running song or another player's typed text on a phone
-//     before the reveal. The four kinds of answer, a typo that is right at once, near-misses
-//     that wait for the spelleider (Goed / Fout, "Beslis eerst"), flips both ways, choosing and
-//     moving a square, automatic placement when the spelleider moves on, reloads, "Nog een potje";
+//     on every screen, the answer form only after the ball landed, the host's music already
+//     during the spin with a rising volume (and a fade-out when the round moves on), nothing
+//     about the running song or another player's typed text on a phone before the reveal. The
+//     four kinds of answer (Exact jaar included), a typo that is right at once, near-misses that
+//     wait for the spelleider (Goed / Fout, "Beslis eerst"), flips both ways, choosing and
+//     moving a square, the "nog geen fiche" dialog and the automatic placement when the
+//     spelleider goes on anyway, reloads, the bingo stop ending in the prizes, "Nog een potje".
+//     The automatic reveal is switched off in the lobby here (the spelleider reveals);
 //  3. a short game with the spelleider playing along on a phone-sized screen;
-//  4. "2 lijnen" played to the end through a fast path (answers sent through the page's own
-//     session, no waiting for the ball): category balance over the first 8 rounds;
-//  5. PeerJS route: Discobingo can not be chosen, with the notice.
+//  4. "2 lijnen" through a fast path (answers sent through the page's own session, no waiting
+//     for the ball): the bingo stop offers only "volle kaart" or stop; category balance;
+//  5. the bingo stages with a tv: the automatic reveal after everybody answered (the shared
+//     countdown on leader, tv and phone) and "Wacht nog", the chip states and the dialog, an away
+//     player who never causes it, the end-of-fragment fade, a bingo that stops the game at once
+//     on tv / phones / leader, going on for 2 lijnen, then a full card, then the prizes;
+//  6. PeerJS route: Discobingo can not be chosen, with the notice.
 //
 // Everything is deterministic: seed 7 (timetunesr.multiSeed.v1), a fixed playlist.
 import { join } from 'node:path';
 import { launch, startServer, assert, OUT } from './helpers.mjs';
 import { startRoomServer, startSignal, phone, createRoom, joinRoom, waitForPlayers, serverHost } from './multi-helpers.mjs';
-import { installFakeItunes } from './fake-itunes.mjs';
-import { CATEGORY_KEYS, bestSquare, decadeOf, completeLines, LINES } from '../../app/js/multi/disco.js';
+import { installFakeItunes, silentWav } from './fake-itunes.mjs';
+import { CATEGORY_KEYS, bestSquare, completeLines, LINES } from '../../app/js/multi/disco.js';
 import { artistVerdict, titleVerdict } from '../../app/js/multi/match.js';
 
 // ---------- a playlist of 30 songs with names that can be typed wrongly in every way we need ----------
@@ -35,6 +42,15 @@ const TRACKS = Array.from({ length: 30 }, (_, i) => ({
   artist: `${A1[i % 10]} ${A2[(i * 3 + Math.floor(i / 10)) % 10]}`,
   year: 1960 + ((i * 7) % 58),
   previewUrl: `https://audio-ssl.itunes.apple.com/fake/d${i}.m4a`,
+}));
+/** Game 5 plays to a full card: 60 songs (the same name pattern, still unique). */
+const TRACKS60 = Array.from({ length: 60 }, (_, i) => ({
+  n: i + 1,
+  itunesId: 7900000 + i,
+  title: `${T1[i % 6]} ${T2[i % 7]} ${T3[i % 5]}`,
+  artist: `${A1[i % 10]} ${A2[(i * 3 + Math.floor(i / 10)) % 10]}`,
+  year: 1960 + ((i * 7) % 58),
+  previewUrl: `https://audio-ssl.itunes.apple.com/fake/e${i}.m4a`,
 }));
 
 const verdictFn = (kind) => (kind === 'artist' ? artistVerdict : titleVerdict);
@@ -71,9 +87,12 @@ const hown = (p) => p.evaluate(() => window.__ttHost?.session?.hostView() || nul
 const hroom = (p) => p.evaluate(() => window.__ttHost?.session?.room || null);
 const attr = (page, testid, name) => page.getByTestId(testid).getAttribute(name);
 
-/** In every page: record when the answer form or the music is there while the ball has not landed. */
+/**
+ * In every page: record when the answer form is there while the ball has not landed, and the
+ * music's volume during the spin (it fades in: silent at the start, full when the ball lands).
+ */
 function watcher() {
-  const w = (window.__disco = { badForm: 0, badAudio: 0, sawSpin: 0, spinNoForm: 0, spinWait: 0, audioAfterLand: 0 });
+  const w = (window.__disco = { badForm: 0, sawSpin: 0, spinNoForm: 0, spinWait: 0, audioInSpin: 0, audioAfterLand: 0, spins: {}, loudAfterLand: 0 });
   setInterval(() => {
     const st = document.querySelector('[data-testid="disco-stage"]');
     if (!st) return;
@@ -82,10 +101,13 @@ function watcher() {
     const pl = document.getElementById('player');
     const playing = !!pl && !pl.paused;
     if (!landed) {
-      if (st.dataset.state === 'spinning') { w.sawSpin++; if (!form) w.spinNoForm++; if (document.querySelector('[data-testid="disco-wait"]')) w.spinWait++; }
+      if (st.dataset.state === 'spinning') {
+        w.sawSpin++; if (!form) w.spinNoForm++; if (document.querySelector('[data-testid="disco-wait"]')) w.spinWait++;
+        // per spin: the volume samples while the music already plays
+        if (playing) { w.audioInSpin++; const r = st.dataset.round || '?'; (w.spins[r] ??= []).push(Math.round(pl.volume * 100) / 100); }
+      }
       if (form) w.badForm++;
-      if (playing) w.badAudio++;
-    } else if (playing) w.audioAfterLand++;
+    } else if (playing) { w.audioAfterLand++; if (pl.volume > 0.97) w.loudAfterLand++; }
   }, 40);
 }
 
@@ -140,16 +162,12 @@ async function answer(page, scope, cat, song, how, round) {
   const q = (id) => page.locator(`${scope}[data-testid="${id}"]`);
   const locked = (state) => page.locator(`${scope}[data-testid="disco-answer-state"][data-state="${state}"]`).waitFor();
   if (how === 'pass') { await q('disco-pass').click(); await locked('pass'); return null; }
-  if (cat === 'decade') {
-    const d = how === 'wrong' ? (decadeOf(song.year) === 1980 ? 1990 : 1980) : decadeOf(song.year);
-    await q(`disco-decade-${d}`).click();
-    // the phone's decade grid is the input; Indienen sends it (the host's own form sends on the tap)
-    if (!scope) await q('disco-lock').click();
-    await locked('locked');
-    return null;
-  }
   let text;
-  if (cat === 'year') {
+  if (cat === 'exact') {
+    // exact: one year off is already wrong
+    text = String(how === 'wrong' ? song.year + 1 : song.year);
+    await q('disco-year-input').fill(text);
+  } else if (cat === 'year') {
     text = String(how === 'wrong' ? song.year + 6 : how === 'near' ? song.year - 2 : song.year);
     await q('disco-year-input').fill(text);
   } else {
@@ -186,6 +204,44 @@ const noScroll = (page) => page.evaluate(() => document.documentElement.scrollWi
 
 /** Everything the in-page watcher saw. */
 const watched = (page) => page.evaluate(() => ({ ...window.__disco }));
+
+/** Lobby: switch "Automatisch naar het resultaat" off (the spelleider reveals by hand in this game). */
+async function autoOff(H) {
+  const box = H.getByTestId('room-disco-auto');
+  assert(await box.isChecked(), 'the lobby: "Automatisch naar het resultaat als iedereen geantwoord heeft" is on by default');
+  await box.evaluate((e) => e.scrollIntoView({ block: 'center' }));
+  await box.uncheck();
+  await H.waitForFunction(() => window.__ttHost?.session?.room?.settings?.autoReveal === false);
+}
+
+/**
+ * The spelleider goes on (`testid`: room-next, disco-go-line2 / -full, disco-finish). When an
+ * online player still has to lay a chip, the in-app dialog names them: `wait` taps "Wacht nog"
+ * and returns false; otherwise "Toch doorgaan". Away players never cause it.
+ */
+async function goOn(H, testid = 'room-next', { wait = false, shotName = '' } = {}) {
+  const chips = (await hspec(H)).game.disco.chips || [];
+  const waiting = chips.filter((c) => c.state === 'choosing').map((c) => c.name);
+  await H.getByTestId(testid).click();
+  if (!waiting.length) {
+    assert(await H.getByTestId('disco-confirm').count() === 0, `nobody online left to choose: no dialog (${testid})`);
+    return true;
+  }
+  const dlg = H.getByTestId('disco-confirm');
+  await dlg.waitFor({ timeout: 5000 });
+  const text = await H.getByTestId('disco-confirm-text').textContent();
+  assert(waiting.every((n) => text.includes(n)) && /nog geen fiche gelegd\. Toch doorgaan\?/.test(text) && /automatisch gelegd/.test(text), `the dialog names who still chooses: "${text}"`);
+  assert(await H.evaluate(() => document.activeElement?.dataset?.testid) === 'disco-confirm-wait', 'the dialog has the focus on "Wacht nog" (keyboard)');
+  if (shotName) await shot(H, shotName);
+  if (wait) {
+    await H.getByTestId('disco-confirm-wait').click();
+    await dlg.waitFor({ state: 'detached' });
+    return false;
+  }
+  await H.getByTestId('disco-confirm-go').click();
+  await dlg.waitFor({ state: 'detached' });
+  return true;
+}
 
 /** The room's lobby: Discobingo first and selected, then (what the spelleider picks) a start. */
 async function lobbyChecks(browser, rooms, server) {
@@ -234,6 +290,7 @@ async function wholeGame(browser, rooms, server) {
   await waitForPlayers(H, 2);
   assert(await H.getByTestId('room-game-disco').isChecked() && (await hroom(H)).settings.game === 'disco', 'the room is set to Discobingo by default');
   await shot(H, 'disco-02-host-lobby');
+  await autoOff(H);
   await shot(A, 'disco-03-player-lobby');
 
   let cas = null;
@@ -245,16 +302,18 @@ async function wholeGame(browser, rooms, server) {
 
   const kinds = new Set();
   const cats = [];
-  const S = { typo: false, goodDoubt: false, badDoubt: false, flipOff: false, flipGrant: false, moved: false, reloadAnswering: false, reloadRevealed: false, auto: 0, near: false };
+  const S = { typo: false, goodDoubt: false, badDoubt: false, flipOff: false, flipGrant: false, moved: false, reloadAnswering: false, reloadRevealed: false, auto: 0, near: false, fadeOut: false, dialog: false, exactShot: false };
   let last = 0;
   for (let round = 1; round <= 30; round++) {
     last = round;
     await Promise.all([waitRound(H, round, true), ...phones().map((p) => waitRound(p.page, round))]);
     if (round === 1) {
-      // the ball is still spinning: no question, no music
+      // the ball is still spinning: no question yet, the music already starts, quietly
       for (const [pg, who] of [[A, 'Anouk'], [B, 'Bram'], [H, 'host']]) await pg.locator('[data-testid="disco-stage"][data-state="spinning"]').waitFor({ timeout: 3000 });
       assert(await A.getByTestId('disco-answer').count() === 0 && await A.getByTestId('disco-wait').isVisible(), 'round 1: while the ball spins the phone shows no answer form, only "de discobal kiest de vraag"');
-      assert(await H.evaluate(() => document.getElementById('player').paused), 'round 1: the spelleider\'s music has not started while the ball spins');
+      await H.waitForFunction(() => { const p = document.getElementById('player'); return p && !p.paused && p.volume < 0.6 && document.querySelector('[data-testid="disco-stage"]')?.dataset.state === 'spinning'; }, null, { timeout: 4000 });
+      assert(true, 'round 1: the spelleider\'s music already plays while the ball spins, still soft (fade-in)');
+      assert(await A.evaluate(() => { const p = document.getElementById('player'); return !p || p.paused; }), 'a phone never plays the music');
       assert(await attr(A, 'disco-category', 'data-cat') === '', 'round 1: no category named before the ball has landed');
       await shot(A, 'disco-04-player-spinning');
       await shot(H, 'disco-05-host-spinning');
@@ -268,24 +327,29 @@ async function wholeGame(browser, rooms, server) {
     // the answer form of this category and only that one
     for (const pg of [A, B]) {
       await pg.getByTestId('disco-answer').waitFor();
-      const form = { decade: await pg.locator('[data-testid^="disco-decade-"]').count(), year: await pg.getByTestId('disco-year-input').count(), text: await pg.getByTestId('disco-text-input').count() };
-      const want = { decade: cat === 'decade', year: cat === 'year', text: cat === 'artist' || cat === 'title' };
-      assert(!!form.decade === want.decade && !!form.year === want.year && !!form.text === want.text, `round ${round}: the ${cat} form on ${pg === A ? 'Anouk' : 'Bram'}'s phone (${JSON.stringify(form)})`);
+      const form = { year: await pg.getByTestId('disco-year-input').count(), text: await pg.getByTestId('disco-text-input').count(), decade: await pg.locator('[data-testid^="disco-decade-"]').count() };
+      const want = { year: cat === 'year' || cat === 'exact', text: cat === 'artist' || cat === 'title' };
+      assert(!form.decade && !!form.year === want.year && !!form.text === want.text, `round ${round}: the ${cat} form on ${pg === A ? 'Anouk' : 'Bram'}'s phone (${JSON.stringify(form)})`);
+      if (want.year) {
+        const hint = await pg.getByTestId('disco-hint').textContent();
+        assert(cat === 'exact' ? /Precies/.test(hint) && !/ernaast/.test(hint) : /2 jaar ernaast mag/.test(hint), `round ${round}: the ${cat} hint says how exact ("${hint}")`);
+      }
     }
     kinds.add(cat);
-    await H.waitForFunction(() => document.getElementById('player') && !document.getElementById('player').paused, null, { timeout: 8000 });
-    assert(true, `round ${round}: the music plays on the spelleider's phone only after the ball landed`);
+    await H.waitForFunction(() => document.getElementById('player') && !document.getElementById('player').paused && document.getElementById('player').volume > 0.97, null, { timeout: 8000 });
+    assert(true, `round ${round}: the music plays at full volume on the spelleider's phone once the ball landed`);
     const { song } = await serverHost(H);
-    assert(TRACKS.some((t) => t.previewUrl === song.previewUrl), `round ${round}: "${song.title}" from the playlist`);
+    assert(TRACKS.some((t) => t.itunesId === song.itunesId), `round ${round}: "${song.title}" from the playlist`);
     if (cas) { await C.getByTestId('disco-answer').waitFor(); await answer(C, '', cat, song, 'pass', round); }
 
     // ----- what the phones answer -----
     const typed = cat === 'artist' || cat === 'title';
     const aHow = typed && !S.typo ? 'typo' : cat === 'year' && !S.near ? 'near' : 'right';
     let bHow;
-    if (cat === 'decade') bHow = !S.flipGrant ? 'wrong' : 'pass';
+    if (cat === 'exact') bHow = !S.flipGrant ? 'wrong' : 'pass';
     else if (typed) bHow = !S.goodDoubt || !S.badDoubt ? 'doubt' : 'wrong';
     else bHow = round % 2 ? 'wrong' : 'pass';
+    if (cat === 'exact' && !kinds.has('q-exact')) { kinds.add('q-exact'); await shot(B, 'disco-07c-player360-question-exact'); }
     const aText = await answer(A, '', cat, song, aHow, round);
     const bText = await answer(B, '', cat, song, bHow, round);
     if (aHow === 'typo') S.typo = true;
@@ -337,6 +401,16 @@ async function wholeGame(browser, rooms, server) {
       assert(r.verdict === 'right' && !r.decided && !r.overridden, `a small typo ("${aText}") is judged right automatically, without the spelleider`);
     }
     if (round === 1) { await shot(A, 'disco-09-player-revealed'); await shot(H, 'disco-10-host-revealed'); }
+    if (cat === 'exact' && !S.exactShot) {
+      // the exact year: Anouk's exact year is right, Bram one year off is wrong (the machine decides)
+      S.exactShot = true;
+      const rs = (await hspec(H)).game.reveal.results;
+      const ra = rs.find((x) => x.name === 'Anouk');
+      assert(ra.verdict === 'right' && ra.auto === 'right' && ra.cat === 'exact', 'Exact jaar: the exact year is right, decided by the machine');
+      if (bHow === 'wrong') assert(rs.find((x) => x.name === 'Bram').auto === 'wrong', 'Exact jaar: one year off is wrong (no margin, never a doubt)');
+      await verdictOnPhone(B, bHow === 'wrong' ? 'wrong' : 'pass');
+      await shot(B, 'disco-07b-player360-exact-verdict');
+    }
 
     // ----- Bram: wrong, pass, or a doubt -----
     if (bHow === 'wrong') await verdictOnPhone(B, 'wrong');
@@ -366,8 +440,8 @@ async function wholeGame(browser, rooms, server) {
       if (good) {
         S.goodDoubt = true;
         assert(await attr(B, 'disco-choose', 'data-state') === 'choose', 'Goed: Bram may choose a square');
-        await H.locator('[data-testid="disco-pending"]', { hasText: 'Bram' }).waitFor({ timeout: 5000 });
-        assert(/Bram/.test(await H.getByTestId('disco-pending').textContent()), 'the spelleider sees that Bram (and Anouk) still have to choose');
+        await H.locator('[data-testid="disco-chip-row"][data-name="Bram"][data-state="choosing"]').waitFor({ timeout: 5000 });
+        assert(/kiezen nog|kiest nog/.test(await H.getByTestId('disco-chips-summary').textContent()), 'the spelleider sees that Bram (and Anouk) still have to choose: "… kiezen nog"');
         await shot(B, 'disco-12-player360-doubt-right');
       } else {
         S.badDoubt = true;
@@ -375,8 +449,8 @@ async function wholeGame(browser, rooms, server) {
       }
     }
 
-    // ----- a flip that grants: Bram's wrong decade becomes right -----
-    if (cat === 'decade' && bHow === 'wrong') {
+    // ----- a flip that grants: Bram's wrong exact year becomes right -----
+    if (cat === 'exact' && bHow === 'wrong') {
       const rowB = await rowOf(H, 'Bram');
       await H.getByTestId(`disco-flip-${rowB}`).click();
       await verdictOnPhone(B, 'right');
@@ -458,20 +532,58 @@ async function wholeGame(browser, rooms, server) {
     const bAuto = vb0.game.reveal.mine.correct && vb0.game.disco.choice == null && !vb0.game.disco.noSquare && !vb0.game.disco.waitingForHost;
     const marks0 = vb0.game.mine.marks.slice();
     const wantAuto = bAuto ? bestSquare(vb0.game.mine.card, marks0, vb0.game.disco.cat, vb0.game.disco.win) : null;
-    const nextBtn = H.getByTestId('room-next');
-    const state = await nextBtn.getAttribute('data-state');
-    const label = (await nextBtn.textContent()).trim();
     if (round === 1) await shot(H, 'disco-17-host-revealed-regie');
-    if (state === 'won') {
-      assert(/Naar de uitslag/.test(label), `round ${round}: somebody has a line: the button reads "Naar de uitslag"`);
-      assert(await A.getByTestId('disco-bingo').isVisible(), 'Anouk\'s phone shows BINGO! as soon as her square completes the line');
-      assert(await H.locator('[data-testid^="disco-progress-"][data-name="Anouk"]').first().getAttribute('data-bingo') === 'true', 'the host\'s progress list marks Anouk with BINGO');
-      await shot(A, 'disco-18-player-bingo');
-      await shot(H, 'disco-19-host-bingo');
-    } else assert(state === 'spin' && /Draai de discobal/.test(label), `round ${round}: the button reads "Draai de discobal" (${label})`);
-    from = mark();
-    await nextBtn.click();
-    await H.waitForFunction((r) => { const s = window.__ttHost.session; return s.room.phase === 'won' || s.room.game.round > r; }, round, { timeout: 15000 });
+    const stop = (await hspec(H)).game.disco.bingo;
+    if (stop) {
+      // a bingo stops the game at once: the leader decides. Not every scenario has been played
+      // yet: go on for the next goal; otherwise stop, to the prizes
+      const names = stop.winners.map((w) => w.name);
+      assert(await H.getByTestId('room-next').count() === 0, `round ${round}: a bingo: no "Draai de discobal" any more`);
+      await H.getByTestId('disco-bingo-stop').waitFor();
+      const said = await H.getByTestId('disco-bingo-names').textContent();
+      assert(names.every((n) => said.includes(n)) && said.includes(stop.win === 'line1' ? '1 lijn' : '2 lijnen'), `the leader sees "${said.trim()}"`);
+      for (const w of names) {
+        const pg = w === 'Anouk' ? A : w === 'Bram' ? B : C;
+        await pg.locator('[data-testid="disco-moment"][data-moment="bingo"]').waitFor({ timeout: 5000 });
+      }
+      assert(true, `the phone of ${names.join(' & ')} shows BINGO! as soon as the square completes the goal`);
+      assert(await H.locator(`[data-testid^="disco-progress-"][data-name="${names[0]}"]`).first().getAttribute('data-bingo') === 'true', 'the host\'s progress list marks the winner with BINGO');
+      for (const w of stop.next) assert(await H.getByTestId(`disco-go-${w}`).isVisible(), `the leader may go on for ${w}`);
+      if (!S.stopShot) { S.stopShot = true; await shot(names[0] === 'Anouk' ? A : B, 'disco-18-player-bingo'); await shot(H, 'disco-19-host-bingo'); }
+      from = mark();
+      const done = S.typo && S.near && S.goodDoubt && S.badDoubt && S.flipOff && S.flipGrant && S.moved && S.reloadAnswering && S.reloadRevealed && S.fadeOut && S.dialog && S.exactShot;
+      if (!done && stop.next.length) {
+        S.wentOn = (S.wentOn || 0) + 1;
+        await goOn(H, `disco-go-${stop.next[0]}`);
+        await H.waitForFunction(([r, w]) => { const sx = window.__ttHost.session; const b2 = sx.spectatorView()?.game?.disco?.bingo; return sx.room.game.round > r || (b2 && b2.win !== w); }, [round, stop.win], { timeout: 15000 });
+        assert((await hroom(H)).phase !== 'won', 'going on: the game goes on with the higher goal');
+        if ((await hspec(H)).game.disco.bingo) { await goOn(H, 'disco-finish'); await H.waitForFunction(() => window.__ttHost.session.room.phase === 'won', null, { timeout: 15000 }); }
+      } else {
+        await goOn(H, 'disco-finish');
+        await H.waitForFunction(() => window.__ttHost.session.room.phase === 'won', null, { timeout: 15000 });
+      }
+    } else {
+      const nextBtn = H.getByTestId('room-next');
+      const state = await nextBtn.getAttribute('data-state');
+      const label = (await nextBtn.textContent()).trim();
+      assert(state === 'spin' && /Draai de discobal/.test(label), `round ${round}: the button reads "Draai de discobal" (${label})`);
+      from = mark();
+      const oldCard = await H.evaluate(() => document.getElementById('player')?.dataset.card);
+      // Bram still has to choose: the dialog first (once "Wacht nog", then "Toch doorgaan")
+      if (bAuto && !S.dialog) {
+        S.dialog = true;
+        assert(await goOn(H, 'room-next', { wait: true, shotName: 'disco-17b-host-dialog' }) === false, '"Wacht nog": nothing happens');
+        assert((await hroom(H)).phase === 'revealed' && (await hroom(H)).game.round === round, '"Wacht nog": still this round');
+      }
+      await goOn(H);
+      if (!S.fadeOut && oldCard) {
+        // the song of the round fades out before the next one starts (no hard cut)
+        await H.waitForFunction((c) => { const p = document.getElementById('player'); return p.dataset.card === c && !p.paused && p.volume < 0.9 && p.volume > 0; }, oldCard, { timeout: 4000 });
+        S.fadeOut = true;
+        assert(true, 'going on: the round\'s song fades out before the next one');
+      }
+      await H.waitForFunction((r) => { const s = window.__ttHost.session; return s.room.phase === 'won' || s.room.game.round > r; }, round, { timeout: 15000 });
+    }
     if (bAuto) {
       const vb1 = await pview(B);
       const now = vb1.game.mine.marks;
@@ -482,8 +594,8 @@ async function wholeGame(browser, rooms, server) {
     if ((await hroom(H)).phase === 'won') break;
   }
   assert(S.auto >= 1, 'at least one automatic placement was checked');
-  assert(S.typo && S.near && S.goodDoubt && S.badDoubt && S.flipOff && S.flipGrant && S.moved && S.reloadAnswering && S.reloadRevealed, `every scenario happened (${JSON.stringify(S)})`);
-  assert(['decade', 'artist', 'year', 'title'].every((k) => kinds.has(k)), `the four kinds of answer were played (${cats.join(', ')})`);
+  assert(S.typo && S.near && S.goodDoubt && S.badDoubt && S.flipOff && S.flipGrant && S.moved && S.reloadAnswering && S.reloadRevealed && S.fadeOut && S.dialog && S.exactShot, `every scenario happened (${JSON.stringify(S)})`);
+  assert(['exact', 'artist', 'year', 'title'].every((k) => kinds.has(k)), `the four kinds of answer were played (${cats.join(', ')})`);
   assert(cats.every((c, i) => i === 0 || c !== cats[i - 1]), `never the same category twice in a row (${cats.join(', ')})`);
   assert(CATEGORY_KEYS.every((k) => cats.slice(0, 4).includes(k)), 'the first four rounds hold every category once');
 
@@ -491,7 +603,11 @@ async function wholeGame(browser, rooms, server) {
   for (const [pg, who, isHost] of [[H, 'host', true], [A, 'Anouk', false], [B, 'Bram', false]]) {
     const w = await watched(pg);
     assert(w.badForm === 0, `${who}: the answer form never showed before the ball landed`);
-    if (isHost) assert(w.badAudio === 0 && w.audioAfterLand > 0, `host: no music while the ball spins (${w.badAudio} samples), music after landing (${w.audioAfterLand})`);
+    if (isHost) {
+      // the fade-in: the music plays during the spin, its volume rises, and it is full after landing
+      const rising = Object.values(w.spins).filter((s) => s.length >= 4 && s[s.length - 1] > s[0] + 0.2 && s[0] < 0.5);
+      assert(w.audioInSpin > 0 && rising.length >= 1 && w.loudAfterLand > 0, `host: music during the spin with a rising volume (${JSON.stringify(Object.values(w.spins).slice(0, 2).map((s) => [s[0], s[s.length - 1], s.length]))}), full volume after landing (${w.loudAfterLand})`);
+    } else assert(await pg.evaluate(() => !document.getElementById('player')?.dataset?.card), `${who}: a phone never loads a song`);
     assert(w.sawSpin > 0 && w.spinNoForm > 0, `${who}: saw the ball spinning (${w.sawSpin} samples) without a form`);
   }
 
@@ -499,11 +615,13 @@ async function wholeGame(browser, rooms, server) {
   await H.locator('[data-testid="screen-room-host"][data-view="won"]').waitFor();
   for (const p of phones()) await p.page.locator('[data-testid="screen-room-player"][data-view="won"]').waitFor();
   const winners = (await hspec(H)).game.winners;
-  assert(winners.includes('Anouk'), `Anouk wins after ${last} rounds (${winners.join(' & ')})`);
+  assert(winners.includes('Anouk'), `Anouk wins after ${last} rounds (${winners.join(' & ')}; went on ${S.wentOn || 0}×)`);
   assert(/Anouk/.test(await H.getByTestId('room-winner-name').textContent()) && /Anouk/.test(await A.getByTestId('room-winner-name').textContent()) && /Anouk/.test(await B.getByTestId('room-winner-name').textContent()), 'the winner is shown on the host and on every phone');
   assert(await A.getByTestId('room-you-won').isVisible(), 'Anouk is congratulated');
   const lines = (await pview(A)).game.mine.lines;
-  assert(lines >= 1 && completeLines((await pview(A)).game.mine.marks).length >= 1, `Anouk has ${lines} full line(s): 1 lijn is enough`);
+  assert(lines >= 1 && completeLines((await pview(A)).game.mine.marks).length >= 1, `Anouk has ${lines} full line(s)`);
+  const stages = (await hspec(H)).game.disco.stages;
+  assert(stages.length === 1 + (S.wentOn || 0) && stages[0].win === 'line1', `the stages of the game: ${stages.map((x) => `${x.win}: ${x.names.join(' & ')}`).join(' · ')}`);
   await shot(H, 'disco-20-host-won');
   await shot(A, 'disco-21-player-won');
 
@@ -537,6 +655,7 @@ async function hostPlaysGame(browser, rooms, server) {
   await joinRoom(B, server.url, code, 'Bram', { via: 'link' });
   await waitForPlayers(H, 2);
   assert(await H.getByTestId('room-game-disco').isChecked(), 'the host who plays along also gets Discobingo by default');
+  await autoOff(H);
   await H.getByTestId('room-start').click();
   let stamps = 0;
   for (let round = 1; round <= 3; round++) {
@@ -591,10 +710,11 @@ async function twoLines(browser, rooms, server, firstCats) {
   const P = p.page;
   await joinRoom(P, server.url, code, 'Anouk', { via: 'link' });
   await waitForPlayers(H, 1);
+  await autoOff(H);
   await H.getByTestId('room-disco-win-line2').evaluate((e) => e.scrollIntoView({ block: 'center' }));
   await H.getByTestId('room-disco-win-line2').check();
   await P.waitForFunction(() => window.__ttRoom.session.view?.settings.win === 'line2');
-  assert(/2 lijnen/.test(await P.getByTestId('room-wait').textContent()), 'the player sees "winnen met 2 lijnen" in the lobby');
+  assert(/2 lijnen/.test(await P.getByTestId('room-wait').textContent()), 'the player sees "eerste bingo bij 2 lijnen" in the lobby');
   await H.getByTestId('room-start').click();
   const cats = [];
   let lastLines = 0;
@@ -608,7 +728,7 @@ async function twoLines(browser, rooms, server, firstCats) {
     // the phone can hear of the new round before the spelleider's screen does: read this round's song, not the last one
     await H.waitForFunction((r) => window.__ttHost?.session?.room?.game?.round === r && !!window.__ttHost.session.currentSong(), round);
     const { song } = await serverHost(H);
-    const ans = cat === 'decade' ? { decade: decadeOf(song.year) } : cat === 'year' ? { guess: String(song.year) } : { text: cat === 'artist' ? song.artist : song.title };
+    const ans = cat === 'exact' || cat === 'year' ? { guess: String(song.year) } : { text: cat === 'artist' ? song.artist : song.title };
     // fast path: no waiting for the ball, the answer goes through the phone's own session
     await P.evaluate((a) => window.__ttRoom.session.answer(a), ans);
     await P.waitForFunction(() => window.__ttRoom.session.view.game.answer != null);
@@ -622,9 +742,10 @@ async function twoLines(browser, rooms, server, firstCats) {
     await P.waitForFunction((i) => window.__ttRoom.session.view.game.disco.choice === i, best);
     const after = await pview(P);
     if (after.game.mine.lines >= 2) {
-      assert(await H.getByTestId('room-next').getAttribute('data-state') === 'won', `round ${round}: two full lines: the button reads "Naar de uitslag"`);
+      await H.getByTestId('disco-bingo-choices').waitFor();
+      assert(await H.getByTestId('disco-go-full').isVisible() && await H.getByTestId('disco-go-line2').count() === 0 && await H.getByTestId('room-next').count() === 0, `round ${round}: two full lines: a bingo stop that offers a full card or stop (no 2 lijnen again)`);
       assert(after.game.mine.bingo === true && after.game.mine.winLine != null, 'the second line makes BINGO');
-      await H.getByTestId('room-next').click();
+      await H.getByTestId('disco-finish').click();
       break;
     }
     lastLines = after.game.mine.lines;
@@ -648,15 +769,233 @@ async function twoLines(browser, rooms, server, firstCats) {
   await p.context.close();
 }
 
+// ======================================================================================
+//  Game 5: the bingo stages with a tv, the automatic reveal, chips and the dialog
+// ======================================================================================
+async function bingoStages(browser, rooms, server) {
+  const host = await discoPhone(browser, rooms, { seed: 7, ...HOST_TV, viewport: { width: 1280, height: 800 } }, { tracks: TRACKS60 });
+  const H = host.page;
+  // short fragments (9 s, the fake audio can not seek): the fade at the end comes within a round
+  await host.context.route('https://audio-ssl.itunes.apple.com/**', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: silentWav(9) }));
+  await H.goto(`${server.url}#/spelleider`);
+  const code = await createRoom(H);
+  const tv = await discoPhone(browser, rooms, { ...HOST_TV });
+  const D = tv.page;
+  await D.goto(`${server.url}#/scherm/${code}`);
+  const anouk = await discoPhone(browser, rooms, { viewport: { width: 360, height: 740 } });
+  const bram = await discoPhone(browser, rooms, { viewport: { width: 360, height: 740 } });
+  const A = anouk.page;
+  const B = bram.page;
+  await joinRoom(A, server.url, code, 'Anouk', { via: 'link' });
+  await joinRoom(B, server.url, code, 'Bram', { via: 'link' });
+  await waitForPlayers(H, 2);
+  assert(await H.getByTestId('room-disco-auto').isChecked() && (await hroom(H)).settings.autoReveal === true, 'the automatic reveal is on by default');
+  await H.getByTestId('room-start').click();
+  const dview = (pg) => pg.evaluate(() => window.__ttScreen?.session?.view || null);
+  const songOf = async (round) => {
+    await H.waitForFunction((r) => window.__ttHost?.session?.room?.game?.round === r && !!window.__ttHost.session.currentSong(), round, { timeout: 30000 });
+    return (await serverHost(H)).song;
+  };
+  const rightFor = (cat, song) => (cat === 'exact' || cat === 'year' ? { guess: String(song.year) } : { text: cat === 'artist' ? song.artist : song.title });
+  const fastAnswer = async (P, round, ans) => {
+    await P.waitForFunction((r) => window.__ttRoom?.session?.view?.game?.round === r && window.__ttRoom.session.view.phase === 'answering', round, { timeout: 30000 });
+    await P.evaluate((a) => window.__ttRoom.session.answer(a), ans);
+    await P.waitForFunction(() => window.__ttRoom.session.view.game.answer != null);
+  };
+  /** Anouk lays her chip on the best square (with a joker on another colour when hers is full). */
+  const stampBest = async () => {
+    const v = await pview(A);
+    const d = v.game.disco;
+    let at = null;
+    let joker = false;
+    if (d.choosable.length) at = bestSquare(v.game.mine.card, v.game.mine.marks, d.cat, d.win);
+    else if ((d.jokerSquares || []).length) {
+      // the joker square that helps most: the best square of its own colour
+      const js = d.jokerSquares;
+      at = js.map((i) => bestSquare(v.game.mine.card, v.game.mine.marks, v.game.mine.card[i], d.win)).find((i) => js.includes(i)) ?? js[0];
+      joker = true;
+    }
+    if (at == null) return null;
+    await A.evaluate(([i, j]) => window.__ttRoom.session.stamp(i, j ? { joker: true } : undefined), [at, joker]);
+    await A.waitForFunction((i) => window.__ttRoom.session.view.game.disco.choice === i, at);
+    return at;
+  };
+
+  // ----- round 1: everybody answers -> the shared countdown -> the reveal by itself -----
+  await Promise.all([waitRound(H, 1, true), waitRound(A, 1), waitRound(B, 1)]);
+  await Promise.all([landed(H), landed(A), landed(B)]);
+  let song = await songOf(1);
+  let cat = (await pview(A)).game.disco.cat;
+  await answer(A, '', cat, song, 'right', 1);
+  assert(await H.getByTestId('disco-auto').count() === 0, 'one of two answered: no countdown yet');
+  await answer(B, '', cat, song, 'right', 1);
+  await H.getByTestId('disco-auto').waitFor({ timeout: 5000 });
+  const t0 = Date.now();
+  await D.getByTestId('screen-auto').waitFor({ timeout: 5000 });
+  await A.getByTestId('disco-auto').waitFor({ timeout: 5000 });
+  const ats = [(await hspec(H)).game.disco.autoAt, (await pview(A)).game.disco.autoAt, (await pview(B)).game.disco.autoAt, (await dview(D)).game.disco.autoAt];
+  assert(ats.every((x) => Number.isFinite(x) && x === ats[0]), `one shared moment on the server clock for leader, phones and tv (${ats.join(', ')})`);
+  assert(/Resultaat over/.test(await H.getByTestId('disco-auto').textContent()) && await H.getByTestId('disco-hold').isVisible(), 'the leader: "Resultaat over …" and "Wacht nog"');
+  await shot(H, 'disco-30-host-countdown');
+  await shot(D, 'disco-31-tv-countdown');
+  await shot(A, 'disco-32-player360-countdown');
+  await Promise.all([H, A, B, D].map((pg) => pg.waitForFunction(() => {
+    const v = window.__ttHost?.session?.spectatorView() || window.__ttRoom?.session?.view || window.__ttScreen?.session?.view;
+    return v?.phase === 'revealed';
+  }, null, { timeout: 10000 })));
+  const waited = Date.now() - t0;
+  assert(waited >= 2500 && waited < 8000, `nobody tapped Onthul: revealed by itself after the countdown (${waited} ms)`);
+
+  // ----- chips: who has laid one; the dialog before going on -----
+  await A.locator('[data-testid="disco-moment"][data-moment="choose"]').waitFor({ timeout: 8000 });
+  assert(/Kies zelf een/.test(await A.getByTestId('disco-choose').textContent()), 'the phone asks plainly: "Kies zelf een … vakje"');
+  await stamp(A);
+  assert(/Fiche gelegd/.test(await A.getByTestId('disco-choose').textContent()), 'the phone confirms: "Fiche gelegd!"');
+  const sum = H.getByTestId('disco-chips-summary');
+  await H.locator('[data-testid="disco-chips-summary"][data-waiting="1"]').waitFor();
+  assert(/1 van 2 kiest nog/.test(await sum.textContent()), `the leader: "1 van 2 kiest nog" (${(await sum.textContent()).trim()})`);
+  assert(await H.locator('[data-testid="disco-chip-row"][data-name="Anouk"]').getAttribute('data-state') === 'placed' && await H.locator('[data-testid="disco-chip-row"][data-name="Bram"]').getAttribute('data-state') === 'choosing', 'the leader sees Anouk "fiche gelegd ✓" and Bram "kiest nog…"');
+  await D.locator('[data-testid="screen-chips-summary"][data-waiting="1"]').waitFor();
+  assert(/Bram/.test(await D.getByTestId('screen-pending').textContent()), 'the tv says the same: Bram still chooses');
+  await shot(H, 'disco-33-host-chips');
+  await shot(D, 'disco-34-tv-chips');
+  assert(await goOn(H, 'room-next', { wait: true, shotName: 'disco-35-host-dialog' }) === false, '"Wacht nog" keeps the round');
+  await stamp(B);
+  await H.locator('[data-testid="disco-chips-summary"].is-all').waitFor();
+  assert(/Iedereen heeft een fiche gelegd/.test(await sum.textContent()), 'the summary turns green: "Iedereen heeft een fiche gelegd"');
+  await D.locator('[data-testid="screen-chips-summary"].is-all').waitFor();
+  await shot(H, 'disco-36-host-chips-all');
+  await goOn(H);
+
+  // ----- round 2: "Wacht nog", and the fade at the end of the fragment -----
+  await Promise.all([waitRound(H, 2, true), waitRound(A, 2)]);
+  song = await songOf(2);
+  cat = (await pview(A)).game.disco.cat;
+  await fastAnswer(A, 2, rightFor(cat, song));
+  await fastAnswer(B, 2, { pass: true });
+  await H.getByTestId('disco-hold').waitFor({ timeout: 8000 });
+  await H.getByTestId('disco-hold').click();
+  await H.getByTestId('disco-auto-held').waitFor();
+  await A.waitForFunction(() => window.__ttRoom.session.view.game.disco.autoAt === null && window.__ttRoom.session.view.game.disco.autoHeld === true);
+  assert(await D.getByTestId('screen-auto').count() === 0, '"Wacht nog": the countdown is gone on the tv too');
+  // the end of the (here 9-second) fragment fades out instead of a cut
+  await H.waitForFunction(() => { const p = document.getElementById('player'); return !p.paused && p.volume > 0.97 && p.duration > 8; }, null, { timeout: 10000 });
+  await H.waitForFunction(() => { const p = document.getElementById('player'); return !p.paused && p.volume < 0.85 && p.currentTime > p.duration - 1.5; }, null, { timeout: 10000 });
+  await H.waitForFunction(() => { const p = document.getElementById('player'); return p.ended || p.paused; }, null, { timeout: 5000 });
+  await H.waitForFunction(() => document.getElementById('player').volume === 1, null, { timeout: 3000 });
+  assert(true, 'the end of the fragment fades out, and the volume is back to full for the next song');
+  await sleep(5000); // longer than the countdown would have taken: "Wacht nog" really holds
+  assert((await hroom(H)).phase === 'answering', '"Wacht nog": no automatic reveal in this round');
+  await H.getByTestId('room-reveal').click();
+  await H.locator('[data-testid="screen-room-host"][data-view="revealed"]').waitFor();
+  await stampBest();
+  await goOn(H);
+
+  // ----- round 3: Bram is right and then away: no dialog, his chip is placed automatically -----
+  await Promise.all([waitRound(H, 3, true), waitRound(A, 3), waitRound(B, 3)]);
+  song = await songOf(3);
+  cat = (await pview(A)).game.disco.cat;
+  await fastAnswer(A, 3, rightFor(cat, song));
+  await fastAnswer(B, 3, rightFor(cat, song));
+  await H.getByTestId('room-reveal').click();
+  await H.locator('[data-testid="screen-room-host"][data-view="revealed"]').waitFor();
+  const bramBefore = (await hspec(H)).game.disco.progress.find((p) => p.name === 'Bram').stamped;
+  await B.goto('about:blank');
+  await H.locator('[data-testid="disco-chip-row"][data-name="Bram"][data-state="away"]').waitFor({ timeout: 10000 });
+  await stampBest();
+  await goOn(H); // asserts: no dialog for somebody who is away
+  await waitRound(H, 4, true);
+  assert((await hspec(H)).game.disco.progress.find((p) => p.name === 'Bram').stamped === bramBefore + 1, 'Bram was away: his chip was placed automatically when the leader went on');
+  await B.goto(`${server.url}#/kamer/${code}`);
+  await B.waitForFunction(() => !!window.__ttRoom?.session?.view?.game?.mine, null, { timeout: 20000 });
+
+  // ----- on to a full card: every bingo stops the game; go on for 2 lijnen, then a full card, then stop -----
+  const wins = [];
+  let over = false;
+  for (let round = 4; round <= 60 && !over; round++) {
+    await waitRound(H, round, true);
+    song = await songOf(round);
+    cat = (await hspec(H)).game.disco.cat;
+    await fastAnswer(A, round, rightFor(cat, song));
+    await fastAnswer(B, round, { pass: true });
+    await H.getByTestId('room-reveal').click();
+    await A.waitForFunction(() => window.__ttRoom.session.view.phase === 'revealed', null, { timeout: 10000 });
+    await stampBest();
+    // the leader's screen has heard of the chip too (a bingo, or Anouk no longer choosing)
+    await H.waitForFunction(() => { const d = window.__ttHost.session.spectatorView()?.game?.disco; return d && (d.bingo || (d.chips || []).every((c) => c.name !== 'Anouk' || c.state !== 'choosing')); }, null, { timeout: 10000 });
+    for (;;) {
+      const b = (await hspec(H)).game.disco.bingo;
+      if (!b) { await goOn(H); break; }
+      if (!wins.includes(b.win)) {
+        wins.push(b.win);
+        const n = wins.length;
+        // at once on every screen
+        await H.getByTestId('disco-bingo-stop').waitFor();
+        await D.getByTestId('screen-bingo').waitFor({ timeout: 5000 });
+        await A.locator('[data-testid="disco-moment"][data-moment="bingo"]').waitFor({ timeout: 5000 });
+        await B.locator('[data-testid="disco-moment"][data-moment="stop"]').waitFor({ timeout: 5000 });
+        const who = await D.getByTestId('screen-bingo-who').textContent();
+        assert(/Anouk heeft/.test(who) && who.includes({ line1: '1 lijn', line2: '2 lijnen', full: 'volle kaart' }[b.win]), `bingo ${n} (${b.win}) on the tv: "${who.trim()}"`);
+        const lit = await D.locator('[data-testid="screen-bingo-card-0"] [data-goal="true"]').count();
+        assert(lit >= (b.win === 'full' ? 25 : b.win === 'line2' ? 9 : 5), `the tv lights the winning line(s) on Anouk's card (${lit} squares)`);
+        assert(/Anouk/.test(await B.getByTestId('disco-stop-who').textContent()), 'Bram\'s phone switches to the BINGO of Anouk');
+        assert(await H.getByTestId('room-next').count() === 0, 'no next song until the leader decides');
+        const offered = { line2: await H.getByTestId('disco-go-line2').count(), full: await H.getByTestId('disco-go-full').count(), stop: await H.getByTestId('disco-finish').count() };
+        const want = { line1: { line2: 1, full: 1, stop: 1 }, line2: { line2: 0, full: 1, stop: 1 }, full: { line2: 0, full: 0, stop: 1 } }[b.win];
+        assert(JSON.stringify(offered) === JSON.stringify(want), `bingo on ${b.win}: the leader is offered ${JSON.stringify(offered)}`);
+        await H.waitForFunction(() => document.getElementById('player').paused, null, { timeout: 5000 });
+        assert(true, 'the music fades out and stops at the bingo');
+        if (n === 1) {
+          await shot(H, 'disco-40-host-bingo-stop');
+          await shot(D, 'disco-41-tv-bingo');
+          await shot(A, 'disco-42-player360-bingo');
+          await shot(B, 'disco-43-player360-bingo-other');
+        }
+        if (b.win === 'full') await shot(D, 'disco-44-tv-bingo-full');
+      }
+      const choice = b.next.includes('line2') ? 'disco-go-line2' : b.next.includes('full') ? 'disco-go-full' : 'disco-finish';
+      await goOn(H, choice);
+      await H.waitForFunction(([r, w]) => {
+        const s = window.__ttHost.session;
+        const v = s.spectatorView();
+        return s.room.phase === 'won' || s.room.game.round > r || (v?.game?.disco?.bingo && v.game.disco.bingo.win !== w);
+      }, [round, b.win], { timeout: 15000 });
+      if ((await hroom(H)).phase === 'won') { over = true; break; }
+      if ((await hspec(H)).phase === 'answering') {
+        const goal = (await hspec(H)).game.disco.win;
+        assert(goal === { 'disco-go-line2': 'line2', 'disco-go-full': 'full' }[choice], `going on: the goal is now ${goal}`);
+        await D.locator('[data-testid="screen-game"]', { hasText: goal === 'full' ? 'volle kaart' : '2 lijnen' }).waitFor({ timeout: 5000 });
+        break;
+      }
+    }
+  }
+  assert(JSON.stringify(wins) === JSON.stringify(['line1', 'line2', 'full']), `three bingo stops: ${wins.join(', ')}`);
+  // ----- the prize ceremony: winners per stage -----
+  await D.getByTestId('screen-winner').waitFor({ timeout: 10000 });
+  await H.locator('[data-testid="screen-room-host"][data-view="won"]').waitFor();
+  const st = (await dview(D)).game.disco.stages;
+  assert(JSON.stringify(st.map((s) => [s.win, s.names])) === JSON.stringify([['line1', ['Anouk']], ['line2', ['Anouk']], ['full', ['Anouk']]]), `the stages: ${JSON.stringify(st)}`);
+  assert(/1 lijn/.test(await D.getByTestId('screen-stages').textContent()) && /Volle kaart/.test(await H.getByTestId('host-stages').textContent()), 'tv and leader list the winners per stage');
+  await D.getByTestId('screen-ceremony').waitFor();
+  await shot(D, 'disco-45-tv-won-stages');
+  await shot(H, 'disco-46-host-won-stages');
+  assert([H, D, A, B].every((p) => !p.errors.length), `no page errors (${[H, D, A, B].flatMap((p) => p.errors).join('; ')})`);
+  await Promise.all([host, tv, anouk, bram].map((p) => p.context.close()));
+}
+
 export default async function run() {
   const rooms = await startRoomServer();
   const server = await startServer();
   const browser = await launch();
   try {
-    await lobbyChecks(browser, rooms, server);
-    const cats = await wholeGame(browser, rooms, server);
-    await hostPlaysGame(browser, rooms, server);
-    await twoLines(browser, rooms, server, cats);
+    // DISCO_GAME=5 runs only the bingo stages (while working on them)
+    if (process.env.DISCO_GAME !== '5') {
+      await lobbyChecks(browser, rooms, server);
+      const cats = await wholeGame(browser, rooms, server);
+      await hostPlaysGame(browser, rooms, server);
+      await twoLines(browser, rooms, server, cats);
+    }
+    await bingoStages(browser, rooms, server);
   } finally {
     await browser.close();
     server.stop();

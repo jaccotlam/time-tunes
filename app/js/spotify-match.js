@@ -192,6 +192,34 @@ export function bestMatch(card, tracks) {
   };
 }
 
+/** Below these an ISRC hit is "clearly another song" (wrong data at one of the catalogues). */
+export const ISRC_MIN_TITLE = 0.4;
+export const ISRC_MIN_ARTIST = 0.3;
+
+/**
+ * The track an exact ISRC search (q=isrc:XXX) found for a card, or null. An ISRC names one
+ * recording, so the hit is taken unless its title or artist is clearly another song; a card
+ * without title / artist takes the first playable hit. Same result shape as bestMatch.
+ */
+export function isrcMatch(card, tracks) {
+  const list = (tracks || []).filter((t) => t && isSpotifyId(t.id) && t.is_playable !== false);
+  if (!list.length) return null;
+  const known = !!(String(card?.title || '').trim() && String(card?.artist || '').trim());
+  const ranked = known ? rankTracks(card, list).filter((r) => r.title >= ISRC_MIN_TITLE && r.artist >= ISRC_MIN_ARTIST) : list.map((track) => ({ track, score: 1, title: 1, artist: 1 }));
+  const top = ranked[0];
+  if (!top) return null;
+  return {
+    id: top.track.id,
+    uri: top.track.uri || `spotify:track:${top.track.id}`,
+    durationMs: Number(top.track.duration_ms) || null,
+    score: top.score,
+    sure: true,
+    title: top.title,
+    artist: top.artist,
+    via: 'isrc',
+  };
+}
+
 const q = (s) => String(s).replace(/["]/g, ' ').replace(/\s+/g, ' ').trim();
 
 /** Search queries for a card, strict first: field filters, then plain words. */

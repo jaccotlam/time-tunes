@@ -145,7 +145,9 @@ export default async function run() {
     await page.waitForFunction(() => !document.querySelector('[data-testid="pl-match-status"]'), null, { timeout: 20000 });
     pl = (await lists(page)).find((p) => p.id === plId);
     assert(pl.tracks.length === 9, `9 songs after three periods (${pl.tracks.length})`);
-    assert(t('Dancing Queen').year === 1976 && t('Dancing Queen').yearSure === true, 'Dancing Queen: compilation 1992 on Spotify -> 1976 (Arrival), sure');
+    // MusicBrainz (not routed here) finds nothing earlier: the year check ends with Spotify's year,
+    // not sure; Apple Music then LOWERS it in the background (never raises, never makes it sure)
+    assert(t('Dancing Queen').year === 1976 && t('Dancing Queen').yearSure === false && t('Dancing Queen').yearChecked === true, 'Dancing Queen: compilation 1992 on Spotify -> 1976 (Arrival) via Apple Music, checked, not sure');
     await shot(page, 'pl-top-03-periods');
 
     // quick start on the playlists screen: one tap, a new playlist filled (permission is there now)

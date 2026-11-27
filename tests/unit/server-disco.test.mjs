@@ -1,7 +1,8 @@
 // Discobingo on the room server (server/core.mjs + room.mjs), with fake sockets and a fake
 // clock: per-recipient views, the stamp and judge messages, the no-peeking guarantee (no
 // song data and no other player's answer in any message to a player before the reveal),
-// protocol version 4, rooms stored by the previous version, and the mix threshold.
+// protocol version 5, rooms stored by earlier versions, the mix threshold, the bingo stop
+// (continue / finish), the automatic reveal on the server's clock (hold) and the chip states.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRoomServer } from '../../server/core.mjs';
@@ -13,7 +14,7 @@ import * as G from '../../app/js/multi/game.js';
 const V = SERVER_PROTOCOL_VERSION;
 const ORIGIN = 'http://localhost:8080';
 const flush = () => new Promise((r) => setTimeout(r, 20));
-// years never end in 0 or 9, so a year can not hide in a decade label ("1980–1989")
+// years never end in 0 or 9 (kept from the decade era: a year must never hide in any label)
 const YEARS = Array.from({ length: 60 }, (_, i) => 1961 + i).filter((y) => y % 10 !== 0 && y % 10 !== 9);
 const cards = YEARS.slice(0, 30).map((year, i) => ({
   id: `c${String(i + 1).padStart(3, '0')}`, year, title: `Verborgen titel ${i + 1}`, artist: `Verborgen artiest ${i + 1}`,
@@ -56,7 +57,7 @@ const secretOf = (i, round) => `Geheimtekst${'ABC'[i]}${round}x`;
 
 function answerFor(view, song, i) {
   const d = view.game.disco;
-  if (d.cat === 'decade') return { decade: i === 0 ? Math.floor(song.year / 10) * 10 : d.decades[0].decade };
+  if (d.cat === 'exact') return { guess: i === 0 ? song.year : song.year + 1 };
   if (d.cat === 'year') return { guess: i === 0 ? song.year + 1 : 1900 };
   return { text: i === 0 ? (d.cat === 'artist' ? song.artist : song.title) : secretOf(i, view.game.round) };
 }
@@ -70,11 +71,12 @@ test('disco op de server: weergave per ontvanger, stempelen, oordelen, volgende 
   assert.equal(av.settings.game, 'disco');
   assert.equal(av.settings.win, 'line1');
   const d = av.game.disco;
-  assert.ok(['decade', 'artist', 'year', 'title'].includes(d.cat), 'de categorie is openbaar');
+  assert.ok(['exact', 'artist', 'year', 'title'].includes(d.cat), 'de categorie is openbaar');
   assert.equal(d.spin, 1);
   assert.equal(d.spunAt, a.last('state').meta.now, 'servertijd van de draai (meta.now voor het klokverschil)');
   assert.equal(d.spinMs, 4000);
-  assert.deepEqual(d.decades.map((x) => x.decade), [1960, 1970, 1980, 1990]);
+  assert.equal(d.decades, undefined, 'geen decennia meer');
+  assert.equal(V, 5, 'protocol 5: "Exact jaar", de bingostop, het automatische resultaat');
   assert.equal(av.game.mine.card.length, 25);
   assert.equal(av.game.mine.marks[12], '*');
   assert.equal(av.game.reveal, null);
@@ -202,7 +204,9 @@ test('disco: niet spieken: vóór de onthulling geen titel, artiest of jaar en g
         if (text === 'pong') continue;
         // Anouk typed the right answer herself: her own answer comes back to her (only to her)
         if (i !== 0 || !['artist', 'title'].includes(view.game.disco.cat)) assert.ok(!text.includes(song.title) && !text.includes(song.artist), `ronde ${round}: geen titel/artiest`);
-        assert.ok(!new RegExp(`\\b${song.year}\\b`).test(text), `ronde ${round}: geen jaar`);
+        // (an exact year Anouk typed herself, right, comes back to her only)
+        if (i !== 0 || view.game.disco.cat !== 'exact') assert.ok(!new RegExp(`\\b${song.year}\\b`).test(text), `ronde ${round}: geen jaar`);
+        else assert.ok(!new RegExp(`\\b${song.year}\\b`).test(text.replace(`"answer":{"guess":${song.year}}`, '')), `ronde ${round}: geen jaar buiten het eigen antwoord`);
         assert.ok(!text.includes(song.previewUrl) && !text.includes(`"${song.id}"`), 'geen fragment of id');
         assert.ok(!text.includes('"reveal":{'));
         for (const j of [0, 1, 2]) if (j !== i) assert.ok(!text.includes(secretOf(j, round)), `ronde ${round}: geen antwoord van een ander`);
@@ -217,9 +221,269 @@ test('disco: niet spieken: vóór de onthulling geen titel, artiest of jaar en g
     }
     host.send({ t: 'next' });
     await flush();
+    const bingo = players[0].view().game.disco.bingo;
+    if (bingo) { host.send(bingo.next.length ? { t: 'continue', win: bingo.next[0] } : { t: 'finish' }); await flush(); }
     if (players[0].view().phase !== 'answering') break;
   }
   assert.ok(typed >= 2, 'er zaten getypte rondes bij');
+});
+
+test('disco: hold, continue en finish zijn geldige berichten, alleen voor de spelleider', () => {
+  for (const m of [{ t: 'hold', round: 1 }, { t: 'continue', win: 'line2' }, { t: 'finish' }]) {
+    assert.ok(parseClientMessage(JSON.stringify(m)), m.t);
+    assert.ok(LEADER_TYPES.includes(m.t), `${m.t} alleen de spelleider`);
+  }
+});
+
+/** Everybody answers (Anouk right); returns the song. */
+async function allAnswer(host, players, { except = [] } = {}) {
+  const song = host.last('state').lead.song;
+  const view = players[0].view();
+  for (const [i, p] of players.entries()) if (!except.includes(i)) p.send({ t: 'answer', round: view.game.round, answer: answerFor(view, song, i) });
+  await flush();
+  return song;
+}
+
+test('disco: automatisch naar het resultaat: 4 s na het laatste antwoord, gedeeld moment, stopt vanzelf, Wacht nog', async () => {
+  const { core, advance, now } = setup();
+  const { code, host, players: [a, b, c] } = await discoRoom(core);
+  const hub = core.rooms.get(code);
+  advance(5000); // the ball has landed
+  await allAnswer(host, [a, b, c], { except: [2] });
+  assert.equal(a.view().game.disco.autoAt, null, 'Cas nog niet');
+  c.send({ t: 'answer', round: 1, answer: { pass: true } });
+  await flush();
+  const at = a.view().game.disco.autoAt;
+  assert.equal(at, now() + 4000, 'vier seconden na het laatste antwoord');
+  assert.equal(a.view().game.disco.autoMs, 4000);
+  for (const p of [b, c]) assert.equal(p.view().game.disco.autoAt, at, 'hetzelfde moment op elke telefoon');
+  assert.equal(host.last('state').lead.spectator.game.disco.autoAt, at, 'en bij de spelleider / tv');
+  assert.equal(hub.nextTick(), at, 'het alarm (Cloudflare) staat op dat moment');
+  // changing an answer restarts nothing
+  advance(1000);
+  b.send({ t: 'answer', round: 1, answer: { pass: true } });
+  await flush();
+  assert.equal(a.view().game.disco.autoAt, at);
+  // a withdrawn answer stops it; answering again starts a fresh countdown
+  c.send({ t: 'withdraw' });
+  await flush();
+  assert.equal(a.view().game.disco.autoAt, null);
+  c.send({ t: 'answer', round: 1, answer: { pass: true } });
+  await flush();
+  const at2 = a.view().game.disco.autoAt;
+  assert.equal(at2, now() + 4000);
+  // not yet ... then the tick reveals, exactly once
+  advance(3999);
+  hub.tick();
+  await flush();
+  assert.equal(a.view().phase, 'answering');
+  advance(1);
+  hub.tick();
+  await flush();
+  assert.equal(a.view().phase, 'revealed', 'vanzelf onthuld, net als Onthul');
+  assert.equal(a.view().game.reveal.mine.verdict, 'right');
+  const round = a.view().game.round;
+  hub.tick();
+  await flush();
+  assert.equal(a.view().game.round, round, 'nooit twee keer');
+  host.send({ t: 'reveal' });
+  await flush();
+  assert.equal(host.last('error').code, 'phase', 'Onthul daarna: er valt niets meer te onthullen');
+  // round 2: "Wacht nog" stops it for this round only
+  host.send({ t: 'next' });
+  await flush();
+  if (a.view().game.disco.bingo) { host.send({ t: 'continue', win: 'line2' }); await flush(); }
+  advance(5000);
+  await allAnswer(host, [a, b, c]);
+  assert.ok(a.view().game.disco.autoAt);
+  a.send({ t: 'hold', round: a.view().game.round });
+  await flush();
+  assert.equal(a.last('error').code, 'notleader');
+  host.send({ t: 'hold', round: a.view().game.round });
+  await flush();
+  assert.equal(a.view().game.disco.autoAt, null);
+  assert.equal(a.view().game.disco.autoHeld, true);
+  advance(8000);
+  hub.tick();
+  await flush();
+  assert.equal(a.view().phase, 'answering', 'Wacht nog: de spelleider onthult zelf');
+  host.send({ t: 'reveal' });
+  await flush();
+  assert.equal(a.view().phase, 'revealed');
+  // "Wacht nog" tapped just after the reveal (same round, phase already revealed): no error toast
+  const errorsBefore = host.msgs.filter((m) => m.t === 'error').length;
+  host.send({ t: 'hold', round: a.view().game.round });
+  await flush();
+  assert.equal(host.msgs.filter((m) => m.t === 'error').length, errorsBefore, 'te laat voor Wacht nog: stil genegeerd');
+  assert.equal(a.view().phase, 'revealed');
+});
+
+test('disco: automatisch resultaat stopt als iemand zonder antwoord (terug)komt; afwezig telt niet; uit in de lobby', async () => {
+  const { core, advance } = setup();
+  const { code, host, players: [a, b, c] } = await discoRoom(core);
+  const hub = core.rooms.get(code);
+  advance(5000);
+  // Cas goes away: Anouk and Bram answering is everybody
+  c.conn.closed();
+  await flush();
+  await allAnswer(host, [a, b], {});
+  const at = a.view().game.disco.autoAt;
+  assert.ok(at, 'wie weg is, wordt niet afgewacht');
+  // Cas comes back without an answer: the countdown stops
+  const c2 = connect(core, code);
+  c2.send({ t: 'hello', v: V, code, id: 'playerC1', token: c.last('welcome').token });
+  await flush();
+  assert.equal(c2.view().game.disco.autoAt, null);
+  assert.equal(a.view().game.disco.autoAt, null);
+  advance(10000);
+  hub.tick();
+  await flush();
+  assert.equal(a.view().phase, 'answering');
+  // the leader goes away: the server reveals by itself all the same (the reveal never waits for a phone)
+  c2.send({ t: 'answer', round: 1, answer: { pass: true } });
+  await flush();
+  host.conn.closed();
+  await flush();
+  advance(4000);
+  hub.tick();
+  await flush();
+  assert.equal(a.view().phase, 'revealed', 'ook als de spelleider even weg is');
+  // the lobby setting off: no countdown at all
+  const { core: core2, advance: adv2 } = setup();
+  const r2 = await discoRoom(core2, { settings: { autoReveal: false } });
+  adv2(5000);
+  await allAnswer(r2.host, r2.players);
+  assert.equal(r2.players[0].view().settings.autoReveal, false);
+  assert.equal(r2.players[0].view().game.disco.autoAt, null);
+});
+
+test('disco: het automatische resultaat overleeft een slapend / herladen Durable Object (opgeslagen moment, alarm)', async () => {
+  const { core, advance, now } = setup();
+  const { code, host, players } = await discoRoom(core);
+  const hub = core.rooms.get(code);
+  advance(5000);
+  await allAnswer(host, players);
+  const at = hub.state.room.game.disco.autoAt;
+  assert.equal(at, now() + 4000);
+  // the object hibernates: only the stored state and the open connections come back
+  const stored = JSON.parse(JSON.stringify(hub.snapshot()));
+  const conns = [...hub.conns].map(([connId, c2]) => ({ connId, mid: c2.mid, lastSeen: now() }));
+  let t = now();
+  const sent = [];
+  const fresh = new RoomHub(code, { now: () => t, send: (id, text) => sent.push(text) });
+  fresh.load(stored, conns);
+  assert.equal(fresh.nextTick(), at, 'het alarm vindt het moment terug');
+  t = at;
+  fresh.tick();
+  assert.equal(fresh.state.room.phase, 'revealed', 'het alarm onthult');
+  t += 10;
+  fresh.tick();
+  assert.equal(fresh.state.room.phase, 'revealed');
+  assert.equal(fresh.state.room.game.round, 1);
+});
+
+test('disco: bingo stopt het spel meteen; doorgaan voor 2 lijnen, dan een volle kaart, dan de prijsuitreiking', async () => {
+  const { core, advance } = setup();
+  const { code, token, host, players: [a, b, c] } = await discoRoom(core);
+  const hub = core.rooms.get(code);
+  const scr = connect(core, code);
+  scr.send({ t: 'hello', v: V, code, screen: true });
+  await flush();
+  // give Anouk four squares of a line through an open square of the round's colour
+  const room = hub.state.room;
+  const cat = room.game.disco.cat;
+  const card = room.game.per.playerA1.card;
+  const { LINES } = await import('../../app/js/multi/disco.js');
+  const line = LINES.find((l) => l.some((i) => card[i] === cat));
+  const sq = line.find((i) => card[i] === cat);
+  const marks = room.game.per.playerA1.marks.map((m, i) => (line.includes(i) && i !== sq ? '*' : m));
+  hub.state.room = { ...room, game: { ...room.game, per: { ...room.game.per, playerA1: { ...room.game.per.playerA1, marks } } } };
+  advance(5000);
+  await allAnswer(host, [a, b, c]);
+  host.send({ t: 'reveal' });
+  await flush();
+  assert.equal(scr.view().game.disco.bingo, null);
+  const chips = host.last('state').lead.spectator.game.disco.chips;
+  assert.deepEqual(chips.map((x) => [x.name, x.state]), [['Anouk', 'choosing']], 'de spelleider ziet wie nog kiest');
+  a.send({ t: 'stamp', round: 1, index: sq });
+  await flush();
+  for (const v of [scr.view(), a.view(), b.view(), host.last('state').lead.spectator]) {
+    assert.equal(v.game.disco.bingo.winners[0].name, 'Anouk', 'bingo meteen op elk scherm');
+    assert.deepEqual(v.game.disco.bingo.next, ['line2', 'full']);
+  }
+  assert.deepEqual(scr.view().game.disco.bingo.winners[0].cells, [...line].sort((x, y) => x - y), 'de winnende lijn op de tv');
+  assert.equal(scr.view().game.disco.chips[0].state, 'placed');
+  // the chip is final; no next song until the leader decides
+  a.send({ t: 'stamp', round: 1, index: null });
+  await flush();
+  assert.equal(a.last('error').code, 'final');
+  host.send({ t: 'next' });
+  await flush();
+  assert.equal(host.last('error').code, 'bingo');
+  b.send({ t: 'continue', win: 'line2' });
+  await flush();
+  assert.equal(b.last('error').code, 'notleader');
+  host.send({ t: 'continue', win: 'line1' });
+  await flush();
+  assert.equal(host.last('error').code, 'answer');
+  // a backup during the stop: a restored server shows the same stop
+  const snap = host.last('backup').snap;
+  const core2 = createRoomServer({ now: () => 9_000_000 });
+  const res = core2.http({ method: 'POST', path: `/rooms/${code}/restore`, origin: ORIGIN, ip: '1', body: JSON.stringify({ v: V, id: 'owner01', token, snap }) });
+  assert.equal(res.status, 200);
+  assert.ok(G.inBingoStop(core2.rooms.get(code).state.room), 'na een herstart van de server staat de bingo er nog');
+  host.send({ t: 'continue', win: 'line2' });
+  await flush();
+  assert.equal(a.view().phase, 'answering');
+  assert.equal(a.view().game.disco.win, 'line2');
+  assert.equal(a.view().settings.win, 'line1');
+  assert.deepEqual(a.view().game.disco.stages, [{ win: 'line1', ids: ['playerA1'], names: ['Anouk'], round: 1 }]);
+  assert.equal(scr.view().game.disco.bingo, null);
+  // to the end: Anouk always right, the automatic chips; on every bingo go on, then stop
+  for (let round = 2; round < 40 && a.view().phase !== 'won'; round++) {
+    advance(5000);
+    await allAnswer(host, [a, b, c]);
+    host.send({ t: 'reveal' });
+    await flush();
+    host.send({ t: 'next' });
+    await flush();
+    const bingo = scr.view().game.disco.bingo;
+    if (bingo) { host.send(bingo.next.length ? { t: 'continue', win: bingo.next[0] } : { t: 'finish' }); await flush(); }
+  }
+  assert.equal(a.view().phase, 'won');
+  const st = scr.view().game.disco.stages;
+  assert.deepEqual(st.map((x) => x.win), ['line1', 'line2', 'full'], 'drie etappes');
+  assert.ok(scr.view().game.disco.awards.length > 0);
+  assert.ok(scr.view().game.winners.includes('Anouk'));
+});
+
+test('disco: een spel van vóór "Exact jaar" (Decennium) gaat netjes terug naar de lobby, ook uit een back-up', async () => {
+  const { core } = setup();
+  const { code, token, host } = await discoRoom(core);
+  const snap = host.last('backup').snap;
+  const old = JSON.parse(JSON.stringify(snap));
+  const g = old.room.game;
+  for (const s of Object.values(g.per)) s.card = s.card.map((k) => (k === 'exact' ? 'decade' : k));
+  g.disco.decades = [1960, 1970];
+  // the stored state of the Durable Object (or the Node accounts file)
+  const state = migrateState({ v: 1, code, createdAt: 1, lastActive: 1, claimed: true, ownerId: 'owner01', ownerName: 'Ilse', leaderId: 'owner01', leaderAwaySince: 1, members: old.members, room: old.room });
+  assert.equal(state.room.phase, 'lobby');
+  assert.equal(state.room.game, null);
+  assert.equal(state.room.players.length, old.room.players.length, 'de spelers blijven');
+  assert.ok(G.isValidRoom(state.room));
+  // the owner's backup after a server restart: restored, in the lobby
+  const core2 = createRoomServer({ now: () => 1 });
+  const res = core2.http({ method: 'POST', path: `/rooms/${code}/restore`, origin: ORIGIN, ip: '1', body: JSON.stringify({ v: V, id: 'owner01', token, snap: old }) });
+  assert.equal(res.status, 200);
+  assert.equal(core2.rooms.get(code).state.room.phase, 'lobby');
+  // an old app (protocol 4) against this server: the clear "ververs de pagina"
+  const p = connect(core, code);
+  p.send({ t: 'hello', v: 4, code, id: 'playerZ1', name: 'Oud' });
+  await flush();
+  assert.equal(p.last('error').code, 'version');
+  assert.match(p.last('error').message, /Ververs de pagina/);
+  const created = http(core, 'POST', '/rooms', { v: 4, id: 'owner02', name: 'Oud', settings: { game: 'disco' } });
+  assert.notEqual(created.status, 201, 'een oude app maakt geen kamer');
 });
 
 test('disco: stamp en judge zijn geldige berichten; judge is alleen voor de spelleider', () => {
@@ -378,8 +642,9 @@ test('disco: willekeurige kapotte berichten van spelleider en spelers gooien noo
   const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32);
   const pick = (xs) => xs[Math.floor(rnd() * xs.length)];
   const vals = [0, 1, 12, 24, 25, -1, 1.5, NaN, null, true, false, '', 'x', '1980', ...PROTO_IDS, 'playerA1', 'playerB1', 'owner01', '!spectator',
-    [], [1], {}, { decade: 1980 }, { guess: '1985' }, { text: 'abc' }, { pass: true }, { text: { a: 1 } }, { decade: '1980' }, 'a'.repeat(3000), 1e9];
-  const types = ['answer', 'withdraw', 'settings', 'reveal', 'override', 'next', 'lobby', 'remove', 'lead', 'playing', 'stamp', 'judge', 'mix-add', 'mix-clear', 'start'];
+    [], [1], {}, { decade: 1980 }, { guess: '1985' }, { text: 'abc' }, { pass: true }, { text: { a: 1 } }, { decade: '1980' }, 'a'.repeat(3000), 1e9,
+    'line1', 'line2', 'full', { autoReveal: false }];
+  const types = ['answer', 'withdraw', 'settings', 'reveal', 'override', 'next', 'lobby', 'remove', 'lead', 'playing', 'stamp', 'judge', 'mix-add', 'mix-clear', 'start', 'hold', 'continue', 'finish'];
   const logs = [];
   const orig = console.error;
   console.error = (...x) => logs.push(x.join(' '));
@@ -391,7 +656,7 @@ test('disco: willekeurige kapotte berichten van spelleider en spelers gooien noo
       for (let i = 0; i < 200; i++) {
         const c = pick(conns);
         const m = { t: pick(types) };
-        for (const k of ['round', 'answer', 'pid', 'ok', 'index', 'patch', 'tracks']) if (rnd() < 0.5) m[k] = pick(vals);
+        for (const k of ['round', 'answer', 'pid', 'ok', 'index', 'patch', 'tracks', 'win']) if (rnd() < 0.5) m[k] = pick(vals);
         if ((m.t === 'stamp' || m.t === 'answer') && rnd() < 0.7) m.round = c.last('state')?.view?.game?.round ?? 1;
         if (m.t === 'remove' || m.t === 'lobby' || m.t === 'start') { if (rnd() < 0.8) continue; }
         c.send(m);

@@ -5,7 +5,7 @@
 // cross-origin and are never cached here; the same goes for Spotify
 // (api.spotify.com, accounts.spotify.com).
 // Bump VERSION when the list below changes; old caches are removed on activate.
-const VERSION = 'v3-9';
+const VERSION = 'v3-10';
 const CACHE = `timetunesr-shell-${VERSION}`;
 const SHELL = [
   './',
@@ -17,6 +17,7 @@ const SHELL = [
   'js/logic.js',
   'js/deck.js',
   'js/player.js',
+  'js/fade.js',
   'js/scanner.js',
   'js/ui.js',
   'js/screens/start.js',
@@ -68,6 +69,7 @@ const SHELL = [
   'js/multi/quiz.js',
   'js/multi/mix.js',
   'js/multi/mix-share.js',
+  'js/multi/mix-lists.js',
   'js/spotify-top.js',
   'js/apple-match.js',
   'js/screens/room-mix.js',
@@ -91,6 +93,14 @@ const SHELL = [
   'js/screens/account.js',
   'js/screens/my-rooms.js',
   'css/account.css',
+  'js/deezer.js',
+  'js/musicbrainz.js',
+  'js/enrich.js',
+  'js/multi/order.js',
+  'js/played.js',
+  'js/screens/music-bits.js',
+  'js/screens/music-sheet.js',
+  'css/music.css',
 ];
 const NETWORK_TIMEOUT_MS = 4000;
 

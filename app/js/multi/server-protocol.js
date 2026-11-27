@@ -48,19 +48,34 @@
 //   Refused reactions are dropped silently. A new app must not send avatar / react to a server
 //   without the 'party' feature: that one answers 'bad'.
 //
+// "Mix van de groep" from playlists (optional addition within version 4; /health `features`
+//   lists 'mix-playlists'): a mix-add track may carry `deezerId` (positive safe integer) and
+//   `isrc` instead of a `spotifyId`; such a song (from a public Deezer playlist the phone chose)
+//   must say `checked: true` (its year was checked at MusicBrainz on the phone), else it is
+//   refused like any invalid song. Duplicates are also recognised by deezerId and ISRC. An
+//   older server refuses songs without a spotifyId, so a new app offers "Kies een playlist"
+//   only when the server lists the feature.
+//
 // Version 2 (November 2026): the Quiz (settings questions/qtype/think, playing, the quiz part of
 // the view). Version 3 (November 2026): "Mix van de groep" (mix-add, mix-clear, settings.music,
 // start.play, meta.mix). Version 4 (November 2026): Discobingo (game 'disco', settings.win, stamp,
-// judge, the disco part of the view). A phone with another version gets a clear message
-// (health / hello / POST /rooms).
+// judge, the disco part of the view). Version 5 (November 2026): Discobingo round 3 ("Exact jaar"
+// replaces "Decennium", the bingo stop with continue {win} / finish {}, the automatic reveal
+// with hold {round} and settings.autoReveal): an old app would not know the new category. A
+// phone with another version gets a clear message (health / hello / POST /rooms).
 
-export const SERVER_PROTOCOL_VERSION = 4;
+export const SERVER_PROTOCOL_VERSION = 5;
 /** Optional additions within this version that the server announces in /health `features`. */
-export const SERVER_FEATURES = ['screen', 'party'];
-/** Largest message from a phone (the deck at the start of a game). */
+export const SERVER_FEATURES = ['screen', 'party', 'mix-playlists'];
+/**
+ * Largest message from a phone (the deck at the start of a game), in UTF-8 bytes. A start
+ * with 2000 realistic cards is about 300 kB (tests/unit/big-lists.test.mjs); fitCards keeps
+ * every start below it (slimmer cards, else fewer), so the server never has to refuse one.
+ */
 export const MAX_CLIENT_MESSAGE = 512 * 1024;
 /** Every other message is small. */
 export const MAX_SMALL_MESSAGE = 16 * 1024;
+/** Most songs in a room's deck: the same as a playlist's MAX_TRACKS (playlist-logic.js). */
 export const MAX_CARDS = 2000;
 /** A leader who is away this long may be replaced by a player. */
 export const TAKEOVER_MS = 30000;
@@ -70,9 +85,9 @@ export const CLIENT_PING_MS = 10000;
 /** Nothing heard for this long: the connection is dead. */
 export const STALE_MS = 25000;
 
-const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing', 'mix-add', 'mix-clear', 'stamp', 'judge', 'avatar', 'react'];
+const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing', 'mix-add', 'mix-clear', 'stamp', 'judge', 'avatar', 'react', 'hold', 'continue', 'finish'];
 const SERVER_TYPES = ['welcome', 'state', 'error', 'backup', 'react'];
-export const LEADER_TYPES = ['settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'playing', 'judge'];
+export const LEADER_TYPES = ['settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'playing', 'judge', 'hold', 'continue', 'finish'];
 
 export const ID_RE = /^[A-Za-z0-9_-]{4,40}$/;
 export const TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
@@ -81,7 +96,7 @@ export const SPOTIFY_CLIENT_ID_RE = /^[0-9a-f]{32}$/i;
 
 /** Parse a message from a phone (string). Null when it is not a valid message. */
 export function parseClientMessage(raw) {
-  if (typeof raw !== 'string' || raw.length > MAX_CLIENT_MESSAGE) return null;
+  if (typeof raw !== 'string' || raw.length > MAX_CLIENT_MESSAGE || utf8Length(raw) > MAX_CLIENT_MESSAGE) return null;
   let m;
   try { m = JSON.parse(raw); } catch { return null; }
   if (!m || typeof m !== 'object' || Array.isArray(m) || !CLIENT_TYPES.includes(m.t)) return null;
@@ -97,15 +112,76 @@ export function parseServerMessage(raw) {
   return m && typeof m === 'object' && SERVER_TYPES.includes(m.t) ? m : null;
 }
 
-const CARD_FIELDS = ['id', 'year', 'title', 'artist', 'previewUrl', 'itunesId', 'spotifyId'];
+/** A uniform random sample of n items (partial Fisher-Yates), in random order. */
+function sampleOf(items, n, rand) {
+  const a = items.slice();
+  for (let i = 0; i < n && i < a.length; i++) {
+    const j = i + Math.floor(rand() * (a.length - i));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a.slice(0, n);
+}
 
-/** Only what the server needs to run a game and the music phone needs to play a song. */
+/** UTF-8 length of a string (what a WebSocket frame carries), without building the bytes. */
+export function utf8Length(str) {
+  let n = 0;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    if (c < 0x80) n += 1;
+    else if (c < 0x800) n += 2;
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length) { n += 4; i++; } else n += 3;
+  }
+  return n;
+}
+
+const CARD_FIELDS = ['id', 'year', 'title', 'artist', 'previewUrl', 'itunesId', 'spotifyId', 'deezerId', 'isrc'];
+
+/**
+ * Only what the server needs to run a game and the music phone needs to play a song (the
+ * ISRC only serves to find a song on Spotify, so it stays home when there is a Spotify id).
+ */
 export function cardsForServer(cards) {
   return (cards || []).map((c) => {
     const o = {};
     for (const k of CARD_FIELDS) if (c[k] != null && c[k] !== '') o[k] = c[k];
+    if (o.spotifyId) delete o.isrc;
     return o;
   });
+}
+
+/**
+ * The cards of a start message that fits in `maxBytes` (the whole message, `extra` = the
+ * rest of it): as they are when they fit; else without the previewUrl of cards that have an
+ * id to look it up with, and titles / artists of at most 100 characters; else only as many
+ * cards as fit (a fair random part when `rand` is given). Returns { cards, cut } (cut: how
+ * many were left out). Every card has the same chance to be in the game.
+ */
+export function fitCards(cards, { maxBytes = MAX_CLIENT_MESSAGE - 4096, extra = 200, rand = Math.random } = {}) {
+  // more than a room takes: a uniform random sample, never the head of the playlist
+  const all = cards || [];
+  let list = cardsForServer(all.length > MAX_CARDS ? sampleOf(all, MAX_CARDS, rand) : all);
+  const size = (l) => utf8Length(JSON.stringify(l)) + extra;
+  if (size(list) <= maxBytes) return { cards: list, cut: Math.max(0, (cards || []).length - list.length) };
+  list = list.map((c) => {
+    const o = { ...c };
+    if (o.itunesId || o.deezerId) delete o.previewUrl;
+    if (typeof o.title === 'string') o.title = o.title.slice(0, 100);
+    if (typeof o.artist === 'string') o.artist = o.artist.slice(0, 100);
+    return o;
+  });
+  if (size(list) <= maxBytes) return { cards: list, cut: Math.max(0, (cards || []).length - list.length) };
+  // still too big: a random part of the cards, as many as fit
+  const order = list.map((c, i) => [rand(), i]).sort((a, b) => a[0] - b[0]).map(([, i]) => i);
+  const keep = new Set();
+  let used = 2 + extra;
+  for (const i of order) {
+    const b = utf8Length(JSON.stringify(list[i])) + 1;
+    if (used + b > maxBytes) continue;
+    used += b;
+    keep.add(i);
+  }
+  const out = list.filter((_, i) => keep.has(i));
+  return { cards: out, cut: (cards || []).length - out.length };
 }
 
 const str = (v, max) => (typeof v === 'string' || typeof v === 'number' ? String(v).replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max) : '');
@@ -115,6 +191,7 @@ export function cleanCards(cards) {
   if (!Array.isArray(cards)) return [];
   const out = [];
   const seen = new Set();
+  // an app sends at most MAX_CARDS (fitCards samples a bigger deck at random); more is refused here
   for (const c of cards.slice(0, MAX_CARDS)) {
     if (!c || typeof c !== 'object') continue;
     const id = str(c.id, 40);
@@ -125,6 +202,8 @@ export function cleanCards(cards) {
     if (typeof c.previewUrl === 'string' && /^https:\/\/[^\s"'<>]{4,600}$/.test(c.previewUrl)) o.previewUrl = c.previewUrl;
     if (Number.isSafeInteger(Number(c.itunesId)) && Number(c.itunesId) > 0) o.itunesId = Number(c.itunesId);
     if (typeof c.spotifyId === 'string' && /^[A-Za-z0-9]{10,40}$/.test(c.spotifyId)) o.spotifyId = c.spotifyId;
+    if (Number.isSafeInteger(c.deezerId) && c.deezerId > 0) o.deezerId = c.deezerId;
+    if (typeof c.isrc === 'string' && /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(c.isrc)) o.isrc = c.isrc;
     out.push(o);
   }
   return out;

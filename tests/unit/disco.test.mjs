@@ -1,17 +1,35 @@
 // Discobingo rules (app/js/multi/disco.js): cards, lines and goals, the balanced bag, the
-// automatic placement, the late joiner's head start and the decades.
+// automatic placement, the late joiner's head start, the two year checks and the goals after a bingo.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CATEGORY_KEYS, CENTER, CENTER_KEY, LINES, generateDiscoCard, isValidCard, uniqueDiscoCard, discoSignature,
   freshMarks, completeLines, reachedGoal, goalCells, stampedCount, bestSquare, openSquares, lateMarks, bestLineCount,
-  drawCategory, freshBag, decadesFor, decadeLabel, decadeOf, yearRight, normalizeWin, FREE_MARK, MAX_SAME_PER_LINE,
+  drawCategory, freshBag, yearRight, exactRight, normalizeWin, FREE_MARK, MAX_SAME_PER_LINE, CATEGORIES, nextGoals,
+  AUTO_REVEAL_MS, OLD_CATEGORY_KEYS,
 } from '../../app/js/multi/disco.js';
 import { seededRandom } from '../../app/js/logic.js';
 
 test('categorieën: vaste sleutels en volgorde', () => {
-  assert.deepEqual(CATEGORY_KEYS, ['decade', 'artist', 'year', 'title']);
+  assert.deepEqual(CATEGORY_KEYS, ['exact', 'artist', 'year', 'title']);
   assert.equal(LINES.length, 12);
+  assert.deepEqual(OLD_CATEGORY_KEYS, ['decade']);
+  // four clearly different colours; the two year categories never share a colour, name or css variable
+  assert.equal(new Set(CATEGORIES.map((c) => c.color)).size, 4);
+  const exact = CATEGORIES.find((c) => c.key === 'exact');
+  const year = CATEGORIES.find((c) => c.key === 'year');
+  assert.equal(exact.label, 'Exact jaar');
+  assert.notEqual(exact.color, year.color);
+  assert.notEqual(exact.short, year.short);
+  assert.equal(exact.cssVar, '--cat-exact');
+});
+
+test('doelen na een bingo: 1 lijn -> 2 lijnen of vol; 2 lijnen -> vol; vol is het eind', () => {
+  assert.deepEqual(nextGoals('line1'), ['line2', 'full']);
+  assert.deepEqual(nextGoals('line2'), ['full']);
+  assert.deepEqual(nextGoals('full'), []);
+  assert.deepEqual(nextGoals('onzin'), ['line2', 'full'], 'onbekend = 1 lijn');
+  assert.equal(AUTO_REVEAL_MS, 4000);
 });
 
 test('kaart: 5×5, vrije ster in het midden, 6 per categorie, nooit meer dan 2 per lijn (veel seeds)', () => {
@@ -91,20 +109,12 @@ test('laat instappen: zoveel gratis vakjes, nooit meer dan 3 in één lijn (midd
   }
 });
 
-test('decennia en jaartal ±2', () => {
-  assert.deepEqual(decadesFor([1984, 1961, 2003]), [1960, 1970, 1980, 1990, 2000], 'zonder gaten, van oud naar nieuw');
-  assert.deepEqual(decadesFor([]), []);
-  assert.equal(decadeOf(1989), 1980);
-  assert.deepEqual(decadeLabel(1980), { decade: 1980, label: 'Jaren 80', sub: '1980–1989' });
-  assert.equal(decadeLabel(2000).label, 'Jaren 00');
-  assert.equal(decadeLabel(2010).label, 'Jaren 10');
-  assert.deepEqual(decadeLabel(1900), { decade: 1900, label: '1900–1909', sub: '' }, 'vóór 1930: geen botsing met de jaren 00');
-  assert.equal(decadeLabel(1920).label, '1920–1929');
-  assert.equal(decadeLabel(1930).label, 'Jaren 30');
-  const labels = decadesFor([1900, 2029]).map((d) => decadeLabel(d).label);
-  assert.equal(new Set(labels).size, labels.length, 'nooit twee knoppen met hetzelfde opschrift');
+test('jaartal ±2 en exact jaar (geen marge)', () => {
   assert.ok(yearRight(1982, 1984) && yearRight(1986, 1984));
   assert.ok(!yearRight(1981, 1984) && !yearRight(1987, 1984));
+  assert.ok(exactRight(1984, 1984) && exactRight(1984, '1984'));
+  assert.ok(!exactRight(1983, 1984) && !exactRight(1985, 1984), 'één jaar ernaast is fout');
+  assert.ok(!exactRight('1984', 1984) && !exactRight(null, 1984), 'alleen een geheel getal');
 });
 
 function draws(n, seed, usable = () => true, state = freshBag()) {
@@ -137,7 +147,7 @@ test('zak: een categorie zonder open vakje wordt overgeslagen en komt meteen ter
     assert.ok(!seq.includes('year'), `seed ${seed}`);
     for (let i = 1; i < seq.length; i++) assert.notEqual(seq[i], seq[i - 1]);
     const c = counts(seq);
-    assert.ok(Math.max(c.decade, c.artist, c.title) - Math.min(c.decade, c.artist, c.title) <= 1, `seed ${seed}: de andere drie in balans ${JSON.stringify(c)}`);
+    assert.ok(Math.max(c.exact, c.artist, c.title) - Math.min(c.exact, c.artist, c.title) <= 1, `seed ${seed}: de andere drie in balans ${JSON.stringify(c)}`);
     // 'year' usable again: it is owed, so it comes within the next two rounds
     const next = [];
     for (let i = 0; i < 2; i++) { const r = drawCategory(st, seed); next.push(r.cat); st = r.state; }
