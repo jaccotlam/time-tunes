@@ -130,6 +130,8 @@
 .pl-track {
   display: grid; grid-template-columns: 30px minmax(0, 1fr) 64px 40px; align-items: center; gap: 8px;
   padding: 8px 8px 8px 10px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line);
+  /* a 2000-song list: rows out of sight are not laid out or painted (looks the same) */
+  content-visibility: auto; contain-intrinsic-size: auto 60px;
 }
 .pl-track.is-check { border-color: rgba(255, 198, 73, .55); }
 .pl-num { font-size: .75rem; color: var(--muted); font-variant-numeric: tabular-nums; }

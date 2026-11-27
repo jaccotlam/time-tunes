@@ -721,7 +721,12 @@ export function createServerHostSession() {
           if (closing) return;
           if (received.length < 3000) received.push(m);
           if (m.t === 'react') { reactions.push(m); return; }
-          if (m.t === 'backup' && m.snap && ident && m.snap.code === ident.code) { store.set(BACKUP_KEY, { code: ident.code, snap: m.snap }); return; }
+          if (m.t === 'backup' && m.snap && ident && m.snap.code === ident.code) {
+            // a big deck (2000 songs: ~400 kB) may not fit next to the playlists: then no copy at
+            // all rather than an older one that would bring back an earlier round
+            if (!store.set(BACKUP_KEY, { code: ident.code, snap: m.snap })) store.remove(BACKUP_KEY);
+            return;
+          }
           if (m.t === 'error') {
             if (m.code === 'notfound') { link.retry({ force: true }); return; }
             if (FATAL.includes(m.code)) { fatal({ code: m.code, message: m.message }); return; }

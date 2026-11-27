@@ -20,6 +20,9 @@ import { accountNoteHtml } from './account-bits.js';
 export const name = 'playlist';
 
 const SEARCH_DEBOUNCE_MS = 700;
+/** Rows drawn at once; the rest of a long list follows in slices (a 2000-song list stays smooth). */
+const ROWS_FIRST = 150;
+const ROWS_SLICE = 400;
 const SEARCH_LIMIT = 25;
 /** Longest share URL that still makes a QR code that a phone camera reads from a screen. */
 export const QR_MAX = 700;
@@ -556,6 +559,7 @@ export function render(root, { params, navigate }) {
   });
 
   /* ---------- track list ---------- */
+  let listGen = 0; // a newer drawList stops the slices of an older one
   function trackRow(t) {
     const yearOk = validYear(t.year);
     const check = !t.yearSure || !yearOk;
@@ -596,7 +600,19 @@ export function render(root, { params, navigate }) {
     only.hidden = !nCheck && !onlyCheck;
     only.querySelector('input').checked = onlyCheck;
     only.querySelector('span').textContent = `Alleen jaren om te controleren (${nCheck})`;
-    list.querySelector('[data-testid="pl-tracks"]').innerHTML = shown.slice().reverse().map(trackRow).join('');
+    // 2000 rows: the first ones at once, the rest in slices after it, so a change never blocks the screen
+    const rows = shown.slice().reverse();
+    const ol = list.querySelector('[data-testid="pl-tracks"]');
+    const gen = ++listGen;
+    ol.innerHTML = rows.slice(0, ROWS_FIRST).map(trackRow).join('');
+    let at = ROWS_FIRST;
+    const more = () => {
+      if (gen !== listGen || !alive || at >= rows.length) return;
+      ol.insertAdjacentHTML('beforeend', rows.slice(at, at + ROWS_SLICE).map(trackRow).join(''));
+      at += ROWS_SLICE;
+      setTimeout(more, 0);
+    };
+    if (at < rows.length) setTimeout(more, 0);
     const empty = list.querySelector('[data-slot="empty"]');
     empty.hidden = shown.length > 0;
     empty.textContent = total ? 'Geen nummers die hierbij passen.' : 'Nog geen nummers. Zoek hierboven een nummer of plak een lijst.';
