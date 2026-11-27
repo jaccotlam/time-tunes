@@ -3,7 +3,7 @@
 // along on the same device; that panel is built from the same player view as a phone.
 import * as player from '../player.js';
 import { playableCards, PREFERRED_GAME } from '../multi/game.js';
-import { playable } from '../playlist-logic.js';
+import { playable, playlistDeck } from '../playlist-logic.js';
 import { musicSource } from '../deck.js';
 import { DISCO_MIN_SONGS } from '../multi/disco.js';
 import { createHostSession, storedRoom } from '../multi/host-session.js';
@@ -33,6 +33,8 @@ import { createFloatLayer, awardsListHtml, avatarSheetHtml, avatarHtml } from '.
 import { hostLobbyAccountHtml, hostSetupAccountHtml, accountName } from './account-bits.js';
 import { setPick, clearPick, takePicked } from './music-bits.js';
 import { heldNoteHtml } from './deckline.js';
+import * as playlists from '../playlists.js';
+import * as enrich from '../enrich.js';
 
 export const name = 'room-host';
 
@@ -79,8 +81,29 @@ const wide = () => typeof matchMedia === 'function' && matchMedia('(min-width: 9
 const screenLink = (code) => `${appBase()}#/scherm/${code}`;
 const tvIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="2.5" y="4.5" width="19" height="12.5" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 20.5h8M12 17v3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
-export function render(root, { deck, navigate }) {
-  const cards = playableCards(deck.cards.filter((c) => playable(c, musicSource())));
+/** A round of a game is in progress: the background year check (enrich.js) waits meanwhile. */
+const ROUND_PHASES = new Set(['answering', 'revealed']);
+
+export function render(root, { deck: firstDeck, navigate }) {
+  // The deck of an own playlist is LIVE here: the year check goes on in the lobby (and on the
+  // winner screen), and every song it checks joins the deck the next game starts with.
+  let deck = firstDeck;
+  const cardsOf = (d) => playableCards(d.cards.filter((c) => playable(c, musicSource())));
+  let cards = cardsOf(deck);
+  /** Rebuild the deck of the own playlist from the store (the same rule as loadDeck()). */
+  function refreshDeck() {
+    if (deck?.kind !== 'playlist') return;
+    const p = playlists.get(deck.id);
+    if (!p) return;
+    deck = playlistDeck(p, musicSource());
+    cards = cardsOf(deck);
+    quizTypes = quizTypesFor(cards);
+  }
+  /** What the lobby shows of the deck (count, held back): a change redraws it. */
+  const deckKey = () => {
+    const p = deck?.kind === 'playlist' ? playlists.get(deck.id) : null;
+    return `${cards.length}|${p ? JSON.stringify(playlists.deckCounts(p, musicSource())) : ''}`;
+  };
   // with a room server the server holds the room; without one this phone does (PeerJS)
   const viaServer = usesServer();
   // back from "Andere muziek kiezen": the same, still connected session
@@ -159,7 +182,7 @@ export function render(root, { deck, navigate }) {
   /** A quiz is running (not the lobby). */
   const inQuiz = () => session?.room?.game?.kind === 'quiz' && session.room.phase !== 'lobby';
   const serverNow = () => (session?.serverNow ? session.serverNow() : Date.now());
-  const quizTypes = quizTypesFor(cards);
+  let quizTypes = quizTypesFor(cards);
   let reportedFor = { key: '', at: 0 }; // when this phone last told the server that the music plays
   let quizSending = null; // round of an own quiz answer on its way
   /** Via the server: may this phone run the room (reveal, next ...)? */
@@ -309,8 +332,14 @@ export function render(root, { deck, navigate }) {
     startedHere = false;
   }
 
+  /** The year check pauses only while a round is in progress (and while it connects: unknown yet). */
+  function syncWorker(vn) {
+    if (vn === 'connecting' || ROUND_PHASES.has(vn)) enrich.pause('game');
+    else enrich.resume('game');
+  }
   function draw() {
     const vn = currentView();
+    syncWorker(vn);
     const kind = session.room?.game?.kind || '';
     if (vn !== viewName || kind !== drawnKind) { viewName = vn; drawnKind = kind; skeleton(vn); window.scrollTo(0, 0); }
     const landed = syncStage(vn);
@@ -343,8 +372,9 @@ export function render(root, { deck, navigate }) {
       return ms ? mixBlockHtml(ms, m, { inGame: vn !== 'lobby', music: r.settings.music, leader: true, shortage: mixShort, gameLabel: gameName(r.settings.game) }) : '';
     });
     if (vn === 'lobby') {
-      region('main', JSON.stringify([r.settings, r.players.length, mixMeta, leads()]), lobbyHtml);
-      region('cta', JSON.stringify([r.players.length, r.settings, leads(), mixMeta]), () => (leads() ? lobbyCta() : ''));
+      const dk = deckKey();
+      region('main', JSON.stringify([r.settings, r.players.length, mixMeta, leads(), dk]), lobbyHtml);
+      region('cta', JSON.stringify([r.players.length, r.settings, leads(), mixMeta, dk]), () => (leads() ? lobbyCta() : ''));
     } else if (vn === 'answering' && kind === 'disco') {
       region('progress', JSON.stringify([sv.game.disco.progress]), () => `<h2 class="room-h">Voortgang</h2>${discoProgressHtml(sv)}`);
       const hv = session.hostView();
@@ -775,6 +805,7 @@ export function render(root, { deck, navigate }) {
       case 'again':
         startedHere = true;
         player.unlock();
+        refreshDeck(); // the songs checked up to this moment play along
         guard(() => (viaServer ? session.start(cards, { mix: session.room?.settings.music === 'mix', play: playSource() }) : session.start(cards)));
         window.scrollTo(0, 0);
         break;
@@ -912,7 +943,15 @@ export function render(root, { deck, navigate }) {
   }, 250) : 0;
   const offPlayer = player.subscribe(() => { if (session && inQuiz()) reportPlaying(); });
 
-  window.__ttHost = { get session() { return session; } };
+  // the year check goes on in the lobby: newly checked songs join the deck (and the count)
+  const offPlaylists = playlists.subscribe(() => {
+    if (!session || ROUND_PHASES.has(currentView())) return;
+    refreshDeck();
+    draw();
+  });
+  if (deck?.kind === 'playlist') enrich.prioritise(deck.id);
+
+  window.__ttHost = { get session() { return session; }, get cards() { return cards; } };
 
   return () => {
     root.removeEventListener('click', onClick);
@@ -925,6 +964,7 @@ export function render(root, { deck, navigate }) {
     clearInterval(ticker);
     clearInterval(quizTicker);
     offPlayer();
+    offPlaylists();
     offReact?.();
     hostFloats.destroy();
     document.body.classList.remove('tt-quiz', 'tt-disco');

@@ -22,8 +22,12 @@ import * as myRoomsScreen from './screens/my-rooms.js';
 import { initAccount } from './screens/account-bits.js';
 import * as enrich from './enrich.js';
 
-/** Screens where a round is played: the background work (enrich.js) waits meanwhile. */
-const PLAY_SCREENS = new Set(['game', 'bingo', 'card', 'scan', 'room-host', 'room-player', 'room-screen']);
+/**
+ * Screens where a round is played: the background work (enrich.js) waits meanwhile. The
+ * spelleider screen (room-host) is not in it: it pauses the work itself, only while a round is
+ * in progress, so the year check goes on while the room waits in the lobby.
+ */
+const PLAY_SCREENS = new Set(['game', 'bingo', 'card', 'scan', 'room-player', 'room-screen']);
 
 const routes = [
   { re: /^#?\/?$/, screen: startScreen, needsDeck: false },
