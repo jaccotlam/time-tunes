@@ -1,6 +1,6 @@
 // A small fake Spotify Web API for the music e2e suites (the February 2026 shape:
 // GET /me/playlists with `items.total`, GET /playlists/{id}/items with entries in `item`),
-// plus the bits of the player API a round touches. Predictable, counted, no network.
+// plus the bits of the player API a round touches (one speaker). Predictable, counted, no network.
 
 export const SP_CLIENT_ID = '0123456789abcdef0123456789abcdef';
 export const SP_PLAYBACK = 'user-read-playback-state user-modify-playback-state';
@@ -52,8 +52,10 @@ export async function installFakeSpotify(ctx, lists) {
       const items = l.tracks.slice(off, off + lim).map((t) => ({ item: t }));
       return json(route, 200, { items, total: l.tracks.length, offset: off, limit: lim, next: off + lim < l.tracks.length ? 'more' : null });
     }
-    // the player API a round touches: no device (the app says so; the suites do not play)
-    if (p === '/me/player/devices') return json(route, 200, { devices: [] });
+    // the player API a round touches: one speaker that plays whatever it is asked
+    const device = { id: 'dev1', name: 'Woonkamer', type: 'Speaker', is_active: true, volume_percent: 60, supports_volume: true };
+    if (p === '/me/player/devices') return json(route, 200, { devices: [device] });
+    if (p === '/me/player' && req.method() === 'GET') return json(route, 200, { device, is_playing: true, progress_ms: 1000, item: null });
     if (p === '/search') return json(route, 200, { tracks: { items: [] } });
     if (p.startsWith('/me/player')) return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*' } });
     return json(route, 404, { error: { status: 404, message: 'Service not found' } });

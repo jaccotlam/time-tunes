@@ -6,9 +6,12 @@
 /* wider on a laptop: two columns (the Spotify covers left, saved and make right) */
 @media (min-width: 960px) {
   body[data-route="playlists"] .app { max-width: 1120px; }
-  .music-layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  /* the last row takes what the tall Spotify column adds, so Bewaard and Zelf maken stay close */
+  .music-layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); grid-template-rows: auto auto auto 1fr; gap: 16px; align-items: start; }
   .music-now { grid-column: 1 / -1; }
-  .music-spotify { grid-row: 2 / span 2; }
+  .music-spotify { grid-column: 1; grid-row: 2 / span 3; }
+  .music-saved { grid-column: 2; grid-row: 2; }
+  .music-make { grid-column: 2; grid-row: 3; }
 }
 .music-layout .set-card h2 .ico { color: var(--teal); }
 .music-layout .music-spotify h2 .ico { color: var(--spotify); }
