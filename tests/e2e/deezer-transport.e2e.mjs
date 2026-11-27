@@ -74,7 +74,9 @@ export default async function run() {
 
     const page = await ctx.newPage();
     const errors = [];
-    page.on('pageerror', (e) => errors.push(e.message));
+    // errors inside the sandboxed frame count as page errors too: the "boom" of /track/7 is
+    // expected, and so is Playwright's own serviceWorkers: 'block' probe failing there
+    page.on('pageerror', (e) => { if (e.message !== 'boom' && !/Service worker is disabled because the context is sandboxed/.test(e.message)) errors.push(e.message); });
     const popups = [];
     page.on('popup', (p) => popups.push(p.url()));
     await page.goto(base);
@@ -160,7 +162,7 @@ export default async function run() {
       localStorage.setItem('timetunesr.playlists.v1', JSON.stringify(raw));
       return 'pdz1';
     });
-    await page.goto(`${base}#/playlists/${plId}`);
+    await page.goto(`${base}?fresh=1#/playlists/${plId}`); // a real reload: the store reads the new list
     await page.getByTestId('screen-playlist').waitFor();
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('timetunesr.playlists.v1')).lists.find((p) => p.id === 'pdz1'));
     if (!stored || !stored.tracks.length || !stored.tracks[0].deezerId) {
