@@ -97,7 +97,10 @@ test('readinessInfo: one honest line and the way out', () => {
   r = readinessInfo({ counts: c(500, 480), source: 'preview' });
   assert.equal(r.text, 'Speelt met fragmenten: 480 van 500 nummers.');
   r = readinessInfo({ counts: c(500, 40, 400), source: 'spotify' });
-  assert.equal(r.text, 'Speelt met 40 van 500 nummers; de rest wordt nog nagekeken.');
+  assert.equal(r.text, 'Speelt met 40 van 500 nummers; van 400 andere wordt het jaartal nog nagekeken.');
+  // right after Speel direct: 33 in the deck, 33 held back, 54 without any year yet
+  r = readinessInfo({ counts: { ...c(120, 33, 33), noYear: 54 }, source: 'preview' });
+  assert.equal(r.text, 'Speelt met 33 van 120 nummers; van 87 andere wordt het jaartal nog opgezocht of nagekeken.', 'the line says what is true: 87 follow, not "the rest"');
   assert.equal(r.tone, 'busy');
   // a Spotify list without fragments while Spotify is not the source: never a dead end
   r = readinessInfo({ counts: c(500, 0), source: 'preview', spotifyPlayable: 500, status: { appleTodo: 480, appleDone: 20 } });
@@ -118,6 +121,8 @@ test('workLine: the background work in one line', () => {
   assert.equal(workLine({ total: 500, yearsPending: 380, working: true, pending: 380 }, { short: true }), 'jaren nakijken 120/500');
   assert.equal(workLine({ total: 500, yearsPending: 0, yearsMissing: 0, appleTodo: 480, appleDone: 20, fragmentsMissing: 480, working: true, pending: 480 }), 'Fragmenten zoeken… 20 van 500');
   assert.equal(workLine({ total: 500, yearsPending: 0, yearsMissing: 0, appleTodo: 480, appleDone: 20, fragmentsMissing: 0, working: true, pending: 480 }), '', 'a catalogue list has its fragments already');
+  assert.equal(workLine({ total: 30, yearsPending: 0, yearsMissing: 0, appleTodo: 29, appleDone: 1, fragmentsMissing: 30, working: true, pending: 29 }, { source: 'spotify' }), '', 'with Spotify as the music source the fragment search is noise: not shown');
+  assert.equal(workLine({ total: 30, yearsPending: 0, yearsMissing: 0, appleTodo: 29, appleDone: 1, fragmentsMissing: 30, working: true, pending: 29 }, { source: 'preview' }), 'Fragmenten zoeken… 1 van 30');
   assert.equal(workLine({ total: 500, yearsPending: 0, yearsMissing: 0, appleTodo: 0, working: false, pending: 0 }), '');
 });
 

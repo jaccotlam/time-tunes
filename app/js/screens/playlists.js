@@ -132,7 +132,7 @@ export function render(root, { params, navigate }) {
     const counts = store.deckCounts(p, src);
     const status = enrich.status(p.id);
     const info = readinessInfo({ counts, source: src, spotifyPlayable: store.deckCounts(p, 'spotify').inDeck, status, playNow: p.playNow === true, spotifyConnected: spotify.isConnected() });
-    return { counts, status, info, work: workLine(status) };
+    return { counts, status, info, work: workLine(status, { source: src }) };
   }
 
   function drawCurrent() {
@@ -334,7 +334,7 @@ export function render(root, { params, navigate }) {
       let warn = '';
       if (!r.timeline) warn = `Te weinig om te spelen (Tijdlijn ${MIN_TRACKS.timeline}, Bingo ${MIN_TRACKS.bingo})`;
       else if (!r.bingo) warn = `Genoeg voor Tijdlijn; Bingo vraagt er ${MIN_TRACKS.bingo}`;
-      const status = workLine(enrich.status(p.id), { short: true });
+      const status = workLine(enrich.status(p.id), { short: true, source: musicSource() });
       // a catalogue list that is still being finished is not "too small": it is busy
       if (status && !r.timeline && p.source) warn = '';
       rows.push(deckRow({ id: p.id, title: p.name, active: active === p.id, sub: `${plural(p.tracks.length, 'nummer', 'nummers')} · ${sourceLabel(p) === 'eigen' ? 'eigen playlist' : sourceLabel(p)}`, warn, status, edit: true }));

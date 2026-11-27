@@ -2,6 +2,7 @@
 import { esc } from '../ui.js';
 import * as playlists from '../playlists.js';
 import { musicSource } from '../deck.js';
+import { heldText } from './music-bits.js';
 
 const musicIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 18V6l11-2v12" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="6.5" cy="18" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="17.5" cy="16" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
 
@@ -16,8 +17,9 @@ export function deckCount(deck, n = deck?.cards?.length ?? 0) {
 }
 
 /**
- * Where a game starts: "Speelt met 40 van 500 nummers; de rest wordt nog nagekeken" while songs of
- * a catalogue list wait for their year check (the deck rule in playlist-logic.js), else ''.
+ * Where a game starts: "Speelt met 33 van 120 nummers; van 87 andere wordt het jaartal nog opgezocht
+ * of nagekeken" while songs of a catalogue list wait for their year check (the deck rule in
+ * playlist-logic.js), else ''.
  */
 export function heldNoteHtml(deck) {
   if (deck?.kind !== 'playlist') return '';
@@ -25,7 +27,7 @@ export function heldNoteHtml(deck) {
   if (!p) return '';
   const c = playlists.deckCounts(p, musicSource());
   if (!c.held) return '';
-  return `<p class="deck-held small" data-testid="deck-held">Speelt met ${c.inDeck} van ${c.total} nummers; de rest wordt nog nagekeken.</p>`;
+  return `<p class="deck-held small" data-testid="deck-held">${esc(heldText(c))}</p>`;
 }
 
 /** A tappable line that leads to the playlist screen (+ the note above when songs are held back). */

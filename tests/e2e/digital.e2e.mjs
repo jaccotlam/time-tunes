@@ -29,8 +29,11 @@ async function hiddenLeak(page, secret, visible) {
         for (const [x, re] of needles) if (re.test(at.value)) hits.push(`${at.name} of ${where(el)}: "${at.value.slice(0, 60)}" (${x})`);
       }
     }
+    const nodes = [];
+    const tw = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_TEXT);
+    while (tw.nextNode()) nodes.push(tw.currentNode.nodeValue);
+    const control = shown.some((c) => nodes.some((v) => whole(c.title).test(v)));
     const text = document.documentElement.textContent;
-    const control = shown.some((c) => whole(c.title).test(text));
     let substring = '';
     for (const [x] of needles) {
       if (!text.includes(x)) continue;

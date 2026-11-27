@@ -337,12 +337,16 @@ export function setActive(id) {
  * where a Spotify id counted too); screens pass deck.musicSource().
  */
 /**
- * For the screens: { total, playable, inDeck, held } of a playlist with this source
- * ("Speelt met 40 van 500 nummers; de rest wordt nog nagekeken"). inDeck = what a game plays.
+ * For the screens: { total, playable, inDeck, held, noYear } of a playlist with this source
+ * ("Speelt met 33 van 120 nummers; van 87 andere wordt het jaartal nog opgezocht of nagekeken").
+ * inDeck = what a game plays; held = playable but held back for the year check; noYear = no
+ * year yet while the year check still has to run for it (it is being looked up).
  */
 export function deckCounts(p, source = 'spotify') {
   const d = deckTracks(p, source);
-  return { total: (p?.tracks || []).length, playable: d.tracks.length + d.held.length, inDeck: d.tracks.length, held: d.held.length };
+  const tracks = p?.tracks || [];
+  const noYear = tracks.reduce((n, t) => n + (!validYear(Number(t.year)) && yearPending(t) ? 1 : 0), 0);
+  return { total: tracks.length, playable: d.tracks.length + d.held.length, inDeck: d.tracks.length, held: d.held.length, noYear };
 }
 
 /** "Speel nu toch": play also the songs whose year is not checked yet (on / off). */

@@ -66,9 +66,9 @@ test('playlists.js: deckCounts, setPlayNow (gaat vanzelf uit als alles nagekeken
   playlists.reload();
   const p = playlists.create('Lijst');
   playlists.addTracks(p.id, [...Array.from({ length: 40 }, (_, i) => ready(i)), ...Array.from({ length: 10 }, (_, i) => pending(100 + i))]);
-  assert.deepEqual(playlists.deckCounts(playlists.get(p.id), 'spotify'), { total: 50, playable: 50, inDeck: 40, held: 10 });
+  assert.deepEqual(playlists.deckCounts(playlists.get(p.id), 'spotify'), { total: 50, playable: 50, inDeck: 40, held: 10, noYear: 0 });
   assert.equal(playlists.setPlayNow(p.id, true), true);
-  assert.deepEqual(playlists.deckCounts(playlists.get(p.id), 'spotify'), { total: 50, playable: 50, inDeck: 50, held: 0 });
+  assert.deepEqual(playlists.deckCounts(playlists.get(p.id), 'spotify'), { total: 50, playable: 50, inDeck: 50, held: 0, noYear: 0 });
   assert.equal(JSON.parse(storage.get(playlists.KEY)).lists[0].playNow, true, 'bewaard');
   // the background check finishes the last ones: playNow switches itself off
   const left = playlists.get(p.id).tracks.filter((t) => yearPending(t)).map((t) => ({ n: t.n, patch: { yearChecked: true } }));

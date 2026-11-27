@@ -116,6 +116,17 @@ export function etaText(sec) {
 /* ---------- readiness of a playlist in words ---------- */
 
 /**
+ * While songs are held back for the year check: "Speelt met 33 van 120 nummers; van 87 andere
+ * wordt het jaartal nog opgezocht of nagekeken." (held + no year yet; only what is true: a song
+ * that cannot play for another reason is not in the 87). counts: deckCounts() of playlists.js.
+ */
+export function heldText(c) {
+  const later = (c.held || 0) + (c.noYear || 0);
+  const what = c.noYear ? 'opgezocht of nagekeken' : 'nagekeken';
+  return `Speelt met ${c.inDeck} van ${c.total} nummers; van ${later} ${later === 1 ? 'ander nummer' : 'andere'} wordt het jaartal nog ${what}.`;
+}
+
+/**
  * One line about how this list plays now, plus what the user can do about it:
  * { text, tone: 'ok' | 'busy' | 'warn', action: null | 'connect' | 'wait' }.
  * counts: deckCounts() of playlists.js ({ total, playable, inDeck, held }) for the current music
@@ -141,9 +152,7 @@ export function readinessInfo({ counts, source, spotifyPlayable = 0, status = nu
     }
     return { text: `Te weinig speelbare nummers (${c.inDeck}): Tijdlijn vraagt er ${MIN_TRACKS.timeline}, Bingo ${MIN_TRACKS.bingo}.`, tone: 'warn', action: null };
   }
-  if (c.held > 0) {
-    return { text: `Speelt met ${c.inDeck} van ${c.total} nummers; de rest wordt nog nagekeken.`, tone: 'busy', action: null };
-  }
+  if (c.held > 0) return { text: heldText(c), tone: 'busy', action: null };
   if (playNow && (st.yearsPending || 0) > 0) {
     return { text: `Speelt met ${c.inDeck} van ${c.total} nummers; niet alle jaartallen zijn al nagekeken.`, tone: 'busy', action: null };
   }
@@ -153,8 +162,12 @@ export function readinessInfo({ counts, source, spotifyPlayable = 0, status = nu
   return { text: c.inDeck === c.total ? `Klaar om te spelen met fragmenten · ${plural(c.total, 'nummer', 'nummers')}.` : `Speelt met fragmenten: ${c.inDeck} van ${c.total} nummers.`, tone: 'ok', action: null };
 }
 
-/** The background work for a list in one short line ('' when nothing runs). */
-export function workLine(st, { short = false } = {}) {
+/**
+ * The background work for a list in one short line ('' when nothing runs). source: the music
+ * source of this phone; the Apple Music fragment search is only shown when fragments are the
+ * source (with Spotify it is noise: Spotify plays the whole song).
+ */
+export function workLine(st, { short = false, source = 'preview' } = {}) {
   if (!st || !st.total) return '';
   if (st.yearsPending > 0 && (st.working || st.pending)) {
     const done = st.total - st.yearsPending;
@@ -162,7 +175,7 @@ export function workLine(st, { short = false } = {}) {
   }
   if (st.yearsMissing > 0 && st.pending > 0) return short ? `jaren ophalen ${st.ready}/${st.total}` : `Jaartallen ophalen… ${st.ready} van ${st.total}`;
   // Apple Music fragments only matter for songs without any fragment (a Deezer song has one)
-  if (st.appleTodo > 0 && st.fragmentsMissing > 0 && (st.working || st.pending)) {
+  if (source !== 'spotify' && st.appleTodo > 0 && st.fragmentsMissing > 0 && (st.working || st.pending)) {
     const all = st.appleDone + st.appleTodo;
     return short ? `fragmenten ${st.appleDone}/${all}` : `Fragmenten zoeken… ${st.appleDone} van ${all}`;
   }

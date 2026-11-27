@@ -542,7 +542,7 @@ export default async function run() {
     const done = await text(page, 'play-done');
     check(/^\d+ nummers nagekeken, de rest komt vanzelf\.$/.test(done) && Number(done.split(' ')[0]) >= 30, `the check is announced in one line ("${done}")`);
     check(await page.getByTestId('play-room').isVisible() && await page.getByTestId('play-timeline').isVisible() && await page.getByTestId('play-bingo').isVisible() && await page.getByTestId('play-list').isVisible() && await page.getByTestId('play-print').isVisible(), 'three ways to play, plus "Bekijk de lijst" and "Kaartjes printen"');
-    check(/Speelt met \d+ van 120 nummers; de rest wordt nog nagekeken/.test(await text(page, 'play-ready')), 'the play sheet is honest: only the checked songs play for now');
+    check(/Speelt met \d+ van 120 nummers; van \d+ andere wordt het jaartal nog (opgezocht of )?nagekeken/.test(await text(page, 'play-ready')), 'the play sheet is honest: only the checked songs play for now');
     await shot(page, 'muziek-05-play-sheet-390');
     check(await noSideScroll(page), 'play sheet: no sideways scrolling at 390 px');
     // year check results of the first 30 songs (the multiples of 4: the worker spreads over the list)
@@ -566,7 +566,7 @@ export default async function run() {
     });
     check(/Eighties Test/.test(deckLine) && deckLine.includes(`${cnt.inDeck} nummers`), `Tijdlijn: the setup names the list and counts its songs ("${deckLine}")`);
     const held = await text(page, 'deck-held');
-    check(cnt.held > 0 && held === `Speelt met ${cnt.inDeck} van 120 nummers; de rest wordt nog nagekeken.`, `Tijdlijn: "${held}" matches the deck rule (${cnt.inDeck} in, ${cnt.held} held back)`);
+    check(cnt.held > 0 && held === `Speelt met ${cnt.inDeck} van 120 nummers; van ${cnt.held + cnt.noYear} andere wordt het jaartal nog ${cnt.noYear ? 'opgezocht of nagekeken' : 'nagekeken'}.`, `Tijdlijn: "${held}" matches the deck rule (${cnt.inDeck} in, ${cnt.held} held back)`);
     check(cnt.inDeck >= 30 && cnt.held > 0 && cnt.inDeck + cnt.held <= 120, `the deck rule holds back songs still waiting for their year (${cnt.inDeck} in, ${cnt.held} held, ${120 - cnt.inDeck - cnt.held} without any year yet)`);
     await page.getByTestId('start-game').click();
     await page.getByTestId('handoff').waitFor();

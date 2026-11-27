@@ -254,8 +254,8 @@ export function createMusicSheet({ slot, navigate, getPick }) {
       const spCounts = store.deckCounts(p, 'spotify');
       info = readinessInfo({ counts, source: src, spotifyPlayable: spCounts.inDeck, status: enrich.status(pid), playNow: p.playNow === true, spotifyConnected: spotify.isConnected() });
     } else info = { text: 'Klaar: het ingebouwde deck, ook als geprinte kaartjes.', tone: 'ok', action: null };
-    // "Speelt met 40 van 500; de rest wordt nog nagekeken" already says that the check runs
-    const work = p && info.tone !== 'busy' ? workLine(enrich.status(pid)) : '';
+    // "Speelt met 33 van 120; van 87 andere wordt het jaartal nog ..." already says that the check runs
+    const work = p && info.tone !== 'busy' ? workLine(enrich.status(pid), { source: src }) : '';
     const action = info.action === 'connect' || info.action === 'source'
       ? `<a class="btn btn-secondary btn-small" href="#/instellingen/spotify" data-act="go" data-testid="play-connect">${info.action === 'source' ? 'Kies Spotify' : 'Verbind Spotify'}</a>`
       : info.action === 'wait' ? '<button class="btn btn-secondary btn-small" type="button" data-act="play-wait" data-testid="play-wait">Wacht op de jaartallen</button>' : '';

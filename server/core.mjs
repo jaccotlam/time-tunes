@@ -380,7 +380,11 @@ export function createRoomServer({
     /** Write what changed now, synchronously (Node: before the process stops). */
     flush: writeNow,
     /** Tests: let a background write that is due run now; resolves when nothing is being written. */
-    async settle() { if (writeTimer) { clearTimeout(writeTimer); writeTimer = 0; await writeSoon(); } while (busy) await new Promise((r) => setTimeout(r, 1)); },
+    async settle() {
+      for (let i = 0; i < 1000 && (writeTimer || busy); i++) {
+        if (writeTimer && !busy) { clearTimeout(writeTimer); writeTimer = 0; await writeSoon(); } else await new Promise((r) => setTimeout(r, 1));
+      }
+    },
     get rooms() { return rooms; },
     get accounts() { return accounts; },
     stats: () => ({ rooms: rooms.size, sockets: sockets.size }),
