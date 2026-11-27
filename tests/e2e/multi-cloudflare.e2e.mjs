@@ -51,6 +51,7 @@ const stopWrangler = (proc) => new Promise((resolve) => {
  */
 async function bigListsOnWorker() {
   const H_ = { origin: URL_, 'content-type': 'application/json' };
+  // songs as v3-10 stored them (with a deezerId from a Deezer import): the account must take them
   const song = (i) => ({ n: i + 1, itunesId: 1422648000 + i, spotifyId: `4uLU6hMCjMI75M1A${String(i).padStart(6, '0')}`, deezerId: 3135000 + i, isrc: `NLA01${String(8000000 + i).slice(-7)}`, title: `Liedje nummer ${i + 1} (Radio Edit)`, artist: `Artiest ${i % 300} & De Band`, album: `Album ${i % 60}`, year: 1960 + (i % 60), yearSure: true });
   // a room with 2000 cards
   const made = await (await fetch(`${URL_}/rooms`, { method: 'POST', headers: H_, body: JSON.stringify({ v: SERVER_PROTOCOL_VERSION, id: 'bigowner1', name: 'Ilse', settings: { game: 'timeline' } }) })).json();
@@ -74,7 +75,7 @@ async function bigListsOnWorker() {
   const t0 = Date.now();
   while (!got.some((m) => m.t === 'state' && m.lead?.room?.phase === 'answering') && Date.now() - t0 < 15000) await new Promise((r) => setTimeout(r, 100));
   const st = got.filter((m) => m.t === 'state').pop();
-  assert(st?.lead?.room?.phase === 'answering' && st.lead.song?.deezerId, `Worker: a game starts with 2000 cards (start message ${Math.round(Buffer.byteLength(msg) / 1024)} kB), the song carries its Deezer id (${JSON.stringify(got.find((m) => m.t === 'error') || '')})`);
+  assert(st?.lead?.room?.phase === 'answering' && st.lead.song?.itunesId && !('deezerId' in st.lead.song), `Worker: a game starts with 2000 cards (start message ${Math.round(Buffer.byteLength(msg) / 1024)} kB), the song carries its ids but no Deezer id (${JSON.stringify(got.find((m) => m.t === 'error') || '')})`);
   for (const w of [ws, ws2, ws3]) w.close();
   // an account with three 2000-song lists
   const signup = await (await fetch(`${URL_}/account/signup`, { method: 'POST', headers: H_, body: JSON.stringify({ username: 'grootlijst', password: 'geheim-wachtwoord-1' }) })).json();
@@ -83,7 +84,7 @@ async function bigListsOnWorker() {
   const body = JSON.stringify({ rev: 1, data: { playlists: lists }, format: 2 });
   const saved = await fetch(`${URL_}/account/data`, { method: 'POST', headers: auth, body });
   const sv = await saved.json();
-  assert(saved.status === 200 && sv.data?.playlists?.length === 3, `Worker: an account saves three 2000-song lists (${Math.round(body.length / 1024)} kB; ${saved.status} ${sv.message || ''})`);
+  assert(saved.status === 200 && sv.data?.playlists?.length === 3 && sv.data.playlists.every((p) => !p.source && p.tracks[0].deezerId), `Worker: an account saves three 2000-song lists as v3-10 stored them (the Deezer source is dropped, the deezerId kept; ${Math.round(body.length / 1024)} kB; ${saved.status} ${sv.message || ''})`);
   await stopWrangler(globalThis.__ttWrangler);
   globalThis.__ttWrangler = await startWrangler(globalThis.__ttPersist);
   const g = await (await fetch(`${URL_}/account`, { headers: auth })).json();
