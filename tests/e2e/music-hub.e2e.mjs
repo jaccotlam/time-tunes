@@ -209,7 +209,7 @@ export default async function run() {
   const M = newMocks();
   const errors = [];
   let rs = null;
-  // every Deezer guard (one per context) pushes into its own stats.deezer: collect them here
+  // besides the route guards (M.deezer), the main page records every Deezer host it even tries
   const deezerSeen = [];
   try {
     /* ============================ 1 + 2: hub, sheet (phone) ============================ */
