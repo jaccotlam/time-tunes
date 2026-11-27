@@ -11,6 +11,7 @@ import * as spotify from '../spotify.js';
 import * as top from '../spotify-top.js';
 import { TOP_AUTO_KEY, TOP_DEFAULT_COUNT } from './playlist.js';
 import { DEFAULT_RANGE } from '../multi/mix.js';
+import { accountNoteHtml, onLogInOut } from './account-bits.js';
 
 export const name = 'playlists';
 
@@ -61,6 +62,7 @@ export function render(root, { params, navigate }) {
         <span class="topbar-spacer"></span>
       </header>
       <p class="lead small-lead">Kies met welke muziek je speelt. Dat geldt voor scannen, Tijdlijn, Bingo en het printen van kaartjes.</p>
+      ${accountNoteHtml('playlists')}
       <ul class="pl-decks" data-testid="deck-list">${rows.join('')}</ul>
       <form class="set-card pl-new" data-testid="playlist-new-form" autocomplete="off">
         <h2>Eigen playlist maken</h2>
@@ -151,11 +153,13 @@ export function render(root, { params, navigate }) {
   root.addEventListener('submit', onSubmit);
   root.addEventListener('change', onChange);
   const unsub = store.subscribe(() => { if (alive) draw(); });
+  const offAccount = onLogInOut(() => { if (alive) draw(); });
   loadBuiltinDeck().then((d) => { builtinCount = d.cards.length; if (alive) draw(); }).catch(() => {});
 
   return () => {
     alive = false;
     unsub();
+    offAccount();
     root.removeEventListener('click', onClick);
     root.removeEventListener('submit', onSubmit);
     root.removeEventListener('change', onChange);

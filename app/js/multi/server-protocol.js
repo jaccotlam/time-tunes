@@ -3,7 +3,8 @@
 // Cloudflare Worker (server/). The game rules stay in game.js; the views in protocol.js.
 //
 //   phone -> server: hello {v, code, id, token, name}
-//                    answer {round, answer}, withdraw {}, leave {}
+//                    answer {round, answer}, withdraw {}, leave {} (in the lobby: off the list; during a game
+//                      (also on the winner screen) the seat stays and the same phone may come back with its token)
 //                    mix-add {tracks} / mix-clear {}: add to / withdraw this phone's part of the
 //                      "Mix van de groep" (see mix.js); every member, also the spelleider
 //                    stamp {round, index} (Discobingo, after the reveal: a right player chooses or moves
@@ -24,6 +25,29 @@
 // spelleider has to set Spotify up. Both are optional extra fields, so the version stays 3: an
 // older app simply sends no cid and ignores the extra meta field, an older server ignores cid.
 //
+// A display ("groot scherm", a tv that only watches) says hello {v, code, screen: true}: no id,
+// no token, no name. The server answers welcome {v, code, screen: true} and from then on sends
+// state {view, meta} with the public spectator view (nobody's card, answer or choice; the song
+// only after the reveal) and meta.screen = true; it never sends a display a backup or lead part.
+// A display may send only hello / leave / ping; anything else gets error {code: 'screen'} (the
+// connection stays). At most 4 per room: a hello may carry `sid` (the display tab's random id) so a
+// reconnect takes back its own slot; a fifth display takes the slot of the one heard from longest
+// ago, which gets error 'screenreplaced' and is closed (a server before this answered 'screens'). Every state's meta has
+// `screens`: how many displays watch. Also an optional addition, so the version stays 4: an
+// older server answers a display hello (no id) with error 'bad' and closes it; /health of a
+// server that knows displays lists 'screen' in `features`, so the display can tell beforehand.
+//
+//
+// Party extras (optional additions within version 4; /health `features` lists 'party'):
+//   hello may carry `avatar` (one of party.js AVATARS; else the server derives one from the id);
+//   avatar {avatar}: another avatar, in the lobby only; stamp may carry `joker: true` (Discobingo:
+//   the chip on an open square of another colour, spending a joker); react {emoji}: one of
+//   party.js REACTIONS, from a seated player (lobby; after answering; after the reveal; winner
+//   screen), rate limited, never stored: the server passes it on as react {id, name, avatar,
+//   emoji, at} to the displays and the leader only (an older app ignores the unknown type).
+//   Refused reactions are dropped silently. A new app must not send avatar / react to a server
+//   without the 'party' feature: that one answers 'bad'.
+//
 // Version 2 (November 2026): the Quiz (settings questions/qtype/think, playing, the quiz part of
 // the view). Version 3 (November 2026): "Mix van de groep" (mix-add, mix-clear, settings.music,
 // start.play, meta.mix). Version 4 (November 2026): Discobingo (game 'disco', settings.win, stamp,
@@ -31,6 +55,8 @@
 // (health / hello / POST /rooms).
 
 export const SERVER_PROTOCOL_VERSION = 4;
+/** Optional additions within this version that the server announces in /health `features`. */
+export const SERVER_FEATURES = ['screen', 'party'];
 /** Largest message from a phone (the deck at the start of a game). */
 export const MAX_CLIENT_MESSAGE = 512 * 1024;
 /** Every other message is small. */
@@ -44,8 +70,8 @@ export const CLIENT_PING_MS = 10000;
 /** Nothing heard for this long: the connection is dead. */
 export const STALE_MS = 25000;
 
-const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing', 'mix-add', 'mix-clear', 'stamp', 'judge'];
-const SERVER_TYPES = ['welcome', 'state', 'error', 'backup'];
+const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing', 'mix-add', 'mix-clear', 'stamp', 'judge', 'avatar', 'react'];
+const SERVER_TYPES = ['welcome', 'state', 'error', 'backup', 'react'];
 export const LEADER_TYPES = ['settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'playing', 'judge'];
 
 export const ID_RE = /^[A-Za-z0-9_-]{4,40}$/;
@@ -118,6 +144,11 @@ export const ERROR_TITLES = {
   busy: 'De kamer is te druk',
   ratelimit: 'Te veel berichten',
   mix: 'Mix van de groep',
+  screen: 'Groot scherm',
+  screens: 'Te veel grote schermen',
+  screenreplaced: 'Een ander scherm kijkt nu mee',
+  noscreen: 'Server kent het grote scherm niet',
+  noserver: 'Geen server voor samen spelen',
 };
 
 /** Base addresses for a configured server ("https://x.y", "wss://x.y/", "x.y") -> { http, ws } or null. */

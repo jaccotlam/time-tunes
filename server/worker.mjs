@@ -3,19 +3,29 @@
 // The Durable Object uses the WebSocket Hibernation API (no cost while phones are idle) and
 // keeps the room in its own SQLite-backed storage, so a room survives restarts and deploys.
 //
+// Accounts: one Durable Object per account (class Account, binding ACCOUNTS), addressed by the
+// normalised username; a session token carries that name, so the Worker finds the object
+// without any index. The password hashing (PBKDF2, ~15 ms CPU) runs inside that object, never
+// in the Worker (10 ms CPU per request on the Free plan). The account object reaches its
+// prepared rooms through the Room objects (prepCreate / prepOp, see prepared.mjs).
+//
 // Configuration (wrangler.jsonc "vars" or dashboard: Settings > Variables):
 //   ALLOWED_ORIGINS  comma-separated origins that may connect (default: see policy.mjs)
 import { DurableObject } from 'cloudflare:workers';
 import { RoomHub, randomToken } from './room.mjs';
+import { AccountBox } from './accounts.mjs';
+import { accountRoute, handleAccount, accountLimiters, accountBodyMax } from './account-http.mjs';
+import { prepareRoom, preparedOp } from './prepared.mjs';
 import {
   DEFAULT_ORIGINS, parseOrigins, originAllowed, corsHeaders, rateLimiter, route, health, createOptions,
-  parseJson, versionMismatch, LIMITS,
+  parseJson, versionMismatch, LIMITS, seatQuery,
 } from './policy.mjs';
 import { makeCode } from '../app/js/multi/code.js';
 
 // best effort, per Worker instance (Cloudflare can add real rate limiting rules in the dashboard)
 const createLimit = rateLimiter(LIMITS.createPerIp);
 const socketLimit = rateLimiter(LIMITS.socketsPerIp);
+const accountLimits = accountLimiters();
 
 const json = (status, body, origin) => new Response(JSON.stringify(body), {
   status,
@@ -27,11 +37,32 @@ async function readBody(request, max) {
   return text.length > max ? null : text;
 }
 
+/** The body as text, but never more than `max` bytes read: null when it is (or says it is) larger. */
+async function readCapped(request, max) {
+  if (Number(request.headers.get('content-length')) > max) return null;
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const parts = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) { try { await reader.cancel(); } catch { /* gone */ } return null; }
+    parts.push(value);
+  }
+  const all = new Uint8Array(size);
+  let at = 0;
+  for (const p of parts) { all.set(p, at); at += p.byteLength; }
+  return new TextDecoder().decode(all);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const r = route(request.method === 'OPTIONS' ? 'GET' : request.method, url.pathname);
-    const isServerPath = r.kind !== 'none' || /^\/(health|rooms)(\/|$)/.test(url.pathname);
+    const acct = accountRoute(request.method === 'OPTIONS' ? 'GET' : request.method, url.pathname);
+    const isServerPath = r.kind !== 'none' || !!acct || /^\/(health|rooms)(\/|$)/.test(url.pathname);
     if (!isServerPath) {
       // everything else is the app itself
       if (env.ASSETS) return env.ASSETS.fetch(request);
@@ -43,7 +74,19 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(origin) });
     const ip = request.headers.get('cf-connecting-ip') || '?';
 
-    if (r.kind === 'health') return json(200, health(), origin);
+    if (acct) {
+      if (!env.ACCOUNTS) return json(404, { code: 'noaccounts', message: 'Deze server kent geen accounts.' }, origin);
+      // per Worker instance (best effort), like the other limits here; the real protection is a
+      // Cloudflare rate-limiting rule for /account/* in the dashboard
+      const text = await readCapped(request, accountBodyMax(request.method, url.pathname));
+      if (text == null) return json(413, { code: 'size', message: 'Dit verzoek is te groot.' }, origin);
+      const out = await handleAccount(
+        { method: request.method, path: url.pathname, auth: request.headers.get('authorization') || '', ip, body: text },
+        { boxFor: (key) => ({ call: (op, args) => env.ACCOUNTS.getByName(key).call(key, op, args) }), limiters: accountLimits },
+      );
+      return json(out.status, out.body, origin);
+    }
+    if (r.kind === 'health') return json(200, health({ accounts: !!env.ACCOUNTS }), origin);
     if (r.kind === 'badcode' || r.kind === 'none') return json(404, { exists: false, error: 'notfound' }, origin);
     if (r.kind === 'create') {
       const text = await readBody(request, 4096);
@@ -62,6 +105,11 @@ export default {
     if (r.kind === 'info') {
       const info = await env.ROOMS.getByName(r.code).info(r.code);
       return json(info.exists ? 200 : 404, info, origin);
+    }
+    if (r.kind === 'seat') {
+      const text = await readBody(request, 4096);
+      const q = seatQuery(text == null ? null : parseJson(text));
+      return json(200, { seat: await env.ROOMS.getByName(r.code).seat(r.code, q) }, origin);
     }
     if (r.kind === 'restore') {
       const text = await readBody(request, LIMITS.maxBody);
@@ -113,7 +161,8 @@ export class Room extends DurableObject {
       drop: (connId, c, reason) => { try { this.sockets().get(connId)?.close(c, reason); } catch { /* gone */ } },
       attach: (connId, rec) => {
         const ws = this.sockets().get(connId);
-        if (ws) ws.serializeAttachment({ connId, mid: rec.mid, lastSeen: rec.lastSeen });
+        // a display ("groot scherm") keeps `screen` here: after hibernation it is a display again
+        if (ws) ws.serializeAttachment({ connId, mid: rec.mid, lastSeen: rec.lastSeen, ...(rec.screen ? { screen: true, ...(rec.sid ? { sid: rec.sid } : {}) } : {}) });
       },
       save: (snap) => {
         if (snap) this.ctx.storage.put('room', snap);
@@ -128,7 +177,7 @@ export class Room extends DurableObject {
     const conns = [];
     for (const ws of this.ctx.getWebSockets()) {
       const a = ws.deserializeAttachment();
-      if (a?.connId) conns.push({ connId: a.connId, mid: a.mid, lastSeen: Date.now() });
+      if (a?.connId) conns.push({ connId: a.connId, mid: a.mid, screen: a.screen === true, sid: a.sid, lastSeen: Date.now() });
     }
     hub.load(state, conns);
     this.hub = hub;
@@ -160,6 +209,10 @@ export class Room extends DurableObject {
     return this.makeHub(code).info();
   }
 
+  async seat(code, q) {
+    return !!this.makeHub(code).hasSeat(q.id, q.token);
+  }
+
   async restore(code, body) {
     const hub = this.makeHub(code);
     try {
@@ -169,6 +222,30 @@ export class Room extends DurableObject {
     } catch (e) {
       return { ok: false, error: e.code || 'bad' };
     }
+  }
+
+  /** A prepared room for an account (only the Account object calls this). */
+  async prepCreate(code, opts) {
+    const hub = this.makeHub(code);
+    const out = prepareRoom(hub, opts);
+    await this.schedule();
+    return out;
+  }
+
+  /** An account's operation on its prepared room: summary / edit / reset / open / delete. */
+  async prepOp(code, name, args) {
+    if (!this.hub?.exists()) return { ok: false, error: 'gone' };
+    const out = preparedOp(this.hub, name, args);
+    if (!this.hub.exists()) {
+      // deleted: forget everything this object stored (the sockets were told and closed)
+      await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.deleteAll();
+      this.hub = null;
+      this.code = null;
+      return out;
+    }
+    await this.schedule();
+    return out;
   }
 
   async fetch(request) {
@@ -212,5 +289,45 @@ export class Room extends DurableObject {
       if (!this.hub.conns.size) { await this.ctx.storage.deleteAll(); this.hub = null; this.code = null; return; }
     }
     await this.schedule();
+  }
+}
+
+/** The prepared rooms of an account, as the Account object reaches them: through the Room objects. */
+function roomsFor(env) {
+  return {
+    async create(opts) {
+      if (opts.code) return env.ROOMS.getByName(opts.code).prepCreate(opts.code, opts);
+      for (let i = 0; i < 12; i++) {
+        const code = makeCode();
+        const out = await env.ROOMS.getByName(code).prepCreate(code, opts);
+        if (out.ok || out.error !== 'taken') return out;
+      }
+      return { ok: false, status: 503, error: 'full', message: 'Geen vrije kamercode gevonden. Probeer het opnieuw.' };
+    },
+    op: (code, name, args) => env.ROOMS.getByName(code).prepOp(code, name, args),
+  };
+}
+
+/**
+ * One account (its id is derived from the normalised username: getByName). Its record is one
+ * value in the object's SQLite-backed storage; an unknown name stores nothing at all.
+ */
+export class Account extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.box = null;
+  }
+
+  async call(key, op, args) {
+    if (!this.box) {
+      const store = {
+        load: () => this.ctx.storage.get('account'),
+        save: (rec) => this.ctx.storage.put('account', rec),
+        remove: () => this.ctx.storage.deleteAll(),
+      };
+      this.box = new AccountBox(key, store, roomsFor(this.env));
+    }
+    if (this.box.key !== key) return { status: 400, body: { code: 'bad', message: 'Ongeldig verzoek.' } };
+    return this.box.call(op, args);
   }
 }

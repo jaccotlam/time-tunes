@@ -128,6 +128,27 @@ export function reachedGoal(marks, win) {
 }
 
 /**
+ * The smallest number of squares a player still has to stamp to reach the goal (0 = reached).
+ * 1 line: the open squares of the line with the fewest of them. 2 lines: the
+ * cheapest pair of different lines, a square two lines share counted once (exact: all 66
+ * pairs). Full card: every open square. The centre star and free stamps count as stamped.
+ */
+export function squaresToGo(marks, win) {
+  const open = (i) => marks[i] == null;
+  if (win === 'full') return marks.reduce((n, _, i) => n + (open(i) ? 1 : 0), 0);
+  const gaps = LINES.map((l) => l.filter(open));
+  if (win !== 'line2') return Math.min(...gaps.map((g) => g.length));
+  let best = Infinity;
+  for (let a = 0; a < gaps.length; a++) {
+    for (let b = a + 1; b < gaps.length; b++) {
+      const n = gaps[a].length + gaps[b].filter((i) => !gaps[a].includes(i)).length;
+      if (n < best) best = n;
+    }
+  }
+  return best;
+}
+
+/**
  * The cells to light up for a goal reached (or progress made): the complete lines, all
  * cells for a full card. Empty when nothing is complete.
  */

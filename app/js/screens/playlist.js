@@ -14,6 +14,7 @@ import {
 import { icons, esc, toast } from '../ui.js';
 import { qrSvg, defaultBaseUrl } from './print.js';
 import { setupHintHtml } from './devices.js';
+import { accountNoteHtml } from './account-bits.js';
 
 export const name = 'playlist';
 
@@ -118,6 +119,7 @@ export function render(root, { params, navigate }) {
         <button class="btn btn-ghost btn-small" type="button" data-act="export" data-testid="pl-export">${downloadIcon}<span>Exporteren</span></button>
         <button class="btn btn-ghost btn-small pl-danger" type="button" data-act="delete" data-testid="pl-delete">${trashIcon}<span>Verwijderen</span></button>
       </div>
+      ${accountNoteHtml('playlists')}
       <p class="small muted"><b>Delen</b>: een link of QR-code voor een ander toestel. <b>Printen</b>: muziekkaartjes waarvan de QR-code op elke telefoon werkt. <b>Exporteren</b>: een back-upbestand (.json) om later terug te zetten.</p>
     </section>
     <div class="answer-slot" data-slot="sheet"></div>

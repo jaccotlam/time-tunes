@@ -39,7 +39,7 @@ function fakeSpotify() {
       assert.equal(req.headers.authorization, 'Bearer tok');
       assert.equal(url.searchParams.get('limit'), '10');
       assert.equal(url.searchParams.get('type'), 'track');
-      if (!rateLimited) { rateLimited = true; return send(429, { error: { status: 429 } }, { 'retry-after': '1' }); }
+      if (!rateLimited) { rateLimited = true; return send(429, { error: { status: 429 } }, { 'retry-after': '0.05' }); }
       const q = url.searchParams.get('q');
       const t = (id, name, artists, album) => ({ id, uri: `spotify:track:${id}`, name, artists: artists.map((n) => ({ name: n })), album: { name: album }, duration_ms: 1000 });
       if (/Dancing Queen/.test(q)) return send(200, { tracks: { items: [t(ID_A_LIVE, 'Dancing Queen - Live', ['ABBA'], 'ABBA Live'), t(ID_A, 'Dancing Queen', ['ABBA'], 'Arrival')] } });

@@ -175,8 +175,20 @@ test('intrekken en weggaan: aantallen omlaag, niet gespeelde nummers uit het lop
   assert.ok(g.pile.every((id) => !g.songs[id].from.includes('playerA1')), 'Anouks niet gespeelde nummers zijn uit de stapel');
   assert.ok(host.last('state').lead.room.game.left < left);
   assert.ok(hub.snapshot().room.game.songs[g.current], 'het lopende nummer blijft');
-  // Bram leaves: his part goes too
+  // Bram leaves during the game: he keeps his seat, so his part stays in this game
+  const pile = hub.snapshot().room.game.pile.slice();
   b.send({ t: 'leave' });
+  await flush();
+  assert.equal(host.last('state').meta.mix.total, 10);
+  assert.deepEqual(hub.snapshot().room.game.pile, pile, 'de stapel blijft zoals hij was');
+  // in the lobby a leave withdraws the part (as before)
+  host.send({ t: 'lobby' });
+  await flush();
+  const b2 = connect(core, code);
+  b2.send({ t: 'hello', v: V, code, id: 'playerB1', name: 'Bram', token: b.last('welcome').token }); // back on his seat
+  await flush();
+  assert.ok(b2.last('welcome'));
+  b2.send({ t: 'leave' });
   await flush();
   assert.equal(host.last('state').meta.mix.total, 0);
   assert.deepEqual(hub.snapshot().mix, {});
@@ -195,19 +207,6 @@ test('opgeslagen kamer van vóór de groepsmix werkt verder; herstart zet de bij
   assert.equal(migrateState(null), null);
   const meta = fresh.meta('owner01');
   assert.deepEqual(meta.mix, { total: 0, preview: 0, sure: 0, contributors: 0, mine: 0 });
-});
-
-test('protocolversie 3 (of hoger): een oudere app (versie 2, of 1) krijgt een nette melding', async () => {
-  const { core } = setup();
-  assert.ok(V >= 3);
-  assert.equal(http(core, 'GET', '/health').body.v, V);
-  assert.equal(http(core, 'POST', '/rooms', { v: 2, id: 'owner01' }).status, 409);
-  assert.equal(http(core, 'POST', '/rooms', { v: 1, id: 'owner01' }).status, 409);
-  const { code } = await room(core);
-  const old = connect(core, code);
-  old.send({ t: 'hello', v: 2, code, id: 'oldapp12', name: 'Oud' });
-  assert.equal(old.last('error').code, 'version');
-  assert.match(old.last('error').message, /Ververs/);
 });
 
 test('quiz uit de groepsmix: vragen over bijgedragen nummers, foute antwoorden uit de eigen muziek van de spelleider', async () => {

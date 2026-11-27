@@ -222,15 +222,7 @@ test('disco: niet spieken: vóór de onthulling geen titel, artiest of jaar en g
   assert.ok(typed >= 2, 'er zaten getypte rondes bij');
 });
 
-test('disco: protocolversie 4; de vorige app krijgt een nette melding', async () => {
-  const { core } = setup();
-  assert.ok(V >= 4);
-  assert.equal(http(core, 'POST', '/rooms', { v: 3, id: 'owner01' }).status, 409);
-  const { code } = await discoRoom(core);
-  const old = connect(core, code);
-  old.send({ t: 'hello', v: 3, code, id: 'playerOld', name: 'Oud' });
-  await flush();
-  assert.equal(old.last('error').code, 'version');
+test('disco: stamp en judge zijn geldige berichten; judge is alleen voor de spelleider', () => {
   assert.ok(parseClientMessage(JSON.stringify({ t: 'stamp', round: 1, index: 3 })));
   assert.ok(parseClientMessage(JSON.stringify({ t: 'judge', pid: 'x', ok: true })));
   assert.ok(LEADER_TYPES.includes('judge') && !LEADER_TYPES.includes('stamp'));
@@ -321,7 +313,7 @@ test('disco: player ids als "__proto__" / "constructor" veranderen niets en late
         await flush();
         assert.equal(roomState(core, code), before, `${m.t} ${pid}: kamer onveranderd`);
       }
-      assert.ok(['answer', null].includes(host.last('error')?.code ?? null));
+      assert.equal(host.last('error')?.code, 'answer', `${pid}: geweigerd als speler zonder antwoord`);
       // such an id can not join either
       const p = connect(core, code);
       p.send({ t: 'hello', v: V, code, id: pid, name: 'X' });

@@ -131,7 +131,7 @@ export async function capturePage(page, dir, prefix, now, { castFormat = 'png' }
   });
   const cast = (m) => cdp.send('Page.startScreencast', m === 'cast' ? { format: castFormat, ...(castFormat === 'jpeg' ? { quality: 92 } : {}), everyNthFrame: 1 } : { format: 'jpeg', quality: 10, everyNthFrame: 1 });
   await cast(mode);
-  await grab();
+  grab(); // niet afwachten: op een pagina die steeds beweegt (het grote scherm) komt die lus nooit tot rust
   return {
     frames,
     pause() { active = false; },

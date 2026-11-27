@@ -12,8 +12,7 @@ import { fakeSpotify, CLIENT_ID, DECK_JSON, WAV } from './spotify.e2e.mjs';
 const OTHER = 'https://jaccotlam.github.io/time-tunes/';
 
 async function shot(page, name) {
-  await page.waitForTimeout(350);
-  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true });
+  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true, animations: 'disabled' });
 }
 
 async function phone(browser, base, fake, { clipboard = true } = {}) {

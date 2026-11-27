@@ -5,7 +5,7 @@ import * as player from '../player.js';
 import { playableCards, PREFERRED_GAME } from '../multi/game.js';
 import { DISCO_MIN_SONGS } from '../multi/disco.js';
 import { createHostSession, storedRoom } from '../multi/host-session.js';
-import { usesServer, createServerHostSession, storedServerHost } from '../multi/server-session.js';
+import { usesServer, createServerHostSession, storedServerHost, copyText } from '../multi/server-session.js';
 import { DEFAULT_GOAL } from '../logic.js';
 import { QUIZ_COUNTS, QUIZ_TIMES, QUIZ_MIN_SONGS, quizTypesFor } from '../multi/quiz.js';
 import * as spotify from '../spotify.js';
@@ -17,7 +17,7 @@ import { icons, esc, toast, vibrate, store } from '../ui.js';
 import { playerViewHtml, mountPlayerView } from './playerview.js';
 import {
   patch, connBadge, playersHtml, standingsHtml, answerPanelHtml, answerController, myResultHtml, songHtml,
-  roundResultsHtml, winnerHtml, confettiHtml, viewBingoCard, viewTimeline, gameName, qrSvg, roomLink,
+  roundResultsHtml, winnerHtml, confettiHtml, viewBingoCard, viewTimeline, gameName, qrSvg, roomLink, appBase,
   keepAwake, diagHtml, diagKey, diagVisible,
   quizQuestionHtml, quizRevealHtml, quizPodiumHtml, quizLeft, tickQuizClocks,
 } from './room-ui.js';
@@ -25,6 +25,8 @@ import {
   createDiscoStage, discoLandedAt, discoController, discoAnswerHtml, discoCardHtml, cardStatsHtml, spinWaitHtml,
   discoMyResultHtml, regieHtml, discoProgressHtml, nextButtonHtml, discoLobbyHtml,
 } from './room-disco.js';
+import { createFloatLayer, awardsListHtml, avatarSheetHtml, avatarHtml } from './party-ui.js';
+import { hostLobbyAccountHtml, hostSetupAccountHtml, accountName } from './account-bits.js';
 
 export const name = 'room-host';
 const HOST_NAME_KEY = 'timetunesr.multiName.v1';
@@ -33,6 +35,9 @@ const SETTINGS_KEY = 'timetunesr.multiSettings.v1';
 const DISCO_DEFAULT_KEY = 'timetunesr.multiDiscoDefault.v1';
 /** A laptop or tv: the big ball keeps turning while the song plays. */
 const wide = () => typeof matchMedia === 'function' && matchMedia('(min-width: 900px)').matches;
+/** The big screen of a room (tv / laptop): no query string, so a Spotify return (?code=) never travels along. */
+const screenLink = (code) => `${appBase()}#/scherm/${code}`;
+const tvIcon = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="2.5" y="4.5" width="19" height="12.5" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 20.5h8M12 17v3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
 export function render(root, { deck, navigate }) {
   const cards = playableCards(deck.cards.filter((c) => c.previewUrl || c.itunesId || c.spotifyId));
@@ -71,6 +76,11 @@ export function render(root, { deck, navigate }) {
   let sheetOpen = false;
   let ms = null; // this phone's own "Doe mijn favorieten erbij" (room server only)
   let msFor = '';
+  let avatarOpen = false; // the spelleider who plays along picks an avatar (lobby)
+  let ownJoker = null; // round in which the spelleider (playing along) switched the joker on
+  // the players' reactions, small and short in a corner of this tab
+  const hostFloats = createFloatLayer(document.body, { small: true, max: 5, testid: 'host-reaction' });
+  const offReact = session.onReaction?.((r) => hostFloats.push(r));
   const regions = {};
   const keys = {};
 
@@ -124,11 +134,12 @@ export function render(root, { deck, navigate }) {
     for (const k of Object.keys(regions)) delete regions[k];
     const r = session.room;
     const code = r?.code || session.code || '';
-    const quit = r ? '<button class="btn btn-small btn-ghost" type="button" data-action="close-room" data-testid="host-close">Sluiten</button>' : '<span class="topbar-spacer"></span>';
+    // a prepared room (account) is emptied, not ended: the button says so
+    const quit = r ? `<button class="btn btn-small btn-ghost" type="button" data-action="close-room" data-testid="host-close">${session.meta?.roomName ? 'Leegmaken' : 'Sluiten'}</button>` : '<span class="topbar-spacer"></span>';
     let body = {
       setup: '<div data-region="main"></div>',
       connecting: '<div data-region="main"></div>',
-      lobby: `<div data-region="status"></div><div data-region="join"></div><div data-region="players"></div><div data-region="main"></div><div data-region="mix"></div><div data-region="cta"></div>`,
+      lobby: `<div data-region="status"></div><div data-region="prep"></div><div data-region="join"></div><div data-region="players"></div><div data-region="main"></div><div data-region="mix"></div><div data-region="cta"></div>`,
       answering: `<div data-region="status"></div><div data-region="quiz"></div>
         <div class="place-player" data-region="pv">${playerViewHtml({ compact: true })}</div>
         <div data-region="players"></div><div data-region="own"></div><div data-region="mix"></div><div data-region="cta"></div>`,
@@ -238,9 +249,10 @@ export function render(root, { deck, navigate }) {
     const m = session.meta;
     const serverKey = viaServer ? JSON.stringify([m?.leader, m?.leaderName, m?.owner, diagVisible(session.diag, session.status) ? diagKey(session.diag) : '']) : '';
     region('status', JSON.stringify([session.status, r.code, r.phase, r.game?.round, r.game?.kind, serverKey]), () => statusHtml(sv));
-    region('join', JSON.stringify([r.code]), () => joinBoxHtml(r.code));
-    region('players', JSON.stringify([sv.players, r.phase]), () => playersBlock(sv));
-    region('sheet', JSON.stringify([sheetOpen, r.code]), () => (sheetOpen ? sheetHtml(r.code) : ''));
+    region('join', JSON.stringify([r.code, m?.screens || 0]), () => joinBoxHtml(r.code) + screenBoxHtml(r.code));
+    region('prep', JSON.stringify([m?.roomName || '', accountName()]), () => hostLobbyAccountHtml({ roomName: m?.roomName || '' }));
+    region('players', JSON.stringify([sv.players, r.phase, avatarOpen, canPickAvatar(), session.hostView?.()?.you?.avatar]), () => playersBlock(sv));
+    region('sheet', JSON.stringify([sheetOpen, r.code, m?.screens || 0]), () => (sheetOpen ? sheetHtml(r.code) : ''));
     // a spelleider screen that does not lead (somebody took over) does not play the music;
     // Discobingo: the player appears when the ball has landed (that is when the music starts)
     if (regions.pv) regions.pv.hidden = !leads() || (inDisco() && vn === 'answering' && !landed);
@@ -360,10 +372,42 @@ export function render(root, { deck, navigate }) {
     </div>`;
   }
 
+  /**
+   * Via the server: open the big screen (a tv or laptop next to the room, in a new tab), its
+   * link to copy, share the join link, and whether a big screen is connected.
+   */
+  function screenBoxHtml(code) {
+    if (!viaServer) return '';
+    const link = screenLink(code);
+    const n = session.meta?.screens || 0;
+    return `<div class="screenbox" data-testid="host-screenbox">
+      <div class="screenbox-actions">
+        <a class="btn btn-small btn-primary screenbox-open" href="${esc(link)}" target="_blank" rel="noopener" data-testid="host-open-screen">${tvIcon}<span>Open het grote scherm</span></a>
+        <button class="btn btn-small btn-ghost screenbox-share" type="button" data-action="share-join" data-testid="host-share">${icons.share}<span>Deel</span></button>
+      </div>
+      <p class="screenbox-link"><span class="screenbox-url" data-testid="host-screen-link" title="Link van het grote scherm">${esc(link.replace(/^https?:\/\//, ''))}</span>
+        <button type="button" class="btn btn-small btn-ghost screenbox-copy" data-action="copy-screen" data-testid="host-copy-screen" aria-label="Kopieer de link van het grote scherm">Kopieer</button></p>
+      ${n > 0 ? `<p class="screenbox-on" data-testid="host-screen-connected" data-count="${n}" role="status"><i aria-hidden="true"></i>Groot scherm verbonden${n > 1 ? ` (${n})` : ''}</p>`
+    : '<p class="screenbox-hint muted">Zet de kamer groot op een tv of laptop: daar staan de QR-code en het spel voor iedereen.</p>'}
+    </div>`;
+  }
+
+  /** Share the join link: the share sheet where there is one (phones), otherwise copy it. */
+  async function shareJoin() {
+    const code = session.code;
+    const link = roomLink(code);
+    if (navigator.share) {
+      try { await navigator.share({ title: 'TimeTunesr', text: `Doe mee met TimeTunesr: kamer ${code}`, url: link }); return; } catch (e) { if (e?.name === 'AbortError') return; }
+    }
+    const ok = await copyText(link);
+    toast(ok ? 'Link gekopieerd. Plak hem in de groepsapp.' : 'Kopiëren lukte niet.', { kind: ok ? 'info' : 'warn' });
+  }
+
   function sheetHtml(code) {
     return `<div class="sheet-backdrop" data-testid="join-sheet" data-action="sheet-close">
       <div class="sheet" role="dialog" aria-label="Meedoen met deze kamer">
         ${joinBoxHtml(code)}
+        ${screenBoxHtml(code)}
         <button class="btn btn-primary" type="button" data-action="sheet-close" data-testid="join-sheet-close">${icons.check}<span>Klaar</span></button>
       </div>
     </div>`;
@@ -372,20 +416,26 @@ export function render(root, { deck, navigate }) {
   function playersBlock(sv) {
     const n = sv.players.length;
     const answering = session.room.phase === 'answering';
-    const playing = sv.players.filter((p) => p.playing);
+    // who is away keeps the seat but is never waited for (as on the big screen)
+    const playing = sv.players.filter((p) => p.playing && p.online);
     const done = playing.filter((p) => p.answered).length;
     const head = answering
       ? `<h2 class="room-h" data-testid="room-answered" data-done="${done}" data-total="${playing.length}">Geantwoord: ${done} van ${playing.length}</h2>`
       : `<h2 class="room-h">Spelers <span class="muted">(${n})</span></h2>`;
     const empty = n === 0 ? '<p class="muted" data-testid="room-empty">Nog niemand. Laat iedereen de code invullen of de QR-code scannen.</p>' : '';
-    return `${head}${empty}${n ? playersHtml(sv, { host: true, removable: true }) : ''}`;
+    // playing along: the own avatar can change in the lobby (like a phone)
+    const me = canPickAvatar() ? session.hostView()?.you : null;
+    const pick = me ? `<button type="button" class="btn btn-small btn-ghost host-av-pick" data-action="avatar-open" data-testid="host-avatar-pick" data-avatar="${esc(me.avatar)}">${avatarHtml(me, { cls: 'host-av' })}<span>Jouw avatar wijzigen</span></button>` : '';
+    return `${head}${empty}${n ? playersHtml(sv, { host: true, removable: true }) : ''}${pick}${me && avatarOpen ? avatarSheetHtml(me.avatar) : ''}`;
   }
+  const canPickAvatar = () => viaServer && session.room?.phase === 'lobby' && !!session.hostView?.()?.you && !!session.supports?.('party');
 
   function setupHtml() {
     const last = store.get(HOST_NAME_KEY, '') || '';
     const err = viaServer && session.error ? `<p class="warn" data-testid="host-error" data-code="${esc(session.error.code)}">${esc(session.error.message || 'Dat lukte niet.')}</p>` : '';
     return `<form class="setup host-setup" data-testid="host-setup-form" autocomplete="off">${err}
       <p class="lead">Iedereen speelt op zijn eigen telefoon. Dit toestel is de spelleider: het speelt de muziek (zet het op een speaker) en houdt de stand bij.</p>
+      ${hostSetupAccountHtml()}
       <fieldset>
         <legend>Speel je zelf mee?</legend>
         <label class="check-row"><input type="checkbox" name="plays" data-testid="host-plays"><span>Ja, ik speel mee op dit toestel</span></label>
@@ -480,12 +530,11 @@ export function render(root, { deck, navigate }) {
   }
 
   function revealCta(sv) {
-    const playing = sv.players.filter((p) => p.playing);
-    const online = playing.filter((p) => p.online);
+    const online = sv.players.filter((p) => p.playing && p.online);
     const ready = online.length > 0 && online.every((p) => p.answered);
-    const done = playing.filter((p) => p.answered).length;
+    const done = online.filter((p) => p.answered).length;
     return `<div class="sticky-cta">
-      <button class="btn btn-primary btn-xl room-reveal ${ready ? 'is-ready' : ''}" type="button" data-action="reveal" data-testid="room-reveal" data-ready="${ready}">${icons.eye}<span>${ready ? 'Iedereen is klaar: onthul!' : `Onthul (${done}/${playing.length})`}</span></button>
+      <button class="btn btn-primary btn-xl room-reveal ${ready ? 'is-ready' : ''}" type="button" data-action="reveal" data-testid="room-reveal" data-ready="${ready}">${icons.eye}<span>${ready ? 'Iedereen is klaar: onthul!' : `Onthul (${done}/${online.length})`}</span></button>
     </div>`;
   }
 
@@ -521,8 +570,15 @@ export function render(root, { deck, navigate }) {
     const g = hv.game;
     if (g.kind === 'disco') {
       const d = g.disco;
-      const choosing = hv.phase === 'revealed' && g.reveal?.mine?.correct && !d.waitingForHost && d.choosable.length > 0;
-      return `${discoCardHtml(g.mine, { mode: choosing ? 'choose' : 'show', choosable: d.choosable, choice: d.choice, cat: d.cat, testid: 'host-disco-card', name: hv.you?.name })}${cardStatsHtml(g.mine, d.win)}`;
+      // the joker: switched on here, or the chip already lies on another colour
+      const right = hv.phase === 'revealed' && g.reveal?.mine?.correct && !d.waitingForHost;
+      const onJoker = right && Number.isInteger(d.choice) && g.mine.card[d.choice] !== d.cat;
+      const jokerOn = right && (d.jokerSquares || []).length > 0 && (ownJoker === g.round || onJoker);
+      const choosing = right && (d.choosable.length > 0 || jokerOn);
+      const toggle = right && (d.jokerSquares || []).length > 0 && !g.mine.bingo
+        ? `<p class="host-joker"><button type="button" class="btn btn-small btn-ghost" data-action="host-joker" data-testid="host-joker-toggle" data-on="${jokerOn}" aria-pressed="${jokerOn}">🃏 ${onJoker ? 'Joker terug' : jokerOn ? 'Joker uit' : 'Zet joker in'}</button>
+          <small class="muted">${onJoker ? 'Je joker is weg zodra de volgende ronde begint; verplaats je fiche terug om hem te houden.' : 'Met je joker mag je fiche op elke kleur.'}</small></p>` : '';
+      return `${toggle}${discoCardHtml(g.mine, { mode: choosing ? 'choose' : 'show', choosable: d.choosable, joker: jokerOn ? d.jokerSquares : [], jokerChips: onJoker ? [d.choice] : [], choice: d.choice, cat: d.cat, testid: 'host-disco-card', name: hv.you?.name })}${cardStatsHtml(g.mine, d.win)}`;
     }
     if (g.kind === 'bingo') return viewBingoCard(hv, { highlight: g.reveal?.mine && !g.reveal.mine.none && !g.reveal.mine.pass ? g.reveal.mine.index : null });
     return `<details class="final-tl"><summary>Jouw tijdlijn · ${g.mine.timeline.length} van ${g.goal}</summary>${viewTimeline(g.mine.timeline)}</details>`;
@@ -547,6 +603,7 @@ export function render(root, { deck, navigate }) {
     const hv = session.hostView();
     return `${confettiHtml()}
       ${quiz ? quizPodiumHtml(sv) : sv.game.kind === 'disco' ? `${winnerHtml(sv)}
+      ${sv.game.disco?.awards?.length ? `<section class="host-awards" data-testid="host-awards-box"><h2 class="room-h">Prijzen</h2>${awardsListHtml(sv.game.disco.awards, { testid: 'host-awards', itemTestid: 'host-award', cls: 'is-host' })}</section>` : ''}
       ${discoProgressHtml(sv)}
       ${hv?.game?.mine ? `<section class="host-own" data-testid="host-own"><h2 class="room-h">Jouw kaart, ${esc(hv.you.name)}</h2>${ownCard(hv)}</section>` : ''}` : `${winnerHtml(sv)}
       ${standingsHtml(sv)}`}
@@ -576,7 +633,7 @@ export function render(root, { deck, navigate }) {
     const sq = e.target.closest('[data-action="disco-stamp"]');
     if (sq && root.contains(sq)) {
       const hv = session.hostView();
-      if (session.room?.phase === 'revealed' && hv?.game?.disco && Number(sq.dataset.index) !== hv.game.disco.choice) { guard(() => session.stamp(Number(sq.dataset.index))); vibrate(25); }
+      if (session.room?.phase === 'revealed' && hv?.game?.disco && Number(sq.dataset.index) !== hv.game.disco.choice) { guard(() => session.stamp(Number(sq.dataset.index), sq.dataset.joker === 'true' ? { joker: true } : undefined)); vibrate(25); }
       return;
     }
     if (session.room?.phase === 'answering' && inDisco() && e.target.closest('[data-testid="host-own"]')) { if (dctl.onClick(e)) return; } else if (session.room?.phase === 'answering' && session.room.game?.kind !== 'quiz' && e.target.closest('[data-testid="host-own"]') && ctl.onClick(e)) return;
@@ -586,6 +643,23 @@ export function render(root, { deck, navigate }) {
     if (act.startsWith('pv-')) return; // the hidden player handles these
     switch (act) {
       case 'share': sheetOpen = true; draw(); break;
+      case 'avatar-open': avatarOpen = true; draw(); break;
+      case 'avatar-close': avatarOpen = false; draw(); break;
+      case 'avatar-pick':
+        avatarOpen = false;
+        if (!session.setAvatar?.(a.dataset.avatar)) toast('Dat lukte niet. Probeer het zo nog eens.', { kind: 'warn' });
+        draw();
+        break;
+      case 'host-joker': {
+        const hv = session.hostView();
+        const g = hv?.game;
+        if (g?.disco && session.room?.phase === 'revealed') {
+          if (Number.isInteger(g.disco.choice) && g.mine.card[g.disco.choice] !== g.disco.cat) { guard(() => session.stamp(null)); ownJoker = null; } else ownJoker = ownJoker === g.round ? null : g.round;
+          keys.own = null;
+          draw();
+        }
+        break;
+      }
       case 'sheet-close':
         if (a.classList.contains('sheet-backdrop') && e.target !== a) return;
         sheetOpen = false; draw(); break;
@@ -623,6 +697,10 @@ export function render(root, { deck, navigate }) {
         if (window.confirm(`${a.dataset.name} uit de kamer verwijderen?`)) guard(() => session.remove(a.dataset.id));
         break;
       case 'retry': session.retry(); break;
+      case 'share-join': shareJoin(); break;
+      case 'copy-screen':
+        copyText(screenLink(session.code)).then((ok) => toast(ok ? 'Link van het grote scherm gekopieerd.' : 'Kopiëren lukte niet.', { kind: ok ? 'info' : 'warn' }));
+        break;
       case 'copy-diag':
         session.copyDiag?.().then((ok) => toast(ok ? 'Diagnose gekopieerd. Plak hem in een bericht.' : 'Kopiëren lukte niet.', { kind: ok ? 'info' : 'warn' }));
         break;
@@ -630,7 +708,10 @@ export function render(root, { deck, navigate }) {
       case 'mix-share': ms?.share(); break;
       case 'mix-withdraw': ms?.withdraw(); break;
       case 'close-room':
-        if (window.confirm('Kamer sluiten? Het spel stopt voor iedereen.')) { player.stop(); loadedFor = null; forgetMixShare(session.code); session.close(); }
+        if (session.meta?.roomName) {
+          // a prepared room: the server empties it and keeps it (code, name, settings) for the account
+          if (window.confirm('Kamer leegmaken? Iedereen gaat eruit en het spel stopt. De kamer blijft klaarstaan in Mijn kamers, met dezelfde code.')) { player.stop(); loadedFor = null; forgetMixShare(session.code); session.close(); toast('Kamer leeggemaakt. Hij staat nog klaar in Mijn kamers.', { ms: 4000 }); }
+        } else if (window.confirm('Kamer sluiten? Het spel stopt voor iedereen.')) { player.stop(); loadedFor = null; forgetMixShare(session.code); session.close(); }
         break;
       default:
     }
@@ -669,6 +750,7 @@ export function render(root, { deck, navigate }) {
 
   function onKey(e) {
     if (e.key === 'Escape' && sheetOpen) { sheetOpen = false; draw(); }
+    if (e.key === 'Escape' && avatarOpen) { avatarOpen = false; draw(); }
     if (inDisco()) dctl.onKeyDown(e); else ctl.onKeyDown(e);
   }
 
@@ -704,6 +786,8 @@ export function render(root, { deck, navigate }) {
     clearInterval(ticker);
     clearInterval(quizTicker);
     offPlayer();
+    offReact?.();
+    hostFloats.destroy();
     document.body.classList.remove('tt-quiz', 'tt-disco');
     stage?.destroy();
     if (unmountPv) unmountPv();

@@ -14,6 +14,7 @@ import {
   STEPS, isStep, stepNumber, nextStep, prevStep, DASHBOARD_URL, APP_NAME, APP_DESCRIPTION,
   cleanClientId, clientIdMessage, redirectList, shareLink, explain, errorDetails,
 } from '../spotify-setup.js';
+import { accountNoteHtml, settingsAccountHtml, onLogInOut } from './account-bits.js';
 
 export const name = 'settings';
 
@@ -454,7 +455,9 @@ export function render(root, { params = [] } = {}) {
           <span class="pill ${st.connected ? 'pill-on' : ''}" data-testid="spotify-pill">${st.connected ? 'Verbonden' : 'Niet verbonden'}</span>
         </div>
         ${body}
+        ${accountNoteHtml('spotify')}
       </section>
+      ${settingsAccountHtml()}
 
       <a class="btn btn-ghost" href="#/" data-testid="settings-home">${icons.home}<span>Naar start</span></a>
       ${shareOpen ? shareSheetHtml(st) : ''}
@@ -733,12 +736,16 @@ export function render(root, { params = [] } = {}) {
     redraw();
   });
 
+  // the account lines follow a log-in / log-out (the Client ID itself arrives via spotify.subscribe)
+  const offAccount = onLogInOut(() => redraw());
+
   draw();
   if (spotify.isConnected()) loadDevices();
   if (params[0] === 'spotify') requestAnimationFrame(scrollToSpotify);
 
   return () => {
     unsub();
+    offAccount();
     clearTimeout(test.timer);
     if (test.busy) spotify.pause().catch(() => {});
     root.removeEventListener('click', onClick);

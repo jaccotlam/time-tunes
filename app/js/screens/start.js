@@ -2,6 +2,7 @@ import { loadDeck, activeDeckInfo } from '../deck.js';
 import { deckLineHtml } from './deckline.js';
 import { icons, logoSvg, wordmark, esc } from '../ui.js';
 import { usesServer, wakeServer } from '../multi/server-session.js';
+import { accountChipHtml, onLogInOut } from './account-bits.js';
 
 export const name = 'start';
 
@@ -70,8 +71,10 @@ export function render(root, { install }) {
           ${entry({ href: '#/spelleider', testid: 'start-host', icon: icons.music, title: 'Maak een kamer', text: 'Jouw toestel speelt de muziek.', cls: 'entry-multi' })}
           ${entry({ href: '#/kamer', testid: 'start-join', icon: icons.users, title: 'Doe mee', text: 'Met de code van de spelleider.', cls: 'entry-multi' })}
         </div>
+        <p class="mode-note" data-testid="start-screen-note">Tv of laptop erbij? Zet de kamer daar op het <b>grote scherm</b>: de spelleider opent het vanuit de kamer.</p>
       </section>
     </nav>
+    <div class="account-slot">${accountChipHtml()}</div>
     <div class="start-links">
       <a class="btn btn-small btn-ghost" href="#/regels" data-testid="start-rules">${icons.book}<span>Spelregels</span></a>
       <a class="btn btn-small btn-ghost" href="#/instellingen" data-testid="start-settings">${gearIcon}<span>Instellingen</span></a>
@@ -84,6 +87,8 @@ export function render(root, { install }) {
   const onPrompt = () => { slot.innerHTML = installHint(install); };
   install.listeners.add(onPrompt);
   root.addEventListener('click', onClick);
+  // "Inloggen" / "Ingelogd als …" follows a log-in or log-out (e.g. a session revoked elsewhere)
+  const offAccount = onLogInOut(() => { const a = root.querySelector('.account-slot'); if (a) a.innerHTML = accountChipHtml(); });
 
   async function onClick(e) {
     const btn = e.target.closest('[data-action="install"]');
@@ -104,6 +109,7 @@ export function render(root, { install }) {
   });
 
   return () => {
+    offAccount();
     install.listeners.delete(onPrompt);
     root.removeEventListener('click', onClick);
   };

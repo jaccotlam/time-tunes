@@ -6,7 +6,7 @@
 // and back to the built-in deck.
 import { readFileSync } from 'node:fs';
 import { launch, phoneContext, startServer, useFixtureDeck, assert, shot } from './helpers.mjs';
-import { installFakeItunes, decodeQr, CATALOG, byTitle } from './fake-itunes.mjs';
+import { installFakeItunes, decodeQr, CATALOG } from './fake-itunes.mjs';
 
 const L = await import(new URL('../../app/js/playlist-logic.js', import.meta.url).href);
 const PLAYLIST_KEY = 'timetunesr.playlists.v1';

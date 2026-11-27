@@ -16,6 +16,10 @@ import * as playlistsScreen from './screens/playlists.js';
 import * as playlistScreen from './screens/playlist.js';
 import * as roomHostScreen from './screens/room-host.js';
 import * as roomPlayerScreen from './screens/room-player.js';
+import * as roomScreenScreen from './screens/room-screen.js';
+import * as accountScreen from './screens/account.js';
+import * as myRoomsScreen from './screens/my-rooms.js';
+import { initAccount } from './screens/account-bits.js';
 
 const routes = [
   { re: /^#?\/?$/, screen: startScreen, needsDeck: false },
@@ -32,6 +36,12 @@ const routes = [
   { re: /^#\/pl\/(.+)$/, screen: playlistsScreen, needsDeck: false },
   { re: /^#\/spelleider\/?$/, screen: roomHostScreen, needsDeck: true },
   { re: /^#\/kamer(?:\/([A-Za-z]{4}))?\/?$/, screen: roomPlayerScreen, needsDeck: false },
+  // the big screen (tv / laptop) of a room: display only; #/scherm alone asks for the code
+  { re: /^#\/scherm(?:\/([A-Za-z0-9]{1,8}))?\/?$/, screen: roomScreenScreen, needsDeck: false },
+  // accounts: log in / make an account / recover; the overview when logged in
+  { re: /^#\/account(?:\/(nieuw|vergeten))?\/?$/, screen: accountScreen, needsDeck: false },
+  // Mijn kamers: the list, Klaarzetten (nieuw), and per room Deel / Bewerk
+  { re: /^#\/account\/kamers(?:\/(nieuw|[A-Za-z]{4})(?:\/(deel|bewerk))?)?\/?$/, screen: myRoomsScreen, needsDeck: false },
 ];
 
 const root = document.getElementById('app');
@@ -106,6 +116,11 @@ window.addEventListener('keydown', unlockOnce, true);
 
 // Back from the Spotify login (?code=..&state=..): cleans the URL before routing.
 spotify.handleRedirect();
+
+// Logged in on this device: fetch the account and keep saving changes, in the background (the
+// app does not wait for it; offline this simply fails and is retried). Before the first route,
+// so its listener hears a revoked session before any screen does.
+initAccount();
 
 window.addEventListener('hashchange', route);
 route();

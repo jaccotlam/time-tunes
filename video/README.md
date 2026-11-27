@@ -67,41 +67,57 @@ Eén deel opnemen terwijl je eraan werkt: `TT_ONLY=multi,playlist node video/2-r
 
 ## Discobingo-video
 
-`discobingo-uitleg.mp4` legt Discobingo uit aan wie het nog nooit zag: 1920 × 1080, 30 fps, H.264 (yuv420p), zonder geluid, ongeveer 95 seconden, ongeveer 12 MB.
-Links de spelleider als laptop of tv (de brede opmaak van de app, 1280 × 720, op 0,75× opgenomen: 960 × 540 pixels in beeld), rechts twee echte, verbonden telefoons (Anouk en Bram, 351 × 765 pixels), eronder de ondertitel met stapnummer.
-Alles wat je ziet is de echte app; er wordt een compleet potje gespeeld.
+`discobingo-uitleg.mp4` legt Discobingo uit aan wie het meespeelt of de kamer host: 1920 × 1080, 30 fps, H.264 (yuv420p), zonder geluid, ongeveer 2 minuten (zo'n 120 seconden), ongeveer 18 MB.
+Het laat zien hoe het spel nu werkt, met drie echte, verbonden schermen: **het grote scherm** (`#/scherm/CODE`, de tv: de ster van de video, het grootst), **het tabblad van de spelleider** (tab 1, op de laptop) en **een telefoon** (Anouk) groot genoeg om te lezen; Bram speelt mee op een tweede telefoon die klein in beeld staat en alleen groot wordt als hij de kamer verlaat en terugkomt.
+Alles wat je ziet is de echte app; er wordt een compleet potje van vier rondes gespeeld. Eronder staat de ondertitel met stapnummer.
 
 ```bash
 node video/disco/make.mjs                 # alles: opname, video, nakijkbeelden (zo'n 6 minuten)
-node video/disco/make.mjs render check    # alleen de video opnieuw (3 minuten); de opname blijft staan
+node video/disco/make.mjs render check    # alleen de video opnieuw (4 minuten); de opname blijft staan
 node video/disco/render.mjs --still 45    # één los beeld, zonder alles te renderen
+TT_STILLS=/pad/naar/map node video/disco/make.mjs render check   # nakijkbeelden in een eigen map
 ```
 
 Eigen pipeline in `video/disco/`, los van de grote video: `config.mjs` (instellingen), `plan.mjs` (draaiboek nagerekend met de regels van de app), `record.mjs`, `render.mjs`, `check.mjs`, `make.mjs`, en het decor in `stage.html`, `stage.css`, `stage.js` en `scenes.js`.
 Dezelfde aanpak als hierboven (verliesvrije frames per scherm met `capturePage` uit `lib.mjs`, `events.json`, het decor frame voor frame in ffmpeg) en dezelfde huisstijl (`app/css/app.css` en `disco.css`).
 Tussenbestanden komen in `$TT_VIDEO_TMP/disco` (standaard `<tmp>/timetunesr-video/disco`), nooit in de repo.
 
+**Opstelling.** Vier echte schermen, elk met een eigen opname: de spelleider en het grote scherm zijn twee tabs van dezelfde browser (het grote scherm wordt echt geopend met de knop *Open het grote scherm*, `host-open-screen`), de twee telefoons hebben elk een eigen browsercontext. Het decor kent vier opstellingen (`LAYOUTS` in `stage.js`) en schuift er zacht tussen (0,8 s):
+
+| Opstelling | Wanneer | Wat staat waar |
+| --- | --- | --- |
+| `solo` | kamer maken | alleen tab 1, in het midden |
+| `tabs` | het grote scherm openen | tab 1 en tab 2 naast elkaar |
+| `play` | het spel | de tv groot (1024 × 576), Anouk rechts groot (351 × 765), tab 1 en Bram klein ertussen |
+| `host` | de spelleider beslist over een twijfelgeval | tab 1 groot, de tv en Bram kleiner |
+| `leave` | Bram verlaat de kamer en komt terug | zoals `play`, maar Bram groot en Anouk klein |
+
+De opname is op 0,8× (tv en laptop, 1024 × 576 pixels) en 0,9× (telefoon, 351 × 765 pixels) gemaakt en komt in beeld nooit groter dan dat, dus altijd scherp. Een opstelling per stuk kies je in `record.mjs` met `seg('scene-id', { layout: 'play' })`.
+
 | Stap | Scène | Tekst op beeld (kort) | Wat de opname doet |
 | --- | --- | --- | --- |
-| – | titel | Discobingo, muziekbingo met ieder een eigen telefoon | alleen decor |
-| 1 | `room` | Maak een kamer | Spelleider tikt *Maak een kamer*; Anouk en Bram doen mee met de code |
-| 2 | `lobby` | Kies Discobingo | Lobby scrollt naar *Welk spel?* en *Winnen met: 1 lijn* (kader) |
-| 3 | `spin` | De discobal draait | Start; de hele draai van de bal, op alle drie de schermen |
-| 4 | `card` | Ieder een eigen kaart | Telefoons scrollen naar de 5×5-kaart (kader), vier kleuren, gratis ster |
-| 5 | `answer` | Luister en typ | Anouk typt “Rick Astly” (typfout), Bram “Astley” (deel van de naam) |
-| 6 | `reveal` | Onthul en stempel | Onthullen; Anouk kiest een vakje en verplaatst het één keer |
-| 7 | `doubt` | Twijfel? De spelleider beslist | Regie: Bram is een twijfelgeval, spelleider tikt *Goed*; Bram kiest een vakje |
-| 8 | `year` | Jaartal: 2 ernaast mag | Ronde 2 (draai op ×2): 2014 bij 2016 is goed, Bram's 2020 niet |
-| 9 | `later` | Even later… | Ronde 3 echt gespeeld maar op ×3 getoond, met het opschrift *Even later…* |
-| 10 | `bingo` | Een lijn vol: bingo! | Ronde 4: decennium-knoppen, het laatste vakje van de rij, BINGO |
-| 11 | `win` | Anouk wint! | *Naar de uitslag*, winnaarscherm met confetti |
-| – | slot | adres en *Ieder een eigen telefoon → Maak een kamer* | alleen decor |
+| – | titel | Discobingo, muziekbingo met ieder een eigen telefoon, en één groot scherm voor iedereen | alleen decor |
+| 1 | `room` | Maak een kamer | Tab 1: spelleider tikt *Maak een kamer* |
+| 1 | `tabs` | Het grote scherm is tab 2 | Spelleider tikt *Open het grote scherm* (kader); tab 2 gaat open en schuift naast tab 1: de laptop houdt knoppen, Spotify-login en instellingen, de tv laat alleen zien |
+| 2 | `join` | Meedoen met de code of de QR | De tv toont code en QR; Anouk typt de code (vier vakjes) en haar naam op de nieuwe meedoen-pagina en staat op de tv; daarna Bram |
+| 3 | `spin` | De discobal kiest de vraag | Start; de hele draai van de bal op tv, tab 1 en beide telefoons, dan de categoriekleur (Artiest) |
+| 4 | `answer` | Eén vraag, één knop | Anouk typt “Rick Astly” (typfout) en tikt *Indienen*, Bram “Astley” (deel van de naam); de tv laat zien wie klaar is |
+| 5 | `reveal` | Onthullen | *Onthul*; de tv toont nummer en alle antwoorden, Anouks telefoon GOED!; Bram is een twijfelgeval |
+| 5 | `chip` | Een fiche op je kaart | Anouk kiest een vakje van de kleur, er valt een fiche, ze verplaatst hem één keer |
+| 6 | `doubt` | Twijfel? De spelleider beslist | Tab 1 groot: de Regie met Goed/Fout (kader), de tv zegt “de spelleider beslist…” en wordt Goed; Bram kiest een vakje |
+| 7 | `year` | Jaartal: 2 ernaast mag | Ronde 2: 2014 bij 2016 is goed, Brams 2020 niet |
+| 8 | `leave` | Even weg? Het spel wacht niet | Ronde 3: Bram opent het menu (⋯), *Verlaat*, bevestigt; de tv toont hem offline; Anouk antwoordt alleen (typfout), de spelleider onthult |
+| 8 | `back` | Terug naar de kamer | Op de meedoen-pagina tikt Bram *Terug naar kamer …*: dezelfde kaart en fiches |
+| 9 | `close` | Spannend! | Anouk stempelt en heeft nog 1 vakje nodig: de tv toont de stand (*Spannend!*) |
+| 9 | `bingo` | Bingo! | Ronde 4, decennium-knoppen, het laatste vakje van de rij: BINGO op de telefoon, de stand op de tv |
+| 10 | `win` | De winnaar | *Naar de uitslag*: winnaarscherm met confetti op de tv en de telefoons |
+| – | slot | adres, *Ieder een eigen telefoon → Maak een kamer* en de tip over het grote scherm | alleen decor |
 
-**Voorspelbaar.** `SEED` in `config.mjs` is de vaste zaaiwaarde van de kamer (`timetunesr.multiSeed.v1` bij de spelleider). `plan.mjs` rekent daarmee vooraf na wat er gebeurt (met `game.js` en `disco.js` van de app) en kan een andere zaaiwaarde zoeken (`node video/disco/plan.mjs`): ronde 1 moet Artiest of Titel zijn en Anouk moet een lijn door de ster hebben met alle vier de kleuren, zodat ze na vier rondes wint. De opname breekt af als de app andere categorieën, nummers of beoordelingen geeft dan gepland (`SCRIPT` in `config.mjs`: wat Anouk en Bram typen of tikken; de typfouten worden met `match.js` van de app gecontroleerd).
-**Het nummer blijft geheim.** Tijdens het draaien, luisteren en antwoorden controleert de opname op alle drie de schermen dat titel, artiest en jaartal van het lopende nummer nergens in beeld staan; bij een lek wordt de opname afgekeurd.
+**Voorspelbaar.** `SEED` in `config.mjs` is de vaste zaaiwaarde van de kamer (`timetunesr.multiSeed.v1` bij de spelleider). `plan.mjs` rekent daarmee vooraf na wat er gebeurt (met `game.js` en `disco.js` van de app) en kan een andere zaaiwaarde zoeken (`node video/disco/plan.mjs`): ronde 1 moet Artiest of Titel zijn (typfout is goed, alleen een deel van de naam is twijfel) en Anouk moet een lijn door de ster hebben met alle vier de kleuren, zodat ze na drie rondes nog 1 vakje nodig heeft en in ronde 4 wint. De opname breekt af als de app andere categorieën, nummers of beoordelingen geeft dan gepland (`SCRIPT` in `config.mjs`: wat Anouk en Bram typen of tikken; de typfouten worden met `match.js` van de app gecontroleerd), of als de tv de stand niet om de goede reden toont.
+**Het nummer blijft geheim.** Tijdens het draaien, luisteren en antwoorden controleert de opname op alle vier de schermen (ook de tv en de tab van de spelleider) dat titel, artiest en jaartal van het lopende nummer nergens in beeld staan; bij een lek wordt de opname afgekeurd.
 **Geen internet nodig.** Er zit geen geluid in de video, dus de fragmenten zijn stil: de opname geeft de app voor elk nummer een stil fragment en een eigen iTunes-lookup-antwoord (`common.mjs`). Het deck, de titels en jaartallen zijn wel die van de app.
-**De bal.** Een screenshot per scherm haalt onder deze belasting maar zo'n 14 beelden per seconde; tijdens het draaien van de bal (en op het winnaarscherm met confetti) schakelt de opname daarom per scherm om naar de beelden van de screencast zelf (JPEG, 1 CSS-pixel per pixel, ongeveer 24 per seconde). Op een rustige machine is dat vloeiender. Dit is `castFormat` in `capturePage` (`lib.mjs`, voor de andere video ongewijzigd).
+**De bal.** Een screenshot per scherm haalt onder deze belasting maar zo'n 14 beelden per seconde; tijdens het draaien van de bal (en op het winnaarscherm met confetti) schakelt de opname daarom op alle vier de schermen om naar de beelden van de screencast zelf (JPEG, 1 CSS-pixel per pixel, ongeveer 22 per seconde). Op een rustige machine is dat vloeiender. Dit is `castFormat` in `capturePage` (`lib.mjs`). Het grote scherm beweegt altijd (discobal, lichtjes): `capturePage` wacht daarom niet meer op het eerste beeld.
 **De kamercode** kiest de kamerserver zelf, dus die is bij elke opname anders.
-**Montage.** `record.mjs` schrijft een montagelijst (`edit` in `events.json`): stukken van de opname met een scène-id en snelheid; `stage.js` maakt daar de tijdlijn van. Een scène korter of langer maken kan dus met een `hold(…)` in `record.mjs`, of met `speed` bij `seg(...)`.
+**Montage.** `record.mjs` schrijft een montagelijst (`edit` in `events.json`): stukken van de opname met een scène-id, een opstelling en een snelheid; `stage.js` maakt daar de tijdlijn van. Een scène korter of langer maken kan dus met een `hold(…)` in `record.mjs`, of met `speed` bij `seg(...)` (nu: de bal van ronde 2 en 4 op ×2, het typen in ronde 2, 3 en 4 op ×1,3 tot ×1,5). Elke ondertitel staat minstens 3,5 s; `check` meldt het als dat niet zo is.
 
-Aanpassen: de teksten op beeld in `disco/scenes.js` (leg ze naast `#/regels` in de app, kopje Discobingo), de spelers en antwoorden in `disco/config.mjs`, het draaiboek en de tijden in `disco/record.mjs`, de vormgeving in `disco/stage.css`. Chromium, Node 20+, Playwright, ffmpeg en de devDependency `peer` zoals hierboven; `HTTPS_PROXY` is niet nodig. Als een andere taak de machine zwaar belast (`uptime`), kan de opname haperen: neem dan opnieuw op.
+Aanpassen: de teksten op beeld in `disco/scenes.js` (leg ze naast `#/regels` in de app, kopje Discobingo), de spelers en antwoorden in `disco/config.mjs`, het draaiboek en de tijden in `disco/record.mjs`, de opstellingen en de vormgeving in `disco/stage.js` en `disco/stage.css`. Chromium, Node 20+, Playwright, ffmpeg en de devDependency `peer` zoals hierboven; `HTTPS_PROXY` is niet nodig. Als een andere taak de machine zwaar belast (`uptime`), kan de opname haperen: neem dan opnieuw op. Na het maken: kijk de stills die `check` schrijft (één per scène, drie bij lange scènes) na op ondertitels over een scherm, afgesneden beelden en de QR-code op de tv.

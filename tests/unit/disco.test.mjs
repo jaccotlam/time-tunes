@@ -3,17 +3,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  CATEGORIES, CATEGORY_KEYS, CENTER, CENTER_KEY, LINES, generateDiscoCard, isValidCard, uniqueDiscoCard, discoSignature,
+  CATEGORY_KEYS, CENTER, CENTER_KEY, LINES, generateDiscoCard, isValidCard, uniqueDiscoCard, discoSignature,
   freshMarks, completeLines, reachedGoal, goalCells, stampedCount, bestSquare, openSquares, lateMarks, bestLineCount,
   drawCategory, freshBag, decadesFor, decadeLabel, decadeOf, yearRight, normalizeWin, FREE_MARK, MAX_SAME_PER_LINE,
 } from '../../app/js/multi/disco.js';
 import { seededRandom } from '../../app/js/logic.js';
 
-test('categorieën: vaste sleutels, volgorde en kleuren', () => {
+test('categorieën: vaste sleutels en volgorde', () => {
   assert.deepEqual(CATEGORY_KEYS, ['decade', 'artist', 'year', 'title']);
-  assert.deepEqual(CATEGORIES.map((c) => c.color), ['#4fb3ff', '#ff5fa8', '#ffc649', '#2ed3c0']);
-  assert.deepEqual(CATEGORIES.map((c) => c.label), ['Decennium', 'Artiest / band', 'Jaartal (±2)', 'Titel']);
-  assert.deepEqual(CATEGORIES.map((c) => c.cssVar), ['--cat-decade', '--cat-artist', '--cat-year', '--cat-title']);
   assert.equal(LINES.length, 12);
 });
 

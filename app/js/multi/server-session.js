@@ -6,16 +6,19 @@
 // so the screens room-host.js / room-player.js work with either:
 //   createServerHostSession()           the spelleider (or a player who took the lead)
 //   createServerClientSession({code, name})  a player
-// Both keep a step-by-step diagnosis (server reached, room found/made, in the room) so a
+// and one that exists only with the server:
+//   createServerScreenSession({code})   a display ("groot scherm") that only watches
+// All keep a step-by-step diagnosis (server reached, room found/made, in the room) so a
 // phone never just says "verbinden…" forever.
 import { MULTI_SERVER_URL } from '../../config.js';
 import { store } from '../ui.js';
 import {
   SERVER_PROTOCOL_VERSION, serverBases, parseServerMessage, cardsForServer, PING_TEXT, PONG_TEXT, CLIENT_PING_MS, STALE_MS,
 } from './server-protocol.js';
-import { playerId, JOIN_KEY } from './client-session.js';
+import { playerId, JOIN_KEY, PLAYER_ID_KEY } from './client-session.js';
 import { HOST_ID_KEY, MULTI_SEED_KEY } from './host-session.js';
 import { getClientId } from '../spotify.js';
+import { isAvatar, isReaction, REACT_GAP_MS } from './party.js';
 
 const spotifyClientId = () => { try { return getClientId() || ''; } catch { return ''; } };
 
@@ -61,6 +64,85 @@ function saveToken(code, id, token) {
   // keep the 20 most recent rooms
   const keep = Object.entries(all).sort((a, b) => (b[1].at || 0) - (a[1].at || 0)).slice(0, 20);
   store.set(TOKENS_KEY, Object.fromEntries(keep));
+}
+
+/** The avatar this phone picked last (party.js AVATARS); the join form preselects it. */
+export const AVATAR_KEY = 'timetunesr.multiAvatar.v1';
+export function storedAvatar() {
+  const a = store.get(AVATAR_KEY, null);
+  return isAvatar(a) ? a : null;
+}
+
+/**
+ * Reactions arriving at a leader or a display: ephemeral (never in a state). Keeps the last
+ * few for a screen that renders from a list, and calls the listeners of onReaction(fn).
+ */
+function reactionFeed() {
+  const list = [];
+  const fns = new Set();
+  return {
+    list,
+    on(fn) { fns.add(fn); return () => fns.delete(fn); },
+    push(m) {
+      const r = { id: String(m.id || ''), name: String(m.name || ''), avatar: String(m.avatar || ''), emoji: String(m.emoji || ''), at: Number(m.at) || 0, receivedAt: Date.now() };
+      list.push(r);
+      if (list.length > 30) list.shift();
+      for (const fn of fns) { try { fn(r); } catch (e) { console.error(e); } }
+    },
+    clear() { fns.clear(); },
+  };
+}
+
+/** The seat this phone has in a room via the server: { code, name, id, at }. */
+export const SEAT_KEY = 'timetunesr.multiSeat.v1';
+/** A seat not seen for this long is forgotten (a room expires after 6 idle hours). */
+export const SEAT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * The room this phone can go back to ("Terug naar kamer ABCD"): { code, name, at } or null.
+ * Only a seat of this phone's player id with a token from the server counts. Synchronous and
+ * local: checkSeat() asks the server whether this phone still has that seat.
+ */
+export function storedSeat() {
+  const s = store.get(SEAT_KEY, null);
+  if (!s || typeof s.code !== 'string' || typeof s.name !== 'string' || typeof s.id !== 'string') return null;
+  if (s.id !== store.get(PLAYER_ID_KEY, null) || !tokenFor(s.code, s.id)) return null;
+  if (!(Date.now() - (Number(s.at) || 0) < SEAT_MAX_AGE_MS)) { store.remove(SEAT_KEY); return null; }
+  return { code: s.code, name: s.name, at: s.at };
+}
+
+/**
+ * Forget the seat (of room `code`, or any). The token stays: joining that room again later
+ * with this phone still lands on the same seat, if the room still has it.
+ */
+export function forgetSeat(code = null) {
+  const s = store.get(SEAT_KEY, null);
+  if (s && (code == null || s.code === code)) store.remove(SEAT_KEY);
+}
+
+/** Like storedSeat(), but asks the server: a room it does not know (404) forgets the seat. Async. */
+export async function checkSeat() {
+  const seat = storedSeat();
+  const base = serverBase();
+  if (!seat || !base) return seat;
+  // the server checks this phone's id + token: a new room that got the same code says no
+  const id = store.get(SEAT_KEY, null)?.id;
+  const r = await request(`${base.http}/rooms/${seat.code}/seat`, { method: 'POST', body: { id, token: tokenFor(seat.code, id) } });
+  if (r.ok && typeof r.data?.seat === 'boolean') {
+    if (r.data.seat) return seat;
+    forgetSeat(seat.code);
+    return null;
+  }
+  if (r.status === 404) {
+    // a server of before /seat: at least the room must still be there
+    const i = await request(`${base.http}/rooms/${seat.code}`);
+    if (i.status === 404) { forgetSeat(seat.code); return null; }
+  }
+  return seat; // the server is not reachable now: keep it
+}
+
+function saveSeat(code, id, name) {
+  store.set(SEAT_KEY, { code, name, id, at: Date.now() });
 }
 
 export function storedServerHost() {
@@ -145,7 +227,7 @@ export async function diagText(diag, { status, code } = {}) {
   lines.push(`Browser: ${navigator.userAgent}`);
   lines.push(`Online volgens browser: ${navigator.onLine ? 'ja' : 'nee'}`);
   lines.push(`Server: ${diag.server || '(geen)'}`);
-  lines.push(`Rol: ${diag.role === 'host' ? 'spelleider' : 'speler'}${code ? ` · kamer ${code}` : ''}`);
+  lines.push(`Rol: ${{ host: 'spelleider', screen: 'groot scherm' }[diag.role] || 'speler'}${code ? ` · kamer ${code}` : ''}`);
   lines.push(`Status: ${status || '?'} · pogingen: ${diag.attempts} · sinds start: ${Math.round((Date.now() - diag.started) / 1000)} s`);
   step('server', '1. Server bereikt');
   step('room', diag.role === 'host' ? '2. Kamer gemaakt/gevonden' : '2. Kamer gevonden');
@@ -184,6 +266,7 @@ export async function copyText(text) {
  * after any failure. hooks:
  *   hello()                  -> the hello message (id, token, name)
  *   roomCheck(diag)          -> async: true when the room is there (host: create/restore here)
+ *   healthCheck(data)        -> (optional) a fatal error {code, message} when this server can not serve us
  *   onMessage(m), onStatus(), onWelcome(m), onFatal(error)
  */
 function createLink({ role, code: initialCode, hooks }) {
@@ -201,6 +284,7 @@ function createLink({ role, code: initialCode, hooks }) {
   let destroyed = false;
   let everOnline = false;
   let running = false;
+  let features = []; // the server's optional additions (health `features`): 'screen', 'party'
 
   const log = (what) => { diag.log.push({ at: Date.now(), what }); if (diag.log.length > 40) diag.log.shift(); };
   const setStatus = (s) => { if (status !== s) { status = s; log(`status ${s}`); } hooks.onStatus?.(); };
@@ -257,6 +341,9 @@ function createLink({ role, code: initialCode, hooks }) {
         hooks.onFatal?.({ code: 'version', message: Number(h.data.v) > SERVER_PROTOCOL_VERSION ? 'De server is nieuwer dan deze app. Ververs de pagina (of sluit de app en open hem opnieuw).' : 'De server is ouder dan deze app. Probeer het over een paar minuten opnieuw.' });
         return;
       }
+      features = Array.isArray(h.data.features) ? h.data.features.filter((f) => typeof f === 'string') : [];
+      const unfit = hooks.healthCheck?.(h.data);
+      if (unfit) { setStep('server', 'fail', { code: unfit.code }); hooks.onFatal?.(unfit); return; }
       setStep('server', 'ok');
       // 2. the room exists (host: made or put back here)
       setStep('room', 'busy');
@@ -345,6 +432,8 @@ function createLink({ role, code: initialCode, hooks }) {
     get code() { return code; },
     get status() { return status; },
     get online() { return status === 'online' && welcomed; },
+    /** Does the server know this optional addition ('party': avatars, reactions, jokers ...)? */
+    supports: (f) => features.includes(f),
     start() { run(); },
     send(msg) {
       if (!ws || ws.readyState !== 1 || !welcomed) return false;
@@ -383,15 +472,21 @@ function lifecycle(retry) {
 const FATAL = ['version', 'removed', 'closed', 'full', 'room', 'bad', 'replaced', 'token', 'expired', 'busy', 'ratelimit'];
 
 // ---------- player ----------
-export function createServerClientSession({ code, name }) {
+export function createServerClientSession({ code, name, avatar: picked = null }) {
   const id = playerId();
   store.set(JOIN_KEY, { code, name });
+  // the avatar goes along with every hello (the server keeps the seat's own once a game runs)
+  let avatar = isAvatar(picked) ? picked : storedAvatar();
+  if (isAvatar(picked)) store.set(AVATAR_KEY, picked);
+  let lastReact = 0;
   let view = null;
   let meta = null;
   let error = null;
   let notice = null;
   let pendingAnswer = null;
   let lastSent = null; // { round, answer }: resent when a restarted server lost it
+  let lastStep = ''; // phase + round of the last state (the seat's "last seen")
+  let leaving = false; // after leave(): a late state must not save the seat again
   let clock = 0; // server time - this phone's time (Quiz countdown)
   const listeners = new Set();
   const received = [];
@@ -401,14 +496,14 @@ export function createServerClientSession({ code, name }) {
     role: 'player',
     code,
     hooks: {
-      hello: () => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, id, name, ...(tokenFor(code, id) ? { token: tokenFor(code, id) } : {}) }),
+      hello: () => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, id, name, ...(avatar ? { avatar } : {}), ...(tokenFor(code, id) ? { token: tokenFor(code, id) } : {}) }),
       roomCheck: async () => {
         const r = await request(`${serverBase().http}/rooms/${code}`);
         if (r.ok && r.data?.exists) return { ok: true };
         if (r.status === 404) return { ok: false, code: 'notfound' };
         return { ok: false, code: r.code || (r.status ? `http-${r.status}` : 'network') };
       },
-      onWelcome: (m) => { if (m.token) saveToken(code, id, m.token); emit(); },
+      onWelcome: (m) => { if (m.token) saveToken(code, id, m.token); if (!leaving) saveSeat(code, id, name); emit(); },
       onStatus: () => emit(),
       onClose: () => emit(),
       onFatal: (e) => fatal(e),
@@ -423,6 +518,8 @@ export function createServerClientSession({ code, name }) {
           return;
         }
         if (m.t === 'state' && m.view) {
+          const step = `${m.view.phase}:${m.view.game?.round ?? ''}`;
+          if (step !== lastStep && link.online && !leaving) { lastStep = step; saveSeat(code, id, name); } // still seen
           view = m.view;
           meta = m.meta || null;
           if (Number.isFinite(meta?.now)) clock = meta.now - Date.now();
@@ -444,6 +541,7 @@ export function createServerClientSession({ code, name }) {
   function fatal(e) {
     error = e;
     if (['removed', 'closed', 'room', 'expired'].includes(e.code)) store.remove(JOIN_KEY);
+    if (['removed', 'closed', 'room', 'expired', 'token'].includes(e.code)) forgetSeat(code); // the server says: no seat (any more)
     link.stop('closed');
     emit();
   }
@@ -480,18 +578,55 @@ export function createServerClientSession({ code, name }) {
       link.send({ t: 'answer', round: view.game.round, answer });
       emit();
     },
-    /** Discobingo, after the reveal: stamp (or move the stamp to) square `index`; null takes it back. */
-    stamp(index) { if (view?.game) link.send({ t: 'stamp', round: view.game.round, index }); },
+    /**
+     * Discobingo, after the reveal: stamp (or move the stamp to) square `index`; null takes it
+     * back. `joker: true`: the chip may go on an open square of another colour
+     * (view.game.disco.jokerSquares); the joker is spent while it lies there.
+     */
+    stamp(index, { joker = false } = {}) { if (view?.game) link.send({ t: 'stamp', round: view.game.round, index, ...(joker ? { joker: true } : {}) }); },
+    /** The avatar this phone shows (null = the server derives one). */
+    get avatar() { return avatar; },
+    /** Another avatar (party.js AVATARS): remembered here, sent now (the server takes it in the lobby only). False when not sent. */
+    setAvatar(a) {
+      if (!isAvatar(a)) return false;
+      avatar = a;
+      store.set(AVATAR_KEY, a);
+      return link.supports('party') ? link.send({ t: 'avatar', avatar: a }) : false;
+    },
+    /**
+     * Send a reaction (party.js REACTIONS). The server takes it in the lobby, once this phone
+     * answered the running question, after the reveal and on the winner screen, at most one per
+     * REACT_GAP_MS (also kept here). Returns whether it was sent; refusals are silent.
+     */
+    react(emoji) {
+      if (!isReaction(emoji) || !link.supports('party') || Date.now() - lastReact < REACT_GAP_MS) return false;
+      if (!link.send({ t: 'react', emoji })) return false;
+      lastReact = Date.now();
+      return true;
+    },
+    /** Does the server know this optional addition ('party', 'screen')? */
+    supports: (f) => link.supports(f),
     /** The leader is away long enough: this phone takes the lead (and plays the music). */
     takeOver() { link.send({ t: 'lead' }); },
     /** "Mix van de groep": add songs to / withdraw this phone's part. False when offline. */
     mixAdd(tracks) { return link.send({ t: 'mix-add', tracks }); },
     mixClear() { return link.send({ t: 'mix-clear' }); },
     get online() { return link.online; },
+    /**
+     * Does Verlaat keep this phone's seat? True during a game (also on the winner screen):
+     * the server keeps card, stamps and score, and the phone may come back (storedSeat()).
+     * False in the lobby (and before the first state): leaving takes the player off the list.
+     */
+    get keepsSeat() { return !!view?.game && view.phase !== 'lobby'; },
+    /** Verlaat. Returns { seat }: whether this phone can come back to its seat (see keepsSeat). */
     leave() {
+      const seat = api.keepsSeat;
+      leaving = true;
       link.send({ t: 'leave' });
-      store.remove(JOIN_KEY);
+      if (seat) saveSeat(code, id, name);
+      else { store.remove(JOIN_KEY); forgetSeat(code); }
       setTimeout(() => api.destroy(), 200);
+      return { seat };
     },
     retry() { link.retry({ force: true }); },
     copyDiag: async () => copyText(await diagText(link.diag, { status: api.status, code })),
@@ -523,6 +658,8 @@ export function createServerHostSession() {
   const received = []; // every message from the server (tests check that nothing leaks)
   const listeners = new Set();
   const emit = () => { for (const fn of listeners) { try { fn(api); } catch (e) { console.error(e); } } };
+  const reactions = reactionFeed();
+  let lastReact = 0;
 
   const ownerId = () => {
     let id = store.get(HOST_ID_KEY, null);
@@ -547,7 +684,7 @@ export function createServerHostSession() {
       hooks: {
         // cid: this phone's Spotify Client ID (a public value, '' = none); the server passes the
         // owner's on to the players, so only the spelleider has to set Spotify up
-        hello: (code) => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, id: ident.id, token: ident.token, cid: spotifyClientId() }),
+        hello: (code) => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, id: ident.id, token: ident.token, cid: spotifyClientId(), ...(storedAvatar() ? { avatar: storedAvatar() } : {}) }),
         roomCheck: async () => {
           const base = serverBase().http;
           if (!ident) {
@@ -583,6 +720,7 @@ export function createServerHostSession() {
         onMessage: (m) => {
           if (closing) return;
           if (received.length < 3000) received.push(m);
+          if (m.t === 'react') { reactions.push(m); return; }
           if (m.t === 'backup' && m.snap && ident && m.snap.code === ident.code) { store.set(BACKUP_KEY, { code: ident.code, snap: m.snap }); return; }
           if (m.t === 'error') {
             if (m.code === 'notfound') { link.retry({ force: true }); return; }
@@ -672,8 +810,26 @@ export function createServerHostSession() {
       if (!g) return;
       send({ t: 'answer', round: g.round, answer });
     },
-    /** Discobingo: the spelleider playing along stamps a square of their own card. */
-    stamp(index) { const g = st?.view?.game; if (g) send({ t: 'stamp', round: g.round, index }); },
+    /** Discobingo: the spelleider playing along stamps a square of their own card (`joker`: see the player session). */
+    stamp(index, { joker = false } = {}) { const g = st?.view?.game; if (g) send({ t: 'stamp', round: g.round, index, ...(joker ? { joker: true } : {}) }); },
+    /** The spelleider playing along picks another avatar (lobby only). False when not sent. */
+    setAvatar(a) {
+      if (!isAvatar(a)) return false;
+      store.set(AVATAR_KEY, a);
+      return link?.supports('party') ? !!link.send({ t: 'avatar', avatar: a }) : false;
+    },
+    /** The spelleider playing along sends a reaction (same rules as a player). */
+    react(emoji) {
+      if (!isReaction(emoji) || !link?.supports('party') || Date.now() - lastReact < REACT_GAP_MS) return false;
+      if (!link.send({ t: 'react', emoji })) return false;
+      lastReact = Date.now();
+      return true;
+    },
+    /** Reactions of the players as they arrive (ephemeral): fn({ id, name, avatar, emoji, at, receivedAt }); returns an unsubscribe. */
+    onReaction: (fn) => reactions.on(fn),
+    /** The last (at most 30) reactions that arrived here, oldest first. */
+    get reactions() { return reactions.list; },
+    supports: (f) => !!link?.supports(f),
     /** Discobingo: Goed (ok true) or Fout on a player's answer (a doubt, or a flip). */
     judge(pid, ok) { send({ t: 'judge', pid, ok: !!ok }); },
     reveal() { send({ t: 'reveal' }); },
@@ -707,7 +863,148 @@ export function createServerHostSession() {
       link?.stop();
       link = null;
       listeners.clear();
+      reactions.clear();
     },
   };
   return api;
 }
+
+// ---------- groot scherm ----------
+/**
+ * A display ("groot scherm", #/scherm/CODE): watches room `code` and sends nothing but hello,
+ * leave and ping. Not a player and never the leader: no id, no token, no name, and it reads
+ * or writes none of the spelleider's or a player's keys in localStorage (a display often runs
+ * in a second tab of the spelleider's browser). Same reconnect / back-off / ping / diagnosis as
+ * a player; a room that is not (or no longer) there is waited for (status 'notfound'), so a
+ * display comes back by itself once the spelleider has put a restarted server's room back.
+ */
+export function createServerScreenSession({ code }) {
+  let view = null;
+  let meta = null;
+  let error = null;
+  let notice = null;
+  let clock = 0; // server time - this device's time (spin of the ball, Quiz countdown)
+  const listeners = new Set();
+  const received = [];
+  const reactions = reactionFeed();
+  const emit = () => { for (const fn of listeners) { try { fn(api); } catch (e) { console.error(e); } } };
+
+  const base = serverBase();
+  const sid = screenSid();
+  let link = null;
+  const makeLink = () => createLink({
+    role: 'screen',
+    code,
+    hooks: {
+      // sid: this display's own random id (memory only, never stored): a reconnect takes back its own slot
+      hello: () => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, screen: true, sid }),
+      healthCheck: (data) => (Array.isArray(data?.features) && data.features.includes('screen') ? null : NO_SCREEN),
+      roomCheck: async () => {
+        const r = await request(`${base.http}/rooms/${code}`);
+        if (r.ok && r.data?.exists) return { ok: true };
+        if (r.status === 404) return { ok: false, code: 'notfound' };
+        return { ok: false, code: r.code || (r.status ? `http-${r.status}` : 'network') };
+      },
+      onWelcome: () => emit(),
+      onStatus: () => emit(),
+      onClose: () => emit(),
+      onFatal: (e) => fatal(e),
+      onMessage: (m) => {
+        if (received.length < 3000) received.push(m);
+        if (m.t === 'react') { reactions.push(m); return; }
+        if (m.t === 'error') {
+          if (m.code === 'notfound') { link.retry({ force: true }); return; }
+          // a server of before the display answers its hello (no id) with 'bad'
+          if (m.code === 'bad' && !link.online) { fatal(NO_SCREEN); return; }
+          // screenreplaced: another display took this slot; no automatic retry (two tabs would take turns)
+          if (FATAL.includes(m.code) || m.code === 'screens' || m.code === 'screenreplaced') { fatal({ code: m.code, message: m.message }); return; }
+          notice = { message: m.message || 'Dat lukte niet.' };
+          emit();
+          return;
+        }
+        if (m.t === 'state' && m.view) {
+          view = m.view;
+          meta = m.meta || null;
+          if (Number.isFinite(meta?.now)) clock = meta.now - Date.now();
+          emit();
+        }
+      },
+    },
+  });
+  function connect() {
+    link?.stop();
+    error = null;
+    link = makeLink();
+    link.start();
+    emit();
+  }
+
+  function fatal(e) {
+    error = e;
+    link?.stop('closed');
+    emit();
+  }
+
+  let offLifecycle = () => {};
+  let ticker = 0;
+
+  const api = {
+    isServer: true,
+    isScreen: true,
+    code,
+    /** The public view of the room (protocol.js viewFor for a spectator). Null before the first state. */
+    get view() { return view; },
+    /** meta: leader, leaderOnline, leaderAwayMs, now, mix counts, screens; `screen: true`, `you: null`. */
+    get meta() { return meta; },
+    get status() { return error ? 'closed' : link ? link.status : 'idle'; },
+    get error() { return error; },
+    get online() { return !!link?.online; },
+    /** The server's clock now (ms), corrected for this device's clock. */
+    serverNow: () => Date.now() + clock,
+    get received() { return received; },
+    get diag() { return link?.diag || null; },
+    takeNotice() { const n = notice; notice = null; return n; },
+    subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+    /** Reactions of the players as they arrive (ephemeral, not in the view): fn({ id, name, avatar, emoji, at, receivedAt }); returns an unsubscribe. */
+    onReaction: (fn) => reactions.on(fn),
+    /** The last (at most 30) reactions that arrived here, oldest first. */
+    get reactions() { return reactions.list; },
+    supports: (f) => !!link?.supports(f),
+    start() {
+      if (!base) { error = { code: 'noserver', message: 'Het grote scherm werkt alleen met de server voor samen spelen.' }; emit(); return; }
+      connect();
+      offLifecycle = lifecycle(() => { if (!error) link?.retry(); });
+      // the leader-away time on screen needs a tick now and then
+      ticker = setInterval(() => { if (meta && !meta.leaderOnline) emit(); }, 1000);
+    },
+    /** Try again now ("Probeer opnieuw"): after a fatal error with a fresh connection. */
+    retry() {
+      if (!base) return;
+      if (error || !link) { connect(); return; }
+      link.retry({ force: true });
+    },
+    copyDiag: async () => (link ? copyText(await diagText(link.diag, { status: api.status, code })) : false),
+    diagText: () => (link ? diagText(link.diag, { status: api.status, code }) : Promise.resolve('')),
+    /** Stop watching (the server counts one display less right away). */
+    leave() {
+      link?.send({ t: 'leave' });
+      setTimeout(() => api.destroy(), 200);
+    },
+    destroy() {
+      clearInterval(ticker);
+      offLifecycle();
+      link?.stop('closed');
+      listeners.clear();
+      reactions.clear();
+    },
+  };
+  return api;
+}
+
+function screenSid() {
+  const b = new Uint8Array(12);
+  globalThis.crypto.getRandomValues(b);
+  return Array.from(b, (x) => x.toString(36).padStart(2, '0')).join('').slice(0, 20);
+}
+
+const NO_SCREEN = { code: 'noscreen', message: 'Deze server kent het grote scherm nog niet. Werk de server bij, of volg het spel op een telefoon.' };

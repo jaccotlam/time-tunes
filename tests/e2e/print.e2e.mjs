@@ -65,7 +65,7 @@ export default async function run() {
     await page.getByTestId('print-range').check();
     await page.getByTestId('print-from').fill('13');
     await page.getByTestId('print-to').fill('14');
-    await page.waitForTimeout(500);
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="print-front"]').length === 2);
     const n = await page.locator('[data-testid="print-front"]').count();
     assert(n === 2, `range 13-14 gives 2 cards (${n})`);
     const lastBack = await page.locator('[data-side="back"] .pc').evaluateAll((els) => els.slice(0, 3).map((e) => e.dataset.cardId || '-'));
@@ -76,7 +76,7 @@ export default async function run() {
 
     // Print layout as PDF (A4).
     await page.getByTestId('print-all').check();
-    await page.waitForTimeout(500);
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="print-front"]').length > 2);
     await page.emulateMedia({ media: 'print' });
     const pdfPath = join(OUT, 'cards.pdf');
     await page.pdf({ path: pdfPath, format: 'A4', printBackground: true, preferCSSPageSize: true });
@@ -89,14 +89,14 @@ export default async function run() {
     assert(await page.getByTestId('print-base-url').isHidden(), 'base URL field hidden for bingo cards');
     assert((await page.locator('[data-testid="print-front"]').count()) === 0, 'no music cards in bingo mode');
     await page.getByTestId('print-bingo-count').fill('40');
-    await page.waitForTimeout(500);
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="print-bingo-card"]').length === 30);
     let sigs = await page.locator('[data-testid="print-bingo-card"]').evaluateAll((els) => els.map((e) => [e.dataset.cardNo, e.dataset.signature]));
     assert(sigs.length === 30 && new Set(sigs.map((s) => s[1])).size === 30, `count is capped at 30 and all cards differ (${sigs.length})`);
     assert(sigs.map((s) => s[0]).join(',') === Array.from({ length: 30 }, (_, i) => i + 1).join(','), 'bingo cards numbered 1..30');
     assert((await page.locator('[data-testid="print-bingo-sheet"]').count()) === 15, '30 bingo cards on 15 sheets');
     await page.getByTestId('print-bingo-count').fill('7');
     await page.getByTestId('print-bingo-size-3').check();
-    await page.waitForTimeout(500);
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="print-bingo-card"]').length === 7 && document.querySelector('[data-testid="print-bingo-card"]').dataset.signature.split(',').length === 9);
     sigs = await page.locator('[data-testid="print-bingo-card"]').evaluateAll((els) => els.map((e) => e.dataset.signature.split(',').length));
     assert(sigs.length === 7 && sigs.every((n) => n === 9), '7 cards of 3×3');
     assert(/7<\/b> bingokaarten 3×3 · 4 vellen/.test(await page.getByTestId('print-summary').innerHTML()), 'summary: 7 cards, 4 sheets');

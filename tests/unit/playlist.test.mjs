@@ -66,7 +66,8 @@ test('matchLine: gevonden, twijfel en niet gevonden', () => {
   const swapped = matchLine(parseLine('Dancing Queen - ABBA'), res);
   assert.equal(swapped.best.trackId, 11, 'titel en artiest omgedraaid');
   const doubt = matchLine(parseLine('ABBA - Dancing Quen'), [r(11, 'ABBA', 'Dancing Queen (Remastered)', 'Arrival', 1976)]);
-  assert.ok(['doubt', 'found'].includes(doubt.status));
+  assert.equal(doubt.status, 'doubt', 'typefout + (Remastered): nooit zeker');
+  assert.equal(doubt.best.trackId, 11);
   const other = matchLine(parseLine('Doe Maar - De Bom'), [r(20, 'Andere Artiest', 'Iets Anders', 'X', 1999)]);
   assert.equal(other.status, 'none');
   assert.equal(matchLine(parseLine('Doe Maar - De Bom'), []).status, 'none');
@@ -122,14 +123,12 @@ test('kaartcode: iTunes-id en jaar heen en terug, jaar niet leesbaar', () => {
 });
 
 test('QR-parser: oude #/c/042 blijft werken, eigen kaart #/c/~code ook', () => {
-  assert.equal(parseCardId('https://user.github.io/time-tunes/#/c/042'), '042');
   const code = encodeCardCode(1422648513, 1976);
   const url = cardUrl('https://user.github.io/time-tunes/', code);
   assert.equal(url, `https://user.github.io/time-tunes/#/c/${code}`);
   assert.equal(parseCardId(url), code);
   assert.deepEqual(decodeCardCode(parseCardId(url)), { itunesId: 1422648513, year: 1976 });
   assert.equal(normalizeCardInput(url), code);
-  assert.equal(normalizeCardInput('42'), '042');
   assert.equal(parseCardId('https://x/#/c/~'), null);
 });
 

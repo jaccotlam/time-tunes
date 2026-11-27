@@ -22,8 +22,9 @@ import {
 import {
   CATEGORY_KEYS, CENTER_KEY, CELLS, DISCO_MIN_SONGS, categoryOf, uniqueDiscoCard, discoSignature, freshMarks,
   stampedCount, reachedGoal, goalCells, openSquares, bestSquare, lateMarks, decadeOf, decadeLabel, decadesFor,
-  yearRight, drawCategory, freshBag, normalizeWin, isValidCard, CENTER, WINS,
+  yearRight, drawCategory, freshBag, normalizeWin, isValidCard, CENTER, WINS, squaresToGo,
 } from './disco.js';
+import { isAvatar, avatarFor, avatarOf, JOKER_EVERY, JOKER_CAP, freshStats, cleanStats, discoAwards } from './party.js';
 
 export const MAX_ROOM_PLAYERS = 12;
 export const GAMES = ['bingo', 'timeline', 'quiz', 'disco'];
@@ -50,7 +51,8 @@ export class GameError extends Error {
 
 /** A player's name: trimmed, single spaces, no control characters, max 24 characters. */
 export function cleanName(name, fallback = 'Speler') {
-  const s = String(name ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
+  // also zero-width and bidi control characters: a name must look on every screen like what it is
+  const s = String(name ?? '').replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
   return s || fallback;
 }
 
@@ -65,7 +67,7 @@ export function createRoom({ code, host = null, settings = {} }) {
     removed: [],
     game: null,
   };
-  if (host) room.players.push({ id: String(host.id), name: cleanName(host.name, 'Spelleider'), host: true });
+  if (host) room.players.push({ id: String(host.id), name: cleanName(host.name, 'Spelleider'), host: true, avatar: isAvatar(host.avatar) ? host.avatar : avatarFor(host.id) });
   return room;
 }
 
@@ -100,8 +102,9 @@ export const own = (obj, key) => (obj && typeof obj === 'object' && Object.hasOw
 /**
  * Somebody joins (or comes back). A known id keeps its place and stand; a new player who
  * arrives during a game gets a fair start (lateStart). Throws GameError 'removed' / 'full'.
+ * `online` ({id: true}, optional): who is connected now, for the fair start (see lateStart).
  */
-export function addPlayer(room, { id, name }) {
+export function addPlayer(room, { id, name, avatar }, { online = null } = {}) {
   const pid = String(id || '');
   if (!pid || !isSafeId(pid)) throw new GameError('bad', 'Speler zonder id.');
   if (room.removed.includes(pid)) throw new GameError('removed', 'Je bent door de spelleider uit deze kamer gehaald.');
@@ -111,10 +114,20 @@ export function addPlayer(room, { id, name }) {
     return n === known.name ? room : { ...room, players: room.players.map((p) => (p.id === pid ? { ...p, name: n } : p)) };
   }
   if (room.players.length >= MAX_ROOM_PLAYERS) throw new GameError('full', `Deze kamer is vol (${MAX_ROOM_PLAYERS} spelers).`);
-  const player = { id: pid, name: uniqueName(room, cleanName(name, `Speler ${room.players.length + 1}`)) };
+  // the avatar the phone picked (from the fixed list), else a stable one derived from the id
+  const player = { id: pid, name: uniqueName(room, cleanName(name, `Speler ${room.players.length + 1}`)), avatar: isAvatar(avatar) ? avatar : avatarFor(pid) };
   let next = { ...room, players: [...room.players, player] };
-  if (next.game) next = lateStart(next, pid);
+  if (next.game) next = lateStart(next, pid, online);
   return next;
+}
+
+/** A player picks another avatar (from the fixed list; only in the lobby, so a game's tiles stay put). */
+export function setAvatar(room, pid, avatar) {
+  if (!isAvatar(avatar)) throw new GameError('avatar', 'Kies een plaatje uit de lijst.');
+  if (room.phase !== 'lobby') throw new GameError('avatar', 'Je plaatje kun je alleen in de lobby wijzigen.');
+  if (!findPlayer(room, pid)) throw new GameError('avatar', 'Je zit niet in deze kamer.');
+  if (findPlayer(room, pid).avatar === avatar) return room;
+  return { ...room, players: room.players.map((p) => (p.id === pid ? { ...p, avatar } : p)) };
 }
 
 function uniqueName(room, name) {
@@ -140,10 +153,12 @@ export function removePlayer(room, id) {
     g.prev = drop(g.prev);
     g.results = drop(g.results);
     g.roundWinners = (g.roundWinners || []).filter((x) => x !== id);
-    if (g.disco) g.disco = { ...g.disco, choices: drop(g.disco.choices) };
+    if (g.disco) g.disco = { ...g.disco, choices: drop(g.disco.choices), times: drop(g.disco.times) };
     g.winners = (g.winners || []).filter((x) => x !== id);
     if (g.winLines) g.winLines = drop(g.winLines);
     next.game = g;
+    // the snelste of this round may have been the one who goes: rebuild the round without them
+    if (g.kind === 'disco' && next.phase === 'revealed' && g.prev && g.results) return applyResults(next);
   }
   return next;
 }
@@ -184,7 +199,7 @@ export function startGame(room, { cards, seed = Date.now(), now = Date.now(), po
     for (const p of room.players) {
       const card = uniqueDiscoCard(rand, seen);
       seen.add(discoSignature(card));
-      per[p.id] = { card, marks: freshMarks() };
+      per[p.id] = { card, marks: freshMarks(), ...freshFun() };
     }
   } else {
     for (const p of room.players) per[p.id] = { timeline: [pile.shift()] };
@@ -200,6 +215,7 @@ export function startGame(room, { cards, seed = Date.now(), now = Date.now(), po
       decades: decadesFor(valid.map((c) => c.year)),
       ...freshBag(),
       cat: null, spunAt: null, choices: {},
+      times: {}, seq: 0, judged: 0, fastest: null,
     };
   }
   return startRound({ ...room, game, phase: 'answering' }, { now });
@@ -226,15 +242,16 @@ export function startRound(room, { now = Date.now() } = {}) {
 function spinBall(g, now) {
   const usable = (cat) => Object.values(g.per).some((s) => openSquares(s.card, s.marks, cat).length > 0);
   const { cat, state } = drawCategory(g.disco, g.seed, usable);
-  return { ...g.disco, bag: state.bag, last: state.last, fills: state.fills, drawn: state.drawn, cat, spunAt: now, choices: {} };
+  return { ...g.disco, bag: state.bag, last: state.last, fills: state.fills, drawn: state.drawn, cat, spunAt: now, choices: {}, times: {}, fastest: null };
 }
 
 /**
  * Fair start for somebody who joins a running game: as far as the player who is furthest
- * behind (never close to winning). Bingo: a new card with that many squares stamped for
+ * behind among those online now (`online`; everybody when nobody is or it is not given),
+ * never close to winning. Bingo: a new card with that many squares stamped for
  * free, never more than size-2 in one line. Tijdlijn: that many cards from the pile.
  */
-export function lateStart(room, pid) {
+export function lateStart(room, pid, online = null) {
   const g = room.game;
   if (g.kind === 'quiz') { // a late player starts at 0 points
     const per = { ...g.per, [pid]: { score: 0, streak: 0, right: 0 } };
@@ -242,6 +259,10 @@ export function lateStart(room, pid) {
     return { ...room, game: { ...g, per, prev } };
   }
   const others = room.players.filter((p) => p.id !== pid && g.per[p.id]);
+  // "furthest behind" among who is there now: a seat kept by somebody who left early does not
+  // hold every late joiner back at nothing (nobody online: everybody counts)
+  const here = online ? others.filter((p) => own(online, p.id)) : [];
+  const ref = here.length ? here : others;
   const per = { ...g.per };
   const joins = (g.joins || 0) + 1;
   const rand = seededRandom((g.seed + joins * 7919) >>> 0);
@@ -249,8 +270,8 @@ export function lateStart(room, pid) {
   if (g.kind === 'disco') {
     // a fresh card with as many free stamps as the one furthest behind (centre not counted)
     const card = uniqueDiscoCard(rand, new Set(others.map((p) => discoSignature(g.per[p.id].card))));
-    const behind = others.length ? Math.min(...others.map((p) => stampedCount(g.per[p.id].marks))) : 0;
-    per[pid] = { card, marks: lateMarks(behind, rand) };
+    const behind = ref.length ? Math.min(...ref.map((p) => stampedCount(g.per[p.id].marks))) : 0;
+    per[pid] = { card, marks: lateMarks(behind, rand), ...freshFun() }; // no streak, no jokers: a fresh start
   } else if (g.kind === 'bingo') {
     const sigs = new Set(others.map((p) => cardSignature(g.per[p.id].card)));
     let card;
@@ -259,7 +280,7 @@ export function lateStart(room, pid) {
       if (!sigs.has(cardSignature(card))) break;
     }
     const marks = Array(g.size * g.size).fill(null);
-    const behind = others.length ? Math.min(...others.map((p) => markCount(g.per[p.id].marks))) : 0;
+    const behind = ref.length ? Math.min(...ref.map((p) => markCount(g.per[p.id].marks))) : 0;
     const cells = shuffle(marks.map((_, i) => i), rand);
     let given = 0;
     for (const i of cells) {
@@ -270,7 +291,7 @@ export function lateStart(room, pid) {
     }
     per[pid] = { card, marks };
   } else {
-    const behind = others.length ? Math.min(...others.map((p) => g.per[p.id].timeline.length)) : 1;
+    const behind = ref.length ? Math.min(...ref.map((p) => g.per[p.id].timeline.length)) : 1;
     const n = Math.max(1, Math.min(behind, g.goal - 2, pile.length));
     pile = pile.slice();
     const timeline = pile.splice(0, n).sort((a, b) => g.songs[a].year - g.songs[b].year);
@@ -280,7 +301,18 @@ export function lateStart(room, pid) {
   return { ...room, game: { ...g, per, pile, prev, joins } };
 }
 
-const clonePer = (s) => (s.card ? { card: s.card, marks: s.marks.slice() } : s.timeline ? { timeline: s.timeline.slice() } : { ...s });
+// Discobingo's streak, jokers and statistics travel with the card (a stored room without them gets zeros)
+const clonePer = (s) => (s.card
+  ? { card: s.card, marks: s.marks.slice(), ...(s.stats || s.streak != null || s.jokers != null ? discoFun(s) : {}) }
+  : s.timeline ? { timeline: s.timeline.slice() } : { ...s });
+
+const freshFun = () => ({ streak: 0, jokers: 0, stats: freshStats() });
+
+/** Discobingo: a player's streak, jokers and statistics, cleaned (missing = 0; jokers never above the cap). */
+export function discoFun(s) {
+  const n = (v, max) => (Number.isInteger(v) && v > 0 ? Math.min(v, max) : 0);
+  return { streak: n(s?.streak, 100000), jokers: n(s?.jokers, JOKER_CAP), stats: cleanStats(s?.stats) };
+}
 
 /**
  * Check and normalise an answer. Bingo: {pass: true} or {index, guess?, text?};
@@ -341,7 +373,15 @@ function normalizeDiscoAnswer(g, a) {
 export function submitAnswer(room, pid, answer, { now = Date.now() } = {}) {
   if (room.game?.kind === 'quiz') return submitQuizAnswer(room, pid, answer, now);
   const a = normalizeAnswer(room, pid, answer);
-  return { ...room, game: { ...room.game, answers: { ...room.game.answers, [pid]: a } } };
+  const g = room.game;
+  if (g.kind === 'disco') {
+    // the server's time of the final answer (for "snelste"), kept apart from the answer itself:
+    // the answer goes back to its phone, the time goes to nobody. `n` orders answers of the same ms.
+    const seq = (g.disco.seq || 0) + 1;
+    const disco = { ...g.disco, seq, times: { ...(g.disco.times || {}), [pid]: { at: Number(now) || 0, n: seq } } };
+    return { ...room, game: { ...g, answers: { ...g.answers, [pid]: a }, disco } };
+  }
+  return { ...room, game: { ...g, answers: { ...g.answers, [pid]: a } } };
 }
 
 /** Take an answer back (still allowed until the reveal). */
@@ -350,6 +390,11 @@ export function withdrawAnswer(room, pid) {
   if (room.game.kind === 'quiz') throw new GameError('final', 'In de quiz kun je je antwoord niet meer wijzigen.');
   const answers = { ...room.game.answers };
   delete answers[pid];
+  if (room.game.kind === 'disco' && room.game.disco.times) {
+    const times = { ...room.game.disco.times };
+    delete times[pid];
+    return { ...room, game: { ...room.game, answers, disco: { ...room.game.disco, times } } };
+  }
   return { ...room, game: { ...room.game, answers } };
 }
 
@@ -419,20 +464,13 @@ export function reveal(room, { now = Date.now() } = {}) {
 /** Rebuild this round's outcome from the snapshot taken at the reveal. */
 function applyResults(room) {
   const g = room.game;
+  if (g.kind === 'disco') return applyDisco(room);
   const per = {};
   const roundWinners = [];
   const winLines = {};
   for (const [id, before] of Object.entries(g.prev)) {
     const s = clonePer(before);
     const r = g.results[id];
-    if (g.kind === 'disco') {
-      // a right answer stamps the square its player chose (if it is still a valid choice)
-      const at = g.disco.choices?.[id];
-      if (r?.correct && Number.isInteger(at) && s.card[at] === g.disco.cat && s.marks[at] == null) s.marks[at] = g.current;
-      per[id] = s;
-      if (r?.correct && s.marks[at] === g.current && reachedGoal(s.marks, g.disco.win)) { roundWinners.push(id); winLines[id] = goalCells(s.marks, g.disco.win); }
-      continue;
-    }
     if (r?.correct) {
       if (g.kind === 'bingo') s.marks[r.index] = g.current;
       else s.timeline.splice(r.slot, 0, g.current);
@@ -444,6 +482,118 @@ function applyResults(room) {
     } else if (r?.correct && s.timeline.length >= g.goal) roundWinners.push(id);
   }
   return { ...room, game: { ...g, per, roundWinners, winLines } };
+}
+
+/**
+ * Discobingo: rebuild this round's outcome from the snapshot taken at the reveal (g.prev) and
+ * the verdicts and choices as they are now, so a flip, a decided doubt, a moved chip, a player
+ * who left or came back can never leave the cards, streaks, jokers or statistics adrift.
+ */
+function applyDisco(room) {
+  const g = room.game;
+  const fastest = fastestOf(g);
+  const per = {};
+  const roundWinners = [];
+  const winLines = {};
+  for (const id of Object.keys(g.prev)) {
+    const o = discoOutcome(g, id, fastest);
+    per[id] = o.state;
+    if (o.stamped != null && reachedGoal(o.state.marks, g.disco.win)) { roundWinners.push(id); winLines[id] = goalCells(o.state.marks, g.disco.win); }
+  }
+  return { ...room, game: { ...g, per, roundWinners, winLines, disco: { ...g.disco, fastest } } };
+}
+
+/**
+ * Discobingo: one player's round, from the snapshot `g.prev[id]`. Right: the streak grows and
+ * a streak of 3, 6, 9 ... earns a joker (unless 2 are in hand already; usable at once). An
+ * undecided doubt keeps the streak as it was; anything else (wrong, pass, no answer, away)
+ * ends it. The chip stamps the chosen square when it is open and of the round's colour, or of
+ * another colour when a joker is available (that one is then spent). Returns
+ * { state, stamped, earned, spent, available, right }.
+ */
+export function discoOutcome(g, id, fastest = g.disco?.fastest ?? null) {
+  const before = g.prev[id];
+  const f = discoFun(before);
+  const r = own(g.results, id);
+  const right = !!r?.correct;
+  const open = r?.verdict === 'doubt';
+  const streak = right ? f.streak + 1 : open ? f.streak : 0;
+  const earned = right && streak % JOKER_EVERY === 0 && f.jokers < JOKER_CAP;
+  const available = f.jokers + (earned ? 1 : 0);
+  const marks = before.marks.slice();
+  const at = own(g.disco.choices, id);
+  let stamped = null;
+  let spent = false;
+  if (right && Number.isInteger(at) && at >= 0 && at < CELLS && marks[at] == null && before.card[at] !== CENTER_KEY) {
+    if (before.card[at] === g.disco.cat) stamped = at;
+    else if (available >= 1) { stamped = at; spent = true; }
+  }
+  if (stamped != null) marks[stamped] = g.current;
+  const st = f.stats;
+  const answered = !!r && !r.none && !r.pass;
+  const stats = {
+    answers: st.answers + (answered ? 1 : 0),
+    right: st.right + (right ? 1 : 0),
+    doubts: st.doubts + (r?.auto === 'doubt' ? 1 : 0),
+    fastest: st.fastest + (fastest === id ? 1 : 0),
+    best: Math.max(st.best, streak),
+    jokersUsed: st.jokersUsed + (spent ? 1 : 0),
+  };
+  return { state: { card: before.card, marks, streak, jokers: available - (spent ? 1 : 0), stats }, stamped, earned, spent, available, right };
+}
+
+/**
+ * Discobingo: who gets "⚡ Snelste" this round. The earliest right answer by the server's time
+ * of the final answer (the same ms: the one that arrived first). The answers the machine judged
+ * right come first; an answer the host made right (a doubt decided Goed, a wrong one flipped)
+ * only gets it when no answer the machine judged right is left, and then the one made right
+ * first: so a later decision of the host never takes the badge from somebody who had it.
+ * An answer without a recorded time (a room stored before this existed) can not be the fastest.
+ */
+export function fastestOf(g) {
+  if (g?.kind !== 'disco' || !g.results || !g.prev) return null;
+  const times = isObj(g.disco.times) ? g.disco.times : {};
+  const t = (id) => own(times, id);
+  const ids = Object.keys(g.results).filter((id) => g.results[id]?.correct && own(g.prev, id) && Number.isFinite(t(id)?.at));
+  const byTime = (a, b) => t(a).at - t(b).at || (t(a).n || 0) - (t(b).n || 0) || (a < b ? -1 : a > b ? 1 : 0);
+  const machine = ids.filter((id) => g.results[id].auto === 'right').sort(byTime);
+  if (machine.length) return machine[0];
+  const seq = (id) => (Number.isFinite(g.results[id].rightSeq) ? g.results[id].rightSeq : Infinity);
+  const host = ids.filter((id) => g.results[id].auto !== 'right').sort((a, b) => seq(a) - seq(b) || byTime(a, b));
+  return host[0] ?? null;
+}
+
+/** Discobingo: the open squares of another colour a right player may put the chip on with a joker (none without one). */
+export function jokerSquares(game, pid) {
+  if (game?.kind !== 'disco' || !own(game.results, pid)?.correct || !own(game.prev, pid) || !Array.isArray(game.prev[pid]?.marks)) return [];
+  if (discoOutcome(game, pid).available < 1) return [];
+  const before = game.prev[pid];
+  return before.card.map((k, i) => i).filter((i) => before.marks[i] == null && before.card[i] !== game.disco.cat && before.card[i] !== CENTER_KEY);
+}
+
+/**
+ * Discobingo: everybody's statistics over the game and the awards they give (see party.js
+ * discoAwards): for the winner screen. `toGo`: squares still needed for the goal.
+ */
+export function discoSummary(room) {
+  const g = room.game;
+  if (g?.kind !== 'disco') return { stats: [], awards: [] };
+  const players = room.players.filter((p) => Array.isArray(own(g.per, p.id)?.marks)).map((p) => ({
+    id: p.id,
+    name: p.name,
+    avatar: avatarOf(p),
+    stats: discoFun(g.per[p.id]).stats,
+    winner: (g.winners || []).includes(p.id),
+    toGo: squaresToGo(g.per[p.id].marks, g.disco.win),
+  }));
+  return { stats: players.map((p) => ({ id: p.id, name: p.name, avatar: p.avatar, ...p.stats })), awards: discoAwards(players) };
+}
+
+/** The room as it goes into the owner's backup: during a question nobody gets the answer times. */
+export function withoutAnswerTimes(room) {
+  const g = room?.game;
+  if (g?.kind !== 'disco' || room.phase !== 'answering' || !g.disco?.times) return room;
+  return { ...room, game: { ...g, disco: { ...g.disco, times: {} } } };
 }
 
 /** Host overrules one verdict (typed Artiest/Titel answers, or any other answer in doubt). */
@@ -473,9 +623,14 @@ export function judgeResult(room, pid, ok) {
   if (!r || r.none || r.pass) throw new GameError('answer', 'Deze speler heeft geen antwoord om te beoordelen.');
   const verdict = ok ? 'right' : 'wrong';
   const next = { ...r, verdict, correct: ok, decided: true, overridden: r.auto !== 'doubt' && verdict !== r.auto };
+  // the order in which the host made answers right (for "snelste", see fastestOf); Goed on one
+  // that is right already keeps its place
+  let judged = g.disco.judged || 0;
+  if (ok && !(r.correct && Number.isFinite(r.rightSeq))) next.rightSeq = ++judged;
+  if (!ok) delete next.rightSeq;
   const choices = { ...g.disco.choices };
   if (!ok) delete choices[pid];
-  return applyResults({ ...room, game: { ...g, results: { ...g.results, [pid]: next }, disco: { ...g.disco, choices } } });
+  return applyResults({ ...room, game: { ...g, results: { ...g.results, [pid]: next }, disco: { ...g.disco, choices, judged } } });
 }
 
 /** Discobingo: the squares a player may stamp this round (open squares of the category; none unless right). */
@@ -486,8 +641,12 @@ export function choosableSquares(game, pid) {
   return openSquares(before.card, before.marks, game.disco.cat);
 }
 
-/** Discobingo: a right player chooses (or moves) this round's stamp; `index` null takes the choice back. */
-export function stampSquare(room, pid, index) {
+/**
+ * Discobingo: a right player chooses (or moves) this round's stamp; `index` null takes the
+ * choice back. With `joker` the chip may go on an open square of another colour too, when the
+ * player has a joker (it is spent only while the chip lies there, see discoOutcome).
+ */
+export function stampSquare(room, pid, index, { joker = false } = {}) {
   const g = room.game;
   if (g?.kind !== 'disco') throw new GameError('answer', 'Dit kan alleen bij Discobingo.');
   if (room.phase !== 'revealed') throw new GameError('phase', 'Je kunt alleen na de onthulling een vakje afstempelen.');
@@ -499,7 +658,11 @@ export function stampSquare(room, pid, index) {
   if (index == null) delete choices[pid];
   else {
     const at = Number(index);
-    if (!choosableSquares(g, pid).includes(at)) throw new GameError('answer', `Kies een open vakje: ${categoryOf(g.disco.cat).short.toLowerCase()}.`);
+    if (!choosableSquares(g, pid).includes(at)) {
+      if (!joker) throw new GameError('answer', `Kies een open vakje: ${categoryOf(g.disco.cat).short.toLowerCase()}.`);
+      if (discoOutcome(g, pid).available < 1) throw new GameError('joker', 'Je hebt geen joker om in te zetten.');
+      if (!jokerSquares(g, pid).includes(at)) throw new GameError('answer', 'Kies een open vakje.');
+    }
     choices[pid] = at;
   }
   return applyResults({ ...room, game: { ...g, disco: { ...g.disco, choices } } });
@@ -722,6 +885,9 @@ function isValidDisco(r, g) {
   const ofPlayers = (o) => isObj(o) && Object.keys(o).every((id) => ids.has(id));
   if (!ofPlayers(g.per) || !Object.values(g.per).every(card)) return false;
   if (!ofPlayers(d.choices) || !Object.values(d.choices).every((i) => Number.isInteger(i) && i >= 0 && i < CELLS)) return false;
+  // answer times (for "snelste"): optional, a room stored before them has none
+  if (d.times != null && (!ofPlayers(d.times) || !Object.values(d.times).every((x) => isObj(x) && Number.isFinite(x.at)))) return false;
+  if (d.fastest != null && !ids.has(d.fastest)) return false;
   if (g.answers != null && !ofPlayers(g.answers)) return false;
   if (r.phase === 'revealed' || (r.phase === 'won' && g.results)) {
     if (!ofPlayers(g.prev) || !Object.values(g.prev).every(card)) return false;

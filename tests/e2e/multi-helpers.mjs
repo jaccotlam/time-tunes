@@ -54,7 +54,7 @@ export async function startSignal() {
  * The Node room server (server/node.mjs) as a child process on a free port, so a test can
  * stop and restart it. Resolves with { kind: 'server', url, port, stop(), restart(), start() }.
  */
-export async function startRoomServer({ port = null, origins = null } = {}) {
+export async function startRoomServer({ port = null, origins = null, accountsFile = null } = {}) {
   const p = port || await freePort();
   let proc = null;
   const rs = {
@@ -64,7 +64,7 @@ export async function startRoomServer({ port = null, origins = null } = {}) {
     start() {
       return new Promise((resolve, reject) => {
         proc = spawn(process.execPath, [join(ROOT, 'server/node.mjs')], {
-          env: { ...process.env, PORT: String(p), HOST: '127.0.0.1', ...(origins ? { ALLOWED_ORIGINS: origins } : {}) },
+          env: { ...process.env, PORT: String(p), HOST: '127.0.0.1', ...(origins ? { ALLOWED_ORIGINS: origins } : {}), ...(accountsFile ? { ACCOUNTS_FILE: accountsFile } : {}) },
           stdio: ['ignore', 'pipe', 'inherit'],
         });
         const onData = (d) => { if (String(d).includes('luistert op poort')) { proc.stdout.off('data', onData); resolve(rs); } };
@@ -72,11 +72,12 @@ export async function startRoomServer({ port = null, origins = null } = {}) {
         proc.on('error', reject);
       });
     },
-    stop() {
+    // signal 'SIGTERM' lets the server write its accounts file first (accountsFile option)
+    stop(signal = 'SIGKILL') {
       return new Promise((resolve) => {
         if (!proc || proc.exitCode != null) { resolve(); return; }
         proc.once('exit', () => resolve());
-        proc.kill('SIGKILL'); // like a crash or a host restart: everything in memory is gone
+        proc.kill(signal); // SIGKILL: like a crash or a host restart: everything in memory is gone
       });
     },
     async restart() { await rs.stop(); return rs.start(); },
@@ -148,3 +149,15 @@ export const serverHost = (hostPage) => hostPage.evaluate(() => {
   const s = window.__ttHost?.session;
   return s ? { room: s.room, song: s.currentSong(), meta: s.meta, status: s.status, code: s.code } : null;
 });
+
+// ---- identical in several suites: what a player's phone knows and waits for ----
+/** The player's room view (window.__ttRoom). */
+export const view = (page) => page.evaluate(() => window.__ttRoom?.session?.view || null);
+/** Every message the player's session received. */
+export const received = (page) => page.evaluate(() => window.__ttRoom?.session?.received || []);
+/** Does `text` contain `needle` (not followed by a digit, so 1998 does not match 19981)? */
+export const has = (text, needle) => new RegExp(`${String(needle).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![0-9])`).test(text);
+/** Wait until some element has data-view=`v`. */
+export async function waitView(page, v, timeout = 20000) {
+  await page.locator(`[data-view="${v}"]`).first().waitFor({ timeout });
+}

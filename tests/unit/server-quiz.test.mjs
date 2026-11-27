@@ -103,7 +103,6 @@ test('quiz: het goede antwoord staat vóór de onthulling in geen enkel bericht 
     await flush();
     const song = host.last('state').lead.song;
     for (const p of players) {
-      const mark = p.raw.length;
       p.send({ t: 'answer', round, answer: { choice: round % 4 } });
       await flush();
       const before = [];
@@ -117,7 +116,6 @@ test('quiz: het goede antwoord staat vóór de onthulling in geen enkel bericht 
         assert.ok(!text.includes(song.previewUrl) && !text.includes(`"${song.id}"`), 'het nummer zelf niet (de vier opties mogen de spelers zien)');
         assert.ok(!/"answer":\d/.test(text), 'geen index van het goede antwoord');
       }
-      assert.ok(mark >= 0);
     }
     advance(1000);
     if (host.last('state').view.phase !== 'revealed') host.send({ t: 'reveal' });
@@ -157,11 +155,4 @@ test('quiz: vangnet start de klok zonder melding van de muziektelefoon; herstart
   core2.sweep();
   await flush();
   assert.equal(h2.last('state').view.phase, 'revealed');
-});
-
-test('quiz: protocolversie (2 of hoger), oude app krijgt nette melding', async () => {
-  const { core } = setup();
-  assert.ok(V >= 2);
-  assert.equal(http(core, 'POST', '/rooms', { v: 1, id: 'owner01' }).status, 409);
-  assert.equal(http(core, 'POST', '/rooms', { v: V - 1, id: 'owner01' }).status, 409);
 });

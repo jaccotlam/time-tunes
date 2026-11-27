@@ -10,6 +10,12 @@
 //   now()                         clock (tests use a fake one)
 //   lastSeen(connId)              (optional) extra "last heard" time (CF: auto-answered pings)
 //   wake(at | null)               (optional) call tick() at that time (Node: a timer; CF uses nextTick() for its alarm)
+// A display ("groot scherm") is a connection that only watches: it says hello with
+// `screen: true` and no id, is never a member or player, gets the spectator view (the same
+// public view a player gets, without anything of its own) and can send nothing but hello /
+// leave / ping. Displays count towards MAX_CONNS_PER_ROOM, at most MAX_SCREENS_PER_ROOM per
+// room, are never stored with the room (only in the connection record: CF attachment) and
+// play no part in presence, "everybody online has answered", take-over or the backup.
 // The Quiz runs on the server's clock: the thinking time starts at "playing" from the music phone
 // (or QUIZ_START_FALLBACK_MS after the question, as a safety net) and the question closes when
 // everybody online has answered, when the time is up (tick) or when the leader reveals.
@@ -25,10 +31,22 @@ import {
   addToContribution, contributionTotal, mixStats, mixMinimum, buildMix, MixError, MIX_PER_PLAYER,
 } from '../app/js/multi/mix.js';
 import { sha256Hex } from './sha256.mjs';
+import { resetPrepared } from './prepared.mjs';
+import { isAvatar, avatarOf, isReaction, REACT_GAP_MS, REACT_ROOM_MAX, REACT_ROOM_WINDOW_MS } from '../app/js/multi/party.js';
 
 export const ROOM_IDLE_MS = 6 * 60 * 60 * 1000; // a room with no activity for 6 hours expires
 export const UNCLAIMED_MS = 30 * 60 * 1000; // a created room nobody ever connected to
+/** A room an account prepared in advance (prepared.mjs) lives this long after its last activity. */
+export const PREPARED_IDLE_MS = 30 * 24 * 60 * 60 * 1000;
+/** A prepared room in the lobby: only the owner (the account's device) may lead it, no take-over. */
+export const leadLocked = (s) => !!s?.prepared && s.room?.phase === 'lobby';
+/** How long this room may stay without activity before it expires. */
+export const idleLimit = (s) => (s?.prepared ? PREPARED_IDLE_MS : s?.claimed ? ROOM_IDLE_MS : UNCLAIMED_MS);
 export const MAX_CONNS_PER_ROOM = 40;
+export const MAX_SCREENS_PER_ROOM = 4;
+/** A full room gives up the seat of somebody offline this long (or who left on purpose) for a newcomer. */
+export const AWAY_SEAT_MS = 2 * 60 * 1000;
+const SCREEN_SID_RE = /^[A-Za-z0-9_-]{8,40}$/;
 export const RATE_WINDOW_MS = 10000;
 export const RATE_MAX_MESSAGES = 80; // per connection per window (pings excluded)
 export const RATE_MAX_PINGS = 30;
@@ -43,6 +61,7 @@ const SPECTATOR = '!spectator';
 export function migrateState(state) {
   if (!state || typeof state !== 'object') return null;
   if (!state.mix || typeof state.mix !== 'object' || Array.isArray(state.mix)) state.mix = {};
+  if (!state.away || typeof state.away !== 'object' || Array.isArray(state.away)) state.away = {};
   if (state.room && typeof state.room === 'object') state.room = withSettings(state.room);
   return state;
 }
@@ -98,11 +117,12 @@ export class RoomHub {
     this.deps = deps;
     this.now = deps.now || Date.now;
     this.state = null;
-    this.conns = new Map(); // connId -> { mid, lastSeen, win, count, pings }
+    this.conns = new Map(); // connId -> { mid, screen, lastSeen, win, count, pings }
     this.dirty = false;
     this.backupKey = '';
     this.mixVersion = 0;
     this.mixCache = null;
+    this.loadedAt = this.now(); // members offline without a record count as away since then
   }
 
   // ---------- lifecycle ----------
@@ -128,6 +148,7 @@ export class RoomHub {
       members: { [ownerId]: { th: hashToken(token) } },
       room: G.createRoom({ code: this.code, host: hostPlays ? { id: ownerId, name: ownerName } : null, settings }),
       mix: {}, // "Mix van de groep": { memberId: { at, tracks } }, never sent to any phone
+      away: {}, // members offline: { memberId: { since, left } } (left = tapped Verlaat)
     };
     this.persist();
     return { code: this.code, token };
@@ -157,6 +178,7 @@ export class RoomHub {
       room: restartQuizQuestion(withSettings(snap.room), t),
       restoredAt: t,
       mix: {}, // contributions are not in the backup: the phones send them again
+      away: {},
     };
     this.persist();
     return { code: this.code, restored: true };
@@ -166,7 +188,7 @@ export class RoomHub {
   info() {
     const s = this.state;
     if (!s) return { exists: false };
-    return { exists: true, phase: s.room.phase, players: s.room.players.length, leaderOnline: this.online(s.leaderId) };
+    return { exists: true, phase: s.room.phase, players: s.room.players.length, leaderOnline: this.online(s.leaderId), ...(s.prepared ? { name: s.prepared.name } : {}) };
   }
 
   snapshot() { return this.state; }
@@ -174,7 +196,13 @@ export class RoomHub {
   /** Load the persisted state (CF: after the object was evicted) and the open connections. */
   load(state, conns = []) {
     this.state = migrateState(state);
-    for (const c of conns) this.conns.set(c.connId, { mid: c.mid || null, lastSeen: c.lastSeen || this.now(), win: this.now(), count: 0, pings: 0 });
+    for (const c of conns) {
+      const mid = c.mid || null;
+      const screen = !mid && c.screen === true;
+      const sid = screen && typeof c.sid === 'string' && SCREEN_SID_RE.test(c.sid) ? c.sid : null;
+      this.conns.set(c.connId, { mid, screen, sid, lastSeen: c.lastSeen || this.now(), win: this.now(), count: 0, pings: 0 });
+    }
+    this.loadedAt = this.now();
   }
 
   persist() { this.deps.save?.(this.state ? this.state : null); }
@@ -187,14 +215,21 @@ export class RoomHub {
       return false;
     }
     const t = this.now();
-    this.conns.set(connId, { mid: null, lastSeen: t, win: t, count: 0, pings: 0 });
+    this.conns.set(connId, { mid: null, screen: false, lastSeen: t, win: t, count: 0, pings: 0 });
     this.attach(connId);
     return true;
   }
 
   attach(connId) {
     const c = this.conns.get(connId);
-    if (c) this.deps.attach?.(connId, { mid: c.mid, lastSeen: c.lastSeen });
+    if (c) this.deps.attach?.(connId, { mid: c.mid, lastSeen: c.lastSeen, ...(c.screen ? { screen: true, ...(c.sid ? { sid: c.sid } : {}) } : {}) });
+  }
+
+  /** Displays connected now (welcomed ones). */
+  screenCount() {
+    let n = 0;
+    for (const c of this.conns.values()) if (c.screen) n++;
+    return n;
   }
 
   close(connId) {
@@ -202,13 +237,14 @@ export class RoomHub {
     if (!c) return;
     this.conns.delete(connId);
     if (c.mid && this.state) {
+      this.markAway(c.mid);
       if (c.mid === this.state.leaderId && !this.online(c.mid)) {
         this.state.leaderAwaySince = this.now();
         this.persist();
       }
       this.quizCheck(); // the question does not wait for somebody who dropped out
       this.changed();
-    }
+    } else if (c.screen) this.refresh(); // meta.screens
   }
 
   /** Quiz: close the question when everybody online has answered or the time is up. */
@@ -217,6 +253,40 @@ export class RoomHub {
     if (!s || s.room.game?.kind !== 'quiz') return false;
     if (!quizRoundOver(s.room, this.now(), this.presence())) return false;
     s.room = G.reveal(s.room, { now: this.now() });
+    return true;
+  }
+
+  /** A member went offline (left = tapped Verlaat): remember since when, for a full room (freeSeat). */
+  markAway(mid, left = false) {
+    const s = this.state;
+    if (!s || !mid || this.online(mid) || !has(s.members, mid)) return;
+    s.away = s.away && typeof s.away === 'object' ? s.away : {};
+    s.away[mid] = { since: this.now(), left: !!left };
+  }
+
+  /**
+   * The room is full and somebody new wants in: give up the seat of the member who has been
+   * away longest, if they left on purpose or are offline for more than AWAY_SEAT_MS. Never an
+   * online member, the owner, the leader or the host's own seat. Returns whether one was freed.
+   */
+  freeSeat() {
+    const s = this.state;
+    const t = this.now();
+    let pick = null;
+    let pickSince = Infinity;
+    for (const p of s.room.players) {
+      if (p.host || p.id === s.ownerId || p.id === s.leaderId || this.online(p.id)) continue;
+      const rec = G.own(s.away, p.id);
+      const since = Number.isFinite(rec?.since) ? rec.since : this.loadedAt;
+      if (!rec?.left && t - since <= AWAY_SEAT_MS) continue;
+      if (since < pickSince) { pick = p.id; pickSince = since; }
+    }
+    if (!pick) return false;
+    s.room = G.removePlayer(s.room, pick);
+    s.room = { ...s.room, removed: s.room.removed.filter((x) => x !== pick) }; // may join again (fresh)
+    delete s.members[pick];
+    delete s.away[pick];
+    this.dropContribution(pick);
     return true;
   }
 
@@ -238,7 +308,8 @@ export class RoomHub {
     const c = this.conns.get(connId);
     this.conns.delete(connId);
     this.deps.drop?.(connId, 4000, code);
-    if (c?.mid && this.state) this.changed();
+    if (c?.mid && this.state) { this.markAway(c.mid); this.changed(); }
+    else if (c?.screen) this.refresh();
   }
 
   // ---------- messages ----------
@@ -260,6 +331,7 @@ export class RoomHub {
     this.guarded(connId, () => {
       if (m.t === 'hello') { this.hello(connId, m); return; }
       if (!this.state) { this.fatal(connId, 'notfound', 'Deze kamer bestaat niet (meer).'); return; }
+      if (c.screen) { this.screenAction(connId, m); return; }
       if (!c.mid || !has(this.state.members, c.mid)) { this.sendTo(connId, { t: 'error', code: 'bad', message: 'Zeg eerst hallo.' }); return; }
       this.state.lastActive = t;
       this.action(connId, c.mid, m);
@@ -276,9 +348,10 @@ export class RoomHub {
     const before = this.checkpoint();
     this.holding = true;
     this.held = false;
+    this.heldView = false;
     try {
       fn();
-      if (this.held && this.state) this.renderAll();
+      if ((this.held || this.heldView) && this.state) this.renderAll();
     } catch (e) {
       this.holding = false;
       this.rollback(before);
@@ -292,12 +365,13 @@ export class RoomHub {
       this.holding = false;
     }
     if (this.held) this.changed();
+    else if (this.heldView) this.refresh();
   }
 
   /** The parts of the state a message can change (the room objects themselves are never mutated). */
   checkpoint() {
     const s = this.state;
-    return s ? { ...s, members: { ...s.members }, mix: { ...s.mix } } : null;
+    return s ? { ...s, members: { ...s.members }, mix: { ...s.mix }, away: { ...s.away } } : null;
   }
 
   rollback(saved) {
@@ -313,6 +387,7 @@ export class RoomHub {
     const pres = this.presence();
     const ids = new Set([...s.room.players.map((p) => p.id), s.ownerId, s.leaderId]);
     for (const id of ids) JSON.stringify(this.stateFor(id, pres));
+    JSON.stringify(this.stateForScreen(pres));
   }
 
   hello(connId, m) {
@@ -321,6 +396,8 @@ export class RoomHub {
     const s = this.state;
     if (!s) { this.fatal(connId, 'notfound', 'Deze kamer bestaat niet (meer).'); return; }
     if (m.code && m.code !== this.code) { this.fatal(connId, 'room', 'Deze kamer bestaat niet meer.'); return; }
+    if (m.screen === true) { this.helloScreen(connId, m); return; }
+    if (c.screen) { this.sendTo(connId, { t: 'error', code: 'screen', message: 'Dit is een groot scherm: dat kijkt alleen mee.' }); return; }
     const id = validId(m.id) ? m.id : null;
     if (!id) { this.fatal(connId, 'bad', 'Onbekende speler.'); return; }
     let token;
@@ -331,8 +408,10 @@ export class RoomHub {
       }
     } else {
       if (s.room.removed.includes(id)) { this.fatal(connId, 'removed', 'Je bent door de spelleider uit deze kamer gehaald.'); return; }
+      if (s.room.players.length >= G.MAX_ROOM_PLAYERS) this.freeSeat(); // room for a newcomer?
       try {
-        s.room = G.addPlayer(s.room, { id, name: m.name });
+        // the fair start of a late joiner looks at who is online now (not at seats kept by leavers)
+        s.room = G.addPlayer(s.room, { id, name: m.name, avatar: m.avatar }, { online: this.presence() });
       } catch (e) {
         this.fatal(connId, e.code || 'bad', e.message);
         return;
@@ -349,6 +428,7 @@ export class RoomHub {
       }
     }
     c.mid = id;
+    if (s.away && has(s.away, id)) delete s.away[id];
     this.attach(connId);
     // the owner's Spotify Client ID goes to the players (a public value; only the form is checked).
     // No cid field (an older app): keep what there is; '' = the owner has none (any more).
@@ -360,9 +440,69 @@ export class RoomHub {
     s.lastActive = this.now();
     if (id === s.leaderId) s.leaderAwaySince = null;
     else if (m.name && s.room.players.some((p) => p.id === id)) s.room = G.addPlayer(s.room, { id, name: m.name }); // name update
+    // the phone's avatar comes along with every hello; on a known seat it only changes in the lobby
+    if (isAvatar(m.avatar) && s.room.phase === 'lobby' && s.room.players.some((p) => p.id === id)) s.room = G.setAvatar(s.room, id, m.avatar);
     this.sendTo(connId, { t: 'welcome', v: SERVER_PROTOCOL_VERSION, id, code: this.code, ...(token ? { token } : {}), owner: id === s.ownerId });
     this.backupKey = ''; // a (re)connected owner gets a fresh backup
     this.changed();
+  }
+
+  /** A display says hello: no id, no token, nothing stored. Again on the same connection: welcome again. */
+  helloScreen(connId, m) {
+    const c = this.conns.get(connId);
+    if (c.mid) { this.sendTo(connId, { t: 'error', code: 'screen', message: 'Deze verbinding hoort al bij een speler.' }); return; }
+    const welcome = { t: 'welcome', v: SERVER_PROTOCOL_VERSION, code: this.code, screen: true };
+    if (c.screen) {
+      // again on the same connection: nothing changes for anybody else, so only this display hears
+      this.sendTo(connId, welcome);
+      this.sendTo(connId, this.stateForScreen(this.presence()));
+      return;
+    }
+    const before = this.screenCount();
+    // `sid`: the display tab's own random id; its earlier connection (dropped silently) gives up its slot
+    const sid = typeof m.sid === 'string' && SCREEN_SID_RE.test(m.sid) ? m.sid : null;
+    if (sid) for (const [other, oc] of [...this.conns]) if (other !== connId && oc.screen && oc.sid === sid) this.dropScreen(other);
+    // still full: the display heard from longest ago makes room (it is told, and does not come back by itself)
+    while (this.screenCount() >= MAX_SCREENS_PER_ROOM) {
+      let oldest = null;
+      let seen = Infinity;
+      for (const [other, oc] of this.conns) {
+        if (!oc.screen) continue;
+        const at = Math.max(oc.lastSeen, this.deps.lastSeen?.(other) || 0);
+        if (at < seen) { seen = at; oldest = other; }
+      }
+      this.dropScreen(oldest);
+    }
+    c.screen = true;
+    c.sid = sid;
+    this.attach(connId);
+    this.sendTo(connId, welcome);
+    if (this.screenCount() !== before) this.refresh(); // meta.screens changed: everybody
+    else this.sendTo(connId, this.stateForScreen(this.presence())); // a slot changed hands: only the newcomer
+  }
+
+  /** Another display takes this display's slot. */
+  dropScreen(connId) {
+    this.sendTo(connId, { t: 'error', code: 'screenreplaced', message: 'Een ander groot scherm volgt deze kamer nu. Er kunnen er 4 tegelijk meekijken.' });
+    this.conns.delete(connId);
+    this.deps.drop?.(connId, 4001, 'screenreplaced');
+  }
+
+  /** POST /rooms/CODE/seat: does this id + token still have a seat here? Tells nothing without the token. */
+  hasSeat(id, token) {
+    const s = this.state;
+    return !!s && validId(id) && typeof token === 'string' && TOKEN_RE.test(token) && has(s.members, id) && s.members[id].th === hashToken(token);
+  }
+
+  /** A display only watches: leave closes it, everything else is refused (the connection stays). */
+  screenAction(connId, m) {
+    if (m.t === 'leave') {
+      this.conns.delete(connId);
+      this.deps.drop?.(connId, 1000, 'leave');
+      this.refresh();
+      return;
+    }
+    this.sendTo(connId, { t: 'error', code: 'screen', message: 'Dit is een groot scherm: dat kijkt alleen mee.' });
   }
 
   action(connId, mid, m) {
@@ -383,11 +523,14 @@ export class RoomHub {
         if (r.game?.kind === 'quiz' && m.round === r.game.round) s.room = startQuizClock(r, this.now());
         break;
       case 'withdraw': s.room = G.withdrawAnswer(r, mid); break;
+      case 'avatar': s.room = G.setAvatar(r, mid, m.avatar); break;
+      case 'react': this.react(mid, m); return; // never stored, nothing else changes
       case 'stamp': {
         if (!r.game || m.round !== r.game.round) return; // a choice for an earlier round
         const index = m.index === null ? null : Number.isInteger(m.index) && m.index >= 0 && m.index < 25 ? m.index : undefined;
         if (index === undefined) throw new G.GameError('answer', 'Kies een vakje.');
-        s.room = G.stampSquare(r, mid, index);
+        if (m.joker !== undefined && typeof m.joker !== 'boolean') throw new G.GameError('answer', 'Kies een vakje.');
+        s.room = G.stampSquare(r, mid, index, { joker: m.joker === true });
         break;
       }
       case 'judge': {
@@ -439,6 +582,7 @@ export class RoomHub {
         if (!s.room.players.some((p) => p.id === pid) && !has(s.members, pid)) return; // gone already (or never there)
         s.room = G.removePlayer(r, pid);
         delete s.members[pid];
+        if (s.away) delete s.away[pid];
         this.dropContribution(pid);
         for (const [other, oc] of [...this.conns]) {
           if (oc.mid === pid) {
@@ -451,19 +595,31 @@ export class RoomHub {
       }
       case 'leave': {
         if (mid === s.ownerId) return; // the owner closes the room instead
-        s.room = G.removePlayer(r, mid);
-        s.room = { ...s.room, removed: s.room.removed.filter((x) => x !== mid) }; // may join again later
-        delete s.members[mid];
-        this.dropContribution(mid);
+        if (r.game) {
+          // during a game (also on the winner screen) the seat stays: card, stamps, score,
+          // this round's result and the member token, so the same phone can come back to
+          // exactly that seat. The player is just away, like after a closed tab; their part
+          // of the "Mix van de groep" stays in this game too (see dropContribution).
+        } else {
+          // in the lobby nothing is lost: off the list (they may join again later)
+          s.room = G.removePlayer(r, mid);
+          s.room = { ...s.room, removed: s.room.removed.filter((x) => x !== mid) };
+          delete s.members[mid];
+          this.dropContribution(mid);
+        }
         if (s.leaderId === mid) { s.leaderId = s.ownerId; s.leaderAwaySince = this.online(s.ownerId) ? null : this.now(); }
         this.conns.delete(connId);
         this.deps.drop?.(connId, 1000, 'leave');
+        if (r.game) this.markAway(mid, true);
+        this.quizCheck(); // the question does not wait for somebody who left
         break;
       }
       case 'lead': {
         if (isLeader) break;
         if (mid !== s.ownerId) {
           if (!s.room.players.some((p) => p.id === mid)) throw new G.GameError('lead', 'Alleen een speler kan de leiding overnemen.');
+          // a room set up in advance is led from the account's device until a game runs
+          if (leadLocked(s)) throw new G.GameError('lead', 'Deze kamer is klaargezet: de spelleider opent hem zo. Tot het spel begint kan niemand anders de leiding nemen.');
           if (this.online(s.leaderId)) throw new G.GameError('leaderonline', 'De spelleider is er weer.');
           const away = this.now() - (s.leaderAwaySince ?? this.now());
           if (away < TAKEOVER_MS) throw new G.GameError('wait', `Wacht nog ${Math.ceil((TAKEOVER_MS - away) / 1000)} s: misschien komt de spelleider terug.`);
@@ -474,7 +630,9 @@ export class RoomHub {
       }
       case 'close': {
         if (mid !== s.ownerId && !isLeader) throw new G.GameError('notleader', 'Alleen de spelleider kan de kamer sluiten.');
-        this.shutdown('closed', 'De spelleider heeft de kamer gesloten.');
+        // a prepared room is emptied instead: its code stays valid for the account (prepared.mjs)
+        if (s.prepared) resetPrepared(this, 'closed', 'De spelleider heeft de kamer gesloten.');
+        else this.shutdown('closed', 'De spelleider heeft de kamer gesloten.');
         return;
       }
       default: return;
@@ -527,6 +685,32 @@ export class RoomHub {
     s.room = { ...s.room, game: { ...g, songs, pile } };
   }
 
+  /**
+   * A reaction (party.js REACTIONS) from a seated player: in the lobby, after answering the
+   * running question, after the reveal or on the winner screen; at most one per REACT_GAP_MS
+   * per player and REACT_ROOM_MAX per REACT_ROOM_WINDOW_MS per room. Passed on at once to the
+   * displays and the leader only, never stored and never part of a state (a display that
+   * connects later does not get it). Anything refused is dropped without an answer.
+   */
+  react(mid, m) {
+    const s = this.state;
+    const r = s.room;
+    const p = r.players.find((x) => x.id === mid);
+    if (!p || !isReaction(m.emoji)) return;
+    const g = r.game;
+    if (r.phase === 'answering' && !(G.own(g?.per, mid) && G.own(g?.answers, mid))) return;
+    if (!['lobby', 'answering', 'revealed', 'won'].includes(r.phase)) return;
+    const t = this.now();
+    const log = (this.reactLog ??= { last: new Map(), recent: [] });
+    if (t - (log.last.get(mid) ?? -Infinity) < REACT_GAP_MS) return;
+    log.recent = log.recent.filter((x) => t - x < REACT_ROOM_WINDOW_MS);
+    if (log.recent.length >= REACT_ROOM_MAX) return;
+    log.last.set(mid, t);
+    log.recent.push(t);
+    const text = JSON.stringify({ t: 'react', id: p.id, name: p.name, avatar: avatarOf(p), emoji: m.emoji, at: t });
+    for (const [connId, c] of this.conns) if (c.screen || (c.mid && c.mid === s.leaderId)) this.sendTo(connId, text);
+  }
+
   /** Close the room for everybody and forget it. */
   shutdown(code, message) {
     for (const connId of [...this.conns.keys()]) {
@@ -544,6 +728,13 @@ export class RoomHub {
     if (this.holding) { this.held = true; return; } // a message is being handled: see guarded()
     this.persist();
     this.deps.wake?.(quizNextEvent(this.state.room, QUIZ_START_FALLBACK_MS));
+    this.refresh();
+  }
+
+  /** Send everybody a fresh state, without saving (nothing stored changed: a display came or went). */
+  refresh() {
+    if (!this.state) return;
+    if (this.holding) { this.heldView = true; return; }
     if (this.dirty) return;
     this.dirty = true;
     queueMicrotask(() => {
@@ -565,11 +756,18 @@ export class RoomHub {
       leaderIsOwner: s.leaderId === s.ownerId,
       leaderOnline,
       leaderAwayMs: leaderOnline ? 0 : Math.max(0, this.now() - (s.leaderAwaySince ?? this.now())),
-      takeoverMs: TAKEOVER_MS,
+      // null while nobody may take over (a prepared room in the lobby): see takeover
+      takeoverMs: leadLocked(s) ? null : TAKEOVER_MS,
+      takeover: !leadLocked(s), // may a player take the lead when the leader stays away?
+      prepared: !!s.prepared, // set up in advance by an account (prepared.mjs)
+      // a prepared room in the lobby whose owner's device is not here (not opened yet, or gone again)
+      waitingForOwner: !!s.prepared && s.room.phase === 'lobby' && !this.online(s.ownerId),
       restored: !!s.restoredAt,
       now: this.now(), // the server's clock, for the Quiz countdown
       // "Mix van de groep": counts only, never a title
-      mix: { ...this.mixCounts(), mine: (has(s.mix, mid) && s.mix[mid].tracks?.length) || 0 },
+      mix: { ...this.mixCounts(), mine: (mid != null && has(s.mix, mid) && s.mix[mid].tracks?.length) || 0 },
+      screens: this.screenCount(), // displays ("groot scherm") watching this room
+      ...(s.prepared ? { roomName: s.prepared.name } : {}), // a prepared room's public name
       // the spelleider's Spotify Client ID, so players can log in for "Doe mijn favorieten erbij"
       spotifyClientId: typeof s.spotifyClientId === 'string' && SPOTIFY_CLIENT_ID_RE.test(s.spotifyClientId) ? s.spotifyClientId : null,
     };
@@ -592,7 +790,7 @@ export class RoomHub {
       code: r.code,
       phase: r.phase,
       settings: { ...r.settings },
-      players: r.players.map((p) => ({ id: p.id, name: p.name, host: !!p.host })),
+      players: r.players.map((p) => ({ id: p.id, name: p.name, host: !!p.host, avatar: avatarOf(p) })),
       removed: [],
       game: g ? {
         kind: g.kind,
@@ -628,11 +826,21 @@ export class RoomHub {
     return msg;
   }
 
+  /** What a display gets: the public spectator view (nobody's own part) and the meta of nobody. */
+  stateForScreen(pres) {
+    return { t: 'state', view: viewFor(this.state.room, SPECTATOR, pres), meta: { ...this.meta(null), screen: true } };
+  }
+
   broadcast() {
     if (!this.state) return;
     const pres = this.presence();
     let ownerConn = null;
+    let screenText = null; // the same for every display: rendered once
     for (const [connId, c] of this.conns) {
+      if (c.screen) {
+        try { screenText ??= JSON.stringify(this.stateForScreen(pres)); this.sendTo(connId, screenText); } catch (e) { console.error('room', this.code, 'state for a screen failed:', e?.message || e); }
+        continue;
+      }
       if (!c.mid) continue;
       // one phone whose state can not be rendered must not keep the others waiting
       try { this.sendTo(connId, this.stateFor(c.mid, pres)); } catch (e) { console.error('room', this.code, 'state for', c.mid, 'failed:', e?.message || e); }
@@ -651,7 +859,7 @@ export class RoomHub {
     // A game from the mix holds other players' favourites: those never go to the owner's
     // phone. Its backup is the room in the lobby (after a restore the phones send their
     // contributions again and the leader starts a new game).
-    const room = g?.mix ? G.backToLobby(s.room) : s.room;
+    const room = g?.mix ? G.backToLobby(s.room) : G.withoutAnswerTimes(s.room);
     const snap = { v: 1, code: s.code, createdAt: s.createdAt, ownerId: s.ownerId, ownerName: s.ownerName, leaderId: s.leaderId, members: s.members, room };
     this.sendTo(connId, { t: 'backup', snap });
   }
@@ -666,9 +874,10 @@ export class RoomHub {
         this.conns.delete(connId);
         this.deps.drop?.(connId, 4002, 'stale');
         if (c.mid && this.state) {
+          this.markAway(c.mid);
           if (c.mid === this.state.leaderId && !this.online(c.mid)) { this.state.leaderAwaySince = t; this.persist(); }
           this.changed();
-        }
+        } else if (c.screen) this.refresh();
       }
     }
     const s = this.state;
@@ -681,7 +890,7 @@ export class RoomHub {
       if (this.quizCheck()) moved = true;
       if (moved) this.changed();
     }
-    const limit = s.claimed ? ROOM_IDLE_MS : UNCLAIMED_MS;
+    const limit = idleLimit(s);
     if (t - s.lastActive > limit) {
       this.shutdown('expired', 'Deze kamer is verlopen omdat er lang niet gespeeld is. Maak een nieuwe kamer.');
       return { expired: true };
@@ -697,6 +906,6 @@ export class RoomHub {
     const quiz = quizNextEvent(s.room, QUIZ_START_FALLBACK_MS);
     if (quiz != null) return Math.min(quiz, this.conns.size ? this.now() + 15000 : quiz);
     if (this.conns.size) return this.now() + 15000;
-    return s.lastActive + (s.claimed ? ROOM_IDLE_MS : UNCLAIMED_MS) + 1000;
+    return s.lastActive + idleLimit(s) + 1000;
   }
 }

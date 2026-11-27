@@ -10,14 +10,13 @@
 // the PeerJS route (only works with the server).
 import { launch, startServer, assert, OUT } from './helpers.mjs';
 import { join } from 'node:path';
-import { startRoomServer, startSignal, phone, createRoom, joinRoom, waitForPlayers, serverHost } from './multi-helpers.mjs';
+import { startRoomServer, startSignal, phone, createRoom, joinRoom, waitForPlayers, serverHost, view } from './multi-helpers.mjs';
 import { installFakeItunes } from './fake-itunes.mjs';
 import { checkSquare } from '../../app/js/bingo.js';
 
 /** Whole-page screenshot (new screens are reviewed in full, at 390 px). */
 async function shot(page, name) {
-  await page.waitForTimeout(400);
-  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true });
+  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true, animations: 'disabled' });
 }
 
 export const CLIENT_ID = '0123456789abcdef0123456789abcdef';
@@ -110,7 +109,6 @@ export async function mixPhone(browser, rooms, base, account, { seed = null, tok
 }
 
 const received = (page) => page.evaluate(() => window.__ttRoom?.session?.received || window.__ttHost?.session?.received || []);
-const view = (page) => page.evaluate(() => window.__ttRoom?.session?.view || null);
 const counts = async (page) => {
   const el = page.getByTestId('mix-counts');
   return { total: Number(await el.getAttribute('data-total')), contributors: Number(await el.getAttribute('data-contributors')), text: await el.textContent() };
