@@ -90,11 +90,16 @@ export default async function run() {
         if (!leak.control) throw new Error('the leak check found no visible timeline card: it would not see a leak either');
         if (leak.substring) substringOnly.push(leak.substring);
         const tlYears = s.players[s.current].timeline.map((id) => byId.get(id).year);
-        // Anouk always right; others always pick the first gap.
+        // Anouk always right; the others pick a WRONG gap when there is one (the first gap was
+        // sometimes right by chance for the whole game: then no wrong reveal was ever seen)
+        const fits = (i) => (i === 0 || tlYears[i - 1] <= secret.year) && (i === tlYears.length || secret.year <= tlYears[i]);
         let slot = 0;
         if (s.current === 0) {
           slot = tlYears.findIndex((y) => y >= secret.year);
           if (slot < 0) slot = tlYears.length;
+        } else {
+          const wrong = [...Array(tlYears.length + 1).keys()].find((i) => !fits(i));
+          slot = wrong ?? 0;
         }
         if (!reloaded && turns >= 3) {
           // Spelstand moet een reload overleven.
