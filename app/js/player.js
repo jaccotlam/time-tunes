@@ -139,9 +139,10 @@ async function appleLookup(card) {
  * Prepare a card (and start it when autoplay is set). Resolves when the source is
  * known: true when something can play, false when it failed or was superseded.
  */
-export function load(card, { autoplay = false } = {}) {
+export function load(card, { autoplay = false, preview = false } = {}) {
   releaseSpotify();
-  if (wantsSpotify()) return loadSpotify(card, { autoplay });
+  // preview: always the 30-second fragment (a quick listen in the playlist sheet, not a round)
+  if (!preview && wantsSpotify()) return loadSpotify(card, { autoplay });
   mode = 'preview';
   return loadPreview(card, { autoplay });
 }

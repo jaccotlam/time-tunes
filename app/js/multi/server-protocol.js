@@ -48,6 +48,14 @@
 //   Refused reactions are dropped silently. A new app must not send avatar / react to a server
 //   without the 'party' feature: that one answers 'bad'.
 //
+// "Mix van de groep" from playlists (optional addition within version 4; /health `features`
+//   lists 'mix-playlists'): a mix-add track may carry `deezerId` (positive safe integer) and
+//   `isrc` instead of a `spotifyId`; such a song (from a public Deezer playlist the phone chose)
+//   must say `checked: true` (its year was checked at MusicBrainz on the phone), else it is
+//   refused like any invalid song. Duplicates are also recognised by deezerId and ISRC. An
+//   older server refuses songs without a spotifyId, so a new app offers "Kies een playlist"
+//   only when the server lists the feature.
+//
 // Version 2 (November 2026): the Quiz (settings questions/qtype/think, playing, the quiz part of
 // the view). Version 3 (November 2026): "Mix van de groep" (mix-add, mix-clear, settings.music,
 // start.play, meta.mix). Version 4 (November 2026): Discobingo (game 'disco', settings.win, stamp,
@@ -56,7 +64,7 @@
 
 export const SERVER_PROTOCOL_VERSION = 4;
 /** Optional additions within this version that the server announces in /health `features`. */
-export const SERVER_FEATURES = ['screen', 'party'];
+export const SERVER_FEATURES = ['screen', 'party', 'mix-playlists'];
 /**
  * Largest message from a phone (the deck at the start of a game), in UTF-8 bytes. A start
  * with 2000 realistic cards is about 300 kB (tests/unit/big-lists.test.mjs); fitCards keeps

@@ -132,7 +132,13 @@ export async function playlistTracks(id, { onProgress, signal, max = MAX_IMPORT 
 /** The honest line for a list longer than the maximum (playlistTracks result has `capped`). */
 export const cappedMessage = (total, max = MAX_IMPORT) => `Deze playlist heeft ${total} nummers; alleen de eerste ${max} zijn opgehaald (Spotify geeft de lijst van boven naar beneden). Bij het spelen komt elk van deze ${max} even vaak aan de beurt.`;
 
-/** The user's own and collaborative playlists: [{ id, name, count }]. */
+/** Cover of a playlist: the first image when it is an https URL (shown with referrerpolicy no-referrer), else null. */
+function coverOf(p) {
+  const url = Array.isArray(p?.images) ? p.images.find((im) => typeof im?.url === 'string')?.url : null;
+  return typeof url === 'string' && url.length < 1200 && /^https:\/\/[^\s"'<>]+$/.test(url) ? url : null;
+}
+
+/** The user's own and collaborative playlists: [{ id, name, count, picture }] (picture: https or null). */
 export async function myPlaylists() {
   let me;
   try { me = await spotify.api('/me'); } catch (e) { throw mapError(e); }
@@ -145,7 +151,7 @@ export async function myPlaylists() {
       if (!p?.id) continue;
       if (p.owner?.id !== me?.id && !p.collaborative) continue;
       const count = Number(p.items?.total ?? p.tracks?.total);
-      out.push({ id: p.id, name: p.name || 'Zonder naam', count: Number.isFinite(count) ? count : null });
+      out.push({ id: p.id, name: p.name || 'Zonder naam', count: Number.isFinite(count) ? count : null, picture: coverOf(p) });
     }
     offset += (j?.items || []).length;
     if (!j?.next) break;

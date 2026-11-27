@@ -6,10 +6,14 @@
 //   4. send every song to the room as soon as it is ready (mix-add), not all at the end.
 // Progress is kept in localStorage, so a reload (or the Spotify login) goes on where it was,
 // and after a server restart the songs are sent again. Withdraw = mix-clear.
+// The other way in, "Kies een playlist" (public Deezer playlists, no login), is mix-lists.js:
+// it lives inside this object (api.lists), so the screens keep one mix object per room. A phone
+// takes part one way at a time: favourites or playlists (one withdraw takes out either).
 import * as spotify from '../spotify.js';
 import * as top from '../spotify-top.js';
 import { appleMatch } from '../apple-match.js';
 import { store } from '../ui.js';
+import { createListShare, forgetMixLists } from './mix-lists.js';
 import {
   pickTopSelection, contributionTrack, TOP_POOL, DEFAULT_RANGE, DEFAULT_SHARE_COUNT, SHARE_COUNTS, validRange, MIX_PER_MESSAGE,
 } from './mix.js';
@@ -31,6 +35,7 @@ export function forgetMixShare(code) {
   if (!code || s?.code === code) store.remove(SHARE_KEY);
   const i = readIntent();
   if (i && (!code || i.code === code)) writeIntent(null);
+  forgetMixLists(code);
 }
 
 /** The choice of period and number the player made last time. */
@@ -45,9 +50,9 @@ export function sharePrefs() {
 /**
  * session: the room session (server-session.js) with mixAdd(tracks), mixClear(), online.
  * memberId(): this phone's id in the room. returnHash: where Spotify sends us back to.
- * onChange(): redraw.
+ * onChange(): redraw. inLobby(): is the room in the lobby (the playlists are only checked then).
  */
-export function createMixShare({ code, memberId, session, returnHash, onChange }) {
+export function createMixShare({ code, memberId, session, returnHash, onChange, inLobby = () => true }) {
   let alive = true;
   let ctrl = null;
   let lastSend = 0;
@@ -148,8 +153,19 @@ export function createMixShare({ code, memberId, session, returnHash, onChange }
     lookUp(pickTopSelection(list, st.count));
   }
 
+  const lists = createListShare({ code, session, onChange: () => emit(), inLobby });
   const api = {
     get state() { return st; },
+    /** "Kies een playlist" (mix-lists.js). */
+    lists,
+    /** Does the room server take songs from playlists (feature 'mix-playlists')? */
+    listsOffered() { return !!session.supports?.('mix-playlists') || lists.active(); },
+    /** Which way this phone takes part: 'lists' | 'top' | null (not yet). */
+    mode() {
+      if (lists.active()) return 'lists';
+      if (st.tracks.length || ['connecting', 'fetching', 'matching', 'done'].includes(st.phase)) return 'top';
+      return null;
+    },
     /** 'own' | 'room' | null: whose Spotify app this phone logs in with. */
     clientSource() { return spotify.getClientId() ? 'own' : roomClientId() ? 'room' : null; },
     /** Can this phone log in at Spotify at all? null, or the reason why not. */
@@ -166,7 +182,7 @@ export function createMixShare({ code, memberId, session, returnHash, onChange }
     },
     /** "Doe mijn favorieten erbij". */
     share() {
-      if (['connecting', 'fetching', 'matching'].includes(st.phase)) return;
+      if (['connecting', 'fetching', 'matching'].includes(st.phase) || lists.active()) return;
       store.set(PREF_KEY, { range: st.range, count: st.count });
       if (!top.canRead() && !clientId()) { st.phase = 'error'; st.error = top.MESSAGES['no-client']; emit(); return; }
       if (st.tracks.length) { // sharing again: the old part goes first
@@ -196,10 +212,12 @@ export function createMixShare({ code, memberId, session, returnHash, onChange }
       store.remove(SHARE_KEY);
       Object.assign(st, { phase: 'idle', error: '', total: 0, done: 0, tracks: [], skipped: 0 });
       resyncAt = null;
+      lists.reset();
       emit();
     },
     /** Every new room state: send the songs again when the server lost them (restart). */
     sync(meta) {
+      lists.sync(meta);
       const server = meta?.mix?.mine;
       if (!alive || !Number.isInteger(server) || !session.online) return;
       if (!['matching', 'done'].includes(st.phase) || !st.tracks.length) return;
@@ -216,6 +234,7 @@ export function createMixShare({ code, memberId, session, returnHash, onChange }
       alive = false;
       clearTimeout(recheck);
       ctrl?.abort();
+      lists.destroy();
       offSp();
     },
   };
