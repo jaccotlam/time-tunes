@@ -238,6 +238,23 @@ const phoneTileAvatar = (P, name) => P.locator(`[data-testid^="room-player-"][da
 const until = (page, fn, arg, timeout = 10000) => page.waitForFunction(fn, arg, { timeout });
 const reactionsOf = (D) => D.evaluate(() => (window.__ttScreen?.session?.reactions || []).map((r) => ({ name: r.name, emoji: r.emoji, avatar: r.avatar })));
 const sendRaw = (p, obj) => p.page.evaluate((o) => window.__ws.send(JSON.stringify(o)), obj);
+/**
+ * Wait until the server's own gap (REACT_GAP_MS per player) after `name`'s last reaction is
+ * surely over. The server measures the gap from when IT accepted that reaction; the tv received
+ * it after that (the server accepts, then sends), so the tv's receivedAt (same machine clock)
+ * is at or after the accept time. A moment measured on the sending phone is NOT: with a bit of
+ * latency the next frame would still land inside the server's gap.
+ */
+async function pastServerGap(D, name, margin = 50) {
+  const at = await D.evaluate((n) => {
+    const mine = (window.__ttScreen?.session?.reactions || []).filter((r) => r.name === n);
+    return mine.length ? mine[mine.length - 1].receivedAt : 0;
+  }, name);
+  if (!at) return; // this tv saw none of theirs (a reloaded display): the callers wait for one first where it matters
+  const wait = at + REACT_GAP_MS + margin - Date.now();
+  if (wait > 0) await sleep(wait);
+}
+const countFrom = (D, name) => D.evaluate((n) => (window.__ttScreen?.session?.reactions || []).filter((r) => r.name === n).length, name);
 
 // ======================================================================================
 //  1. The lobby: avatars and reactions
@@ -381,7 +398,6 @@ async function lobbyReactions(o, H, D, code, { A, B, C }, server) {
   assert(await bar(A).isVisible() && await A.page.getByTestId('react-btn').count() === REACTIONS.length, `the reaction bar is on the phone in the lobby (${REACTIONS.length} emoji)`);
   assert(await A.page.locator('[data-testid="react-btn"]').evaluateAll((bs) => bs.map((b) => b.dataset.emoji).join('')) === REACTIONS.join(''), 'the bar offers 👏 🔥 😂 😮 🙌 🎉');
   assert(await attr(A.page, 'react-bar', 'data-cooldown') === 'false', 'the bar is ready (data-cooldown=false)');
-  const t0 = Date.now();
   await A.page.locator('[data-testid="react-btn"][data-emoji="🔥"]').click();
   assert(await attr(A.page, 'react-bar', 'data-cooldown') === 'true', 'a tap starts the cool-down');
   // the second tap inside the cool-down is not sent (nothing reaches the tv)
@@ -404,9 +420,9 @@ async function lobbyReactions(o, H, D, code, { A, B, C }, server) {
   await sleep(500);
   assert((await reactionsOf(D)).filter((r) => r.name === 'Bram').length === 1, 'three reactions of Bram inside 1.5 s: the server dropped the 2nd and 3rd');
   assert(await B.page.getByTestId('lobby-count').count() === 1, 'the dropped reactions did not disturb Bram\'s phone');
-  // after the gap it works again (positive control) and the burst cap holds
-  // (t0 is before the tap: the server heard it later, so some margin)
-  await sleep(Math.max(0, REACT_GAP_MS + 400 - (Date.now() - t0)));
+  // after the gap it works again (positive control), measured from when the tv got Anouk's
+  // first one (at or after the moment the server accepted it, see pastServerGap)
+  await pastServerGap(D, 'Anouk');
   await sendRaw(A, { t: 'react', emoji: '🙌' });
   await until(D, () => window.__ttScreen.session.reactions.filter((r) => r.name === 'Anouk').length === 2);
   assert(true, `after ${REACT_GAP_MS} ms the next one goes through`);
@@ -423,9 +439,15 @@ async function lobbyReactions(o, H, D, code, { A, B, C }, server) {
   await D2.close();
   // never over the QR code: a stream of reactions while the lobby (QR, 300+ px) is up
   await D.evaluate(() => { window.__rx.overlaps.length = 0; });
+  // (each round waits for the previous one to arrive and for the server's gap after it, so none
+  // of the nine is dropped by the gap; 3 per ~1.6 s stays under the room's burst cap of 8 per 2 s)
+  const who = [[A, 'Anouk'], [B, 'Bram'], [C, 'Cas']];
+  await pastServerGap(D, 'Anouk'); // her 🙌 above
   for (let i = 0; i < 3; i++) {
-    for (const [P, e] of [[A, REACTIONS[i]], [B, REACTIONS[i + 1]], [C, REACTIONS[i + 2]]]) await sendRaw(P, { t: 'react', emoji: e });
-    await sleep(REACT_GAP_MS + 120);
+    const before = await Promise.all(who.map(([, n]) => countFrom(D, n)));
+    for (const [j, [P]] of who.entries()) await sendRaw(P, { t: 'react', emoji: REACTIONS[i + j] });
+    await D.waitForFunction(([names, b]) => names.every((n, j) => (window.__ttScreen.session.reactions || []).filter((r) => r.name === n).length > b[j]), [who.map(([, n]) => n), before], { timeout: 8000 });
+    for (const [, n] of who) await pastServerGap(D, n);
   }
   await sleep(1500);
   const rx = await D.evaluate(() => ({ n: window.__rx.samples, ov: window.__rx.overlaps }));
@@ -1090,6 +1112,7 @@ async function ceremony(R, X, S) {
   await shot(A.page, 'prizes');
   // reactions on the winner moment
   assert(await A.page.getByTestId('react-bar').count() === 1, 'the reaction bar is on the winner moment');
+  await pastServerGap(D, 'Anouk'); // (normally long over: no wait)
   await A.page.locator('[data-testid="react-btn"][data-emoji="🎉"]').click();
   await D.locator('[data-testid="screen-reaction"][data-emoji="🎉"][data-from="Anouk"]').first().waitFor({ state: 'attached', timeout: 8000 });
   assert(true, 'a reaction from the winner screen floats on the tv');
@@ -1234,6 +1257,7 @@ async function otherGames(R, { fresh = false } = {}) {
   await A.page.evaluate(() => window.__ttRoom.session.answer({ pass: true }));
   await A.page.getByTestId('react-bar').waitFor({ timeout: 10000 });
   assert(true, 'bingo: after answering the bar is there');
+  await pastServerGap(D, 'Anouk'); // her 🔥 of the quiz (normally long over: no wait)
   await A.page.locator('[data-testid="react-btn"][data-emoji="😮"]').click();
   await D.locator('[data-testid="screen-reaction"][data-emoji="😮"][data-from="Anouk"]').first().waitFor({ state: 'attached', timeout: 8000 });
   await H.locator('[data-testid="host-reaction"][data-emoji="😮"]').first().waitFor({ state: 'attached', timeout: 8000 });
