@@ -429,7 +429,9 @@ async function lane(name, gen) {
     } catch (e) {
       console.error(e);
     } finally {
-      if (!keep) inflight.delete(fk);
+      // the song is free for the other lanes now (Apple waits for MusicBrainz on the same song):
+      // wake them, or a lane that looked while this one was still busy sleeps until idleMs
+      if (!keep) { inflight.delete(fk); kick(); }
     }
     emitSoon();
   }

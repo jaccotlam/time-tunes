@@ -169,6 +169,8 @@ export function readinessInfo({ counts, source, spotifyPlayable = 0, status = nu
  */
 export function workLine(st, { short = false, source = 'preview' } = {}) {
   if (!st || !st.total) return '';
+  // a full browser storage stopped the background work (enrich.js): one calm line
+  if (st.storageFull && (st.yearsPending > 0 || st.pending > 0)) return short ? 'opslag vol' : 'De opslag van deze browser is vol: het nakijken staat stil tot er ruimte is';
   if (st.yearsPending > 0 && (st.working || st.pending)) {
     const done = st.total - st.yearsPending;
     return short ? `jaren nakijken ${done}/${st.total}` : `Jaartallen nakijken… ${done} van ${st.total}`;

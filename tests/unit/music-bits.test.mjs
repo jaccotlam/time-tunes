@@ -117,6 +117,7 @@ test('readinessInfo: one honest line and the way out', () => {
 
 test('workLine: the background work in one line', () => {
   assert.equal(workLine(null), '');
+  assert.equal(workLine({ total: 500, yearsPending: 380, working: false, pending: 380, storageFull: true }), 'De opslag van deze browser is vol: het nakijken staat stil tot er ruimte is', 'a full storage: one calm line instead of progress that does not move');
   assert.equal(workLine({ total: 500, yearsPending: 380, working: true, pending: 380 }), 'Jaartallen nakijken… 120 van 500');
   assert.equal(workLine({ total: 500, yearsPending: 380, working: true, pending: 380 }, { short: true }), 'jaren nakijken 120/500');
   assert.equal(workLine({ total: 500, yearsPending: 0, yearsMissing: 0, appleTodo: 480, appleDone: 20, fragmentsMissing: 480, working: true, pending: 480 }), 'Fragmenten zoeken… 20 van 500');

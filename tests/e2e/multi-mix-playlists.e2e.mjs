@@ -47,7 +47,8 @@ for (const [lid, l] of Object.entries(LISTS)) {
     const id = Number(lid) * 1000 + i;
     const w = WORDS[(i + Number(lid)) % WORDS.length];
     // MusicBrainz: most ISRCs known (original year); every 6th unknown: then a search, which
-    // finds every 12th; the others have no checkable year and must not be shared
+    // finds every 12th; for the others MusicBrainz answers without a year: checked all the
+    // same, shared with the catalogue year (2014), not sure (the rule of enrich.js)
     const kind = i % 6 !== 0 ? 'isrc' : i % 12 === 0 ? 'search' : 'none';
     const s = { id, list: Number(lid), title: `${w}lied ${lid}-${i}`, artist: `De ${w}s ${lid}`, isrc: `NLDA0${String(id).padStart(7, '0')}`, year: 1965 + ((i * 7 + Number(lid)) % 40), kind };
     l.songs.push(s);
@@ -218,9 +219,10 @@ export default async function run() {
     const sharedA = await shared(A);
     assert(sharedA.length === 25, `Anouk shares 25 songs (${sharedA.length})`);
     const fromA = (lid) => sharedA.filter((t) => songs.get(t.deezerId).list === lid).length;
-    assert(fromA(902) >= 9 && fromA(901) >= 12, `spread over her two playlists (Jaren 90: ${fromA(901)}, Hardcore: ${fromA(902)} of its 11 checkable)`);
-    assert(sharedA.every((t) => songs.get(t.deezerId).kind !== 'none'), 'only songs with a checked year are shared');
-    assert(sharedA.every((t) => t.year === songs.get(t.deezerId).year), 'the original year (MusicBrainz), not the re-release year 2014');
+    assert(fromA(902) >= 9 && fromA(901) >= 12, `spread over her two playlists (Jaren 90: ${fromA(901)}, Hardcore: ${fromA(902)} of its songs)`);
+    const noMb = (t) => songs.get(t.deezerId).kind === 'none';
+    assert(sharedA.filter(noMb).every((t) => t.year === 2014 && !t.yearSure), 'MusicBrainz answered without a year (ISRC and search): checked, the catalogue year, not sure');
+    assert(sharedA.filter((t) => !noMb(t)).every((t) => t.year === songs.get(t.deezerId).year), 'otherwise the original year (MusicBrainz), not the re-release year 2014');
     assert(sharedA.filter((t) => songs.get(t.deezerId).kind === 'isrc').every((t) => t.yearSure) && sharedA.filter((t) => songs.get(t.deezerId).kind === 'search').every((t) => !t.yearSure), 'ISRC: sure; found by search: not sure');
     assert(new Set(sharedA.map((t) => t.deezerId)).size === 25 && sharedA.some((t) => t.deezerId % 1000 > 15 && songs.get(t.deezerId).list === 901), 'a random part (not the first songs of the list), no duplicates');
     await panelShot(A, 'mixpl-06-player-done');
@@ -255,19 +257,19 @@ export default async function run() {
     assert(await B.evaluate(() => window.__ttRoom.session.playerId) === bramId, 'back in the room on the same place');
     await B.locator('[data-testid="mix-lists-item"][data-id="903"]').waitFor();
     assert(true, 'his playlist is still chosen');
-    await waitListsDone(B, 18);
+    await waitListsDone(B, 20);
     const sharedB = await shared(B);
     assert(before.every((t) => sharedB.some((x) => x.deezerId === t.deezerId)), `what he shared before leaving (${before.length}) is still his part`);
-    assert(sharedB.length === 18, `Bram shares the 18 checkable songs of his 20-song list (${sharedB.length})`);
+    assert(sharedB.length === 20, `Bram shares all 20 songs of his list: every year checked (${sharedB.length})`);
     const sentIds = bram.sentAdds.map((t) => t.deezerId);
-    assert(sentIds.length === 18 && new Set(sentIds).size === 18, `no song was sent twice (${sentIds.length} sent, ${new Set(sentIds).size} different)`);
+    assert(sentIds.length === 20 && new Set(sentIds).size === 20, `no song was sent twice (${sentIds.length} sent, ${new Set(sentIds).size} different)`);
     assert(bram.sentAdds.every((t) => t.checked === true && !t.spotifyId && t.deezerId && t.isrc), 'mix-add: deezerId + isrc + checked, no Spotify id');
     await panelShot(B, 'mixpl-08-player-back-done');
 
     // ---------- the spelleider: counts only, never a title ----------
     await H.waitForFunction(() => document.querySelector('[data-testid="mix-counts"]')?.dataset.contributors === '2', null, { timeout: 20000 });
     const c = await counts(H);
-    assert(c.total === 43 && c.preview === 43, `the lobby counts ${c.total} songs of 2 players, all playable as fragments (${c.text})`);
+    assert(c.total === 45 && c.preview === 45, `the lobby counts ${c.total} songs of 2 players, all playable as fragments (${c.text})`);
     assert(await H.getByTestId('mix-help').count() === 0, 'enough songs: the help line is gone');
     const titlesA = new Set(sharedA.map((t) => t.title));
     const titlesB = new Set(sharedB.map((t) => t.title));
@@ -329,10 +331,10 @@ export default async function run() {
     await B.getByTestId('mix-lists-open').click();
     await B.getByTestId('mix-lists-quick-hardcore').click();
     await B.locator('[data-testid="mix-lists-result"][data-id="902"]').click();
-    await waitListsDone(B, 11);
+    await waitListsDone(B, 12);
     await H.waitForFunction(() => document.querySelector('[data-testid="mix-counts"]')?.dataset.contributors === '2', null, { timeout: 20000 });
     const c2 = await counts(H);
-    assert(c2.total === 25, `he chose again (Hardcore Classics, also on Anouk's list): duplicates count once (${c2.text})`);
+    assert(c2.total === 25 + 12 - fromA(902), `he chose again (Hardcore Classics, also on Anouk's list): duplicates count once (${c2.text}; Anouk had ${fromA(902)} of its 12)`);
 
     // Playwright's own serviceWorkers: 'block' probe fails inside the sandboxed Deezer frame (see deezer-transport.e2e.mjs)
     const errs = pages.flatMap((p) => p.errors).filter((e) => !/Service worker is disabled because the context is sandboxed/.test(e));

@@ -260,6 +260,16 @@ test('a failed MusicBrainz request is not an answer: the year stays pending (App
   assert.equal(tracks[0].yearSure, false);
 });
 
+test('Apple starts on a song right after its MusicBrainz check (no sleep until the idle re-scan)', async () => {
+  enrich._configure({ idleMs: 5000 });
+  const tracks = [{ n: 1, spotifyId: 'q'.repeat(22), title: 'Wacht', artist: 'Op mij', year: 2001, yearSure: false, match: 'pending' }];
+  const sv = fakeServices({ mbDelay: 40, apple: () => null });
+  setup([{ id: 'p', tracks }], sv);
+  const t0 = Date.now();
+  await until(() => tracks[0].match === 'none', 2000, 'Apple after MusicBrainz');
+  assert.ok(Date.now() - t0 < 1500, `Apple ran ${Date.now() - t0} ms after the start, not after the 5 s idle re-scan`);
+});
+
 test('Apple: songs without a Deezer preview first', async () => {
   const tracks = [
     ...Array.from({ length: 3 }, (_, i) => ({ n: i + 1, deezerId: 9300 + i, title: `dz${i}`, artist: 'a', year: 1990, yearSure: true, match: 'pending' })),

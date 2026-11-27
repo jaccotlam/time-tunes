@@ -219,7 +219,7 @@ export function createMusicSheet({ slot, navigate, getPick }) {
       const wait = yearsWaitText({ done: Math.max(0, (r.lastChecked ?? 0) - (r.c0 ?? 0)), left: r.min - checked, startedAt: r.t0 || Date.now(), lastAt: r.lastAt || r.t0 });
       return `<p class="ms-step"><b>Jaartallen nakijken…</b> <span data-testid="sheet-progress-count">${checked} van ${r.min}</span> <span class="muted" data-testid="sheet-eta">· ${esc(wait)}</span></p>
         <div class="pl-bar" aria-hidden="true"><i style="width:${pct(checked, r.min)}%"></i></div>
-        <p class="small muted">Catalogi geven bij oudere nummers vaak het jaar van een heruitgave. Daarom kijkt de app elk jaartal na bij MusicBrainz, ongeveer één per seconde. Bij ${r.min} nagekeken nummers start het spel vanzelf; de rest gaat op de achtergrond door.</p>`;
+        <p class="small muted">Catalogi geven bij oudere nummers vaak het jaar van een heruitgave. Daarom kijkt de app elk jaartal na bij MusicBrainz (één vraag per seconde; een nummer dat MusicBrainz niet meteen kent, vraagt er twee). Bij ${r.min} nagekeken nummers start het spel vanzelf; de rest gaat op de achtergrond door.</p>`;
     }
     if (r.phase === 'error') {
       return `<p class="set-error" role="alert" data-testid="sheet-run-error">${esc(r.error)}</p>`;

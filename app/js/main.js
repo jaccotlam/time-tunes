@@ -138,6 +138,14 @@ route();
 // Years and fragments for the stored playlists, in the background for as long as the app is
 // open (paused during a round, and while a song plays).
 enrich.start();
+// A browser that was closed in the middle of a volume fade left Spotify quiet. fade.js keeps a
+// marker for that case; put the user's own volume back once at the next start. Without a marker
+// this does nothing (no request to Spotify).
+if (spotify.isConnected()) {
+  import('./fade.js')
+    .then((f) => f.recoverSpotifyVolume({ info: spotify.volumeInfo, setVolume: spotify.setVolume }))
+    .catch(() => { /* never in the way of starting the app */ });
+}
 player.subscribe((s) => {
   if (s.status === 'playing' || s.status === 'loading') enrich.pause('audio');
   else enrich.resume('audio');
