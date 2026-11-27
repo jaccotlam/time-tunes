@@ -484,7 +484,7 @@ export function seek(positionMs) {
 
 /**
  * The volume of the device that plays (or the chosen one): { volume, supports } or null.
- * `supports` is Spotify's supports_volume: only then may fade.js change it.
+ * `supports` is Spotify's supports_volume: only then may fade.js change it. `deviceId`: that device.
  */
 export async function volumeInfo() {
   const j = await api('/me/player');
@@ -496,7 +496,8 @@ export async function volumeInfo() {
   }
   if (!d) return null;
   const volume = Number(d.volume_percent);
-  return { volume, supports: d.supports_volume !== false && Number.isFinite(volume) };
+  // deviceId: fade.js remembers which device it lowered (a tab killed mid-fade: fixed at the next start)
+  return { volume, supports: d.supports_volume !== false && Number.isFinite(volume), deviceId: typeof d.id === 'string' ? d.id : null };
 }
 
 /** Set the device volume (0-100). Used for the fades of fade.js, which always puts the user's volume back. */

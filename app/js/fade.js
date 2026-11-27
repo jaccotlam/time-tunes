@@ -318,7 +318,7 @@ export function createRoundMusic({ player, spotifyApi, timers = realTimers, win 
   const audio = createAudioFader(() => player.audioElement(), { timers });
   // a volume left low by a tab that died mid-fade comes back first (only with Spotify connected:
   // without a marker nothing is asked); the first fade waits for it
-  const recovered = marker?.get?.() ? recoverSpotifyVolume(spotifyApi, { marker, now: timers.now === realTimers.now ? Date.now : () => Date.now() }).catch(() => 'later') : null;
+  const recovered = marker?.get?.() ? recoverSpotifyVolume(spotifyApi, { marker, now: timers.now }).catch(() => 'later') : null;
   const sp = createSpotifyFader(spotifyApi, { timers, marker, ready: recovered });
   let outBusy = null; // a fade-out of ours is running (the guard below keeps out of its way)
   let endFor = null; // the card whose end-of-play fade has started
