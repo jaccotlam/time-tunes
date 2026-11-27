@@ -557,8 +557,8 @@ export function render(root, { deck, navigate }) {
         </div>
         <button class="btn btn-ghost btn-small room-music-other" type="button" data-action="music-other" data-testid="room-music-other">${icons.music}<span>Andere muziek kiezen</span></button>
         ${!isMix ? heldNoteHtml(deck) : ''}
-        ${can ? (isMix ? `<p class="muted small" data-testid="room-mix-ok">Genoeg nummers: de server stelt de lijst eerlijk samen uit ieders favorieten (dubbele één keer, zekere jaartallen eerst).${esc(extra)}</p>` : '')
-    : `<p class="${isMix ? 'warn' : 'muted'} small mix-need" data-testid="room-mix-need" data-missing="${short.missing}">${isMix ? 'Te weinig nummers in de mix. ' : ''}Voor ${esc(gameName(s.game))}${s.game === 'bingo' ? ` ${s.size}×${s.size}` : s.game === 'quiz' ? ` (${s.questions} vragen)` : s.game === 'disco' ? '' : ` (doel ${s.goal})`} zijn er minstens ${short.need} nodig: nog ${short.missing}. Laat spelers op hun eigen telefoon <b>Doe mijn favorieten erbij</b> kiezen.${esc(extra)}</p>`}
+        ${can ? (isMix ? `<p class="muted small" data-testid="room-mix-ok">Genoeg nummers: de server stelt de lijst eerlijk samen uit ieders playlists en favorieten (dubbele één keer, zekere jaartallen eerst).${esc(extra)}</p>` : '')
+    : `<p class="${isMix ? 'warn' : 'muted'} small mix-need" data-testid="room-mix-need" data-missing="${short.missing}">${isMix ? 'Te weinig nummers in de mix. ' : ''}Voor ${esc(gameName(s.game))}${s.game === 'bingo' ? ` ${s.size}×${s.size}` : s.game === 'quiz' ? ` (${s.questions} vragen)` : s.game === 'disco' ? '' : ` (doel ${s.goal})`} zijn er minstens ${short.need} nodig: nog ${short.missing}. Laat iedereen op de eigen telefoon <b>een playlist kiezen</b> (zonder inloggen) of zijn Spotify-favorieten delen.${esc(extra)}</p>`}
       </fieldset>`;
   }
 
