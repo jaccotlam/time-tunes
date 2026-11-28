@@ -12,6 +12,7 @@ import { DEFAULT_GOAL } from '../logic.js';
 import { QUIZ_COUNTS, QUIZ_TIMES, QUIZ_MIN_SONGS, quizTypesFor } from '../multi/quiz.js';
 import * as spotify from '../spotify.js';
 import { createMixShare, forgetMixShare } from '../multi/mix-share.js';
+import { spotifyListProvider } from '../multi/mix-spotify.js';
 import {
   mixBlockHtml, mixServerOnlyHtml, mixKey, onMixChange, mixShortage, bindMixPanel,
 } from './room-mix.js';
@@ -134,7 +135,7 @@ export function render(root, { deck: firstDeck, navigate }) {
     msFor = key;
     if (!key) return;
     const s = session;
-    ms = createMixShare({ code, memberId: () => s.memberId, session: s, returnHash: '#/spelleider', onChange: () => draw(), inLobby: () => s.room?.phase === 'lobby' });
+    ms = createMixShare({ code, memberId: () => s.memberId, session: s, returnHash: '#/spelleider', onChange: () => draw(), inLobby: () => s.room?.phase === 'lobby', listProvider: spotifyListProvider(), leader: true });
   }
   let viewName = null;
   let drawnKind = '';
@@ -367,7 +368,9 @@ export function render(root, { deck: firstDeck, navigate }) {
     const mixMeta = viaServer ? JSON.stringify([m?.mix, playSource()]) : '';
     // the spelleider's lobby says what helps while the mix is too small to start
     const mixShort = viaServer && vn === 'lobby' && leads() ? mixShortage(m?.mix, r.settings, r.players.length, playSource()) : null;
-    region('mix', `${vn}|${r.settings.music}|${viaServer ? mixKey(ms, m, [mixShort?.missing, r.settings.game]) : 'p2p'}`, () => {
+    // the room learns a link added in the lobby, or that this phone now plays via Spotify
+    if (viaServer && vn === 'lobby') session.syncLinks?.();
+    region('mix', `${vn}|${r.settings.music}|${viaServer ? mixKey(ms, m, [mixShort?.missing, r.settings.game, m?.spotifyLinks, m?.linkUse]) : 'p2p'}`, () => {
       if (!viaServer) return vn === 'lobby' ? mixServerOnlyHtml() : '';
       return ms ? mixBlockHtml(ms, m, { inGame: vn !== 'lobby', music: r.settings.music, leader: true, shortage: mixShort, gameLabel: gameName(r.settings.game) }) : '';
     });
@@ -610,6 +613,7 @@ export function render(root, { deck: firstDeck, navigate }) {
     const short = mixShortage(mix, s, r.players.length, src);
     const isMix = s.music === 'mix';
     const can = short.missing === 0;
+    const lists = !!ms?.listsOffered?.(); // "Kies een playlist" (only with a list provider, mix-lists.js)
     const extra = src === 'preview' && (mix?.total || 0) > (mix?.preview || 0)
       ? ` ${(mix.total - mix.preview)} zonder Apple Music-fragment tellen niet mee bij fragmenten van 30 seconden.` : '';
     return `<fieldset class="room-music" data-testid="room-music">
@@ -622,8 +626,8 @@ export function render(root, { deck: firstDeck, navigate }) {
         </div>
         <button class="btn btn-ghost btn-small room-music-other" type="button" data-action="music-other" data-testid="room-music-other">${icons.music}<span>Andere muziek kiezen</span></button>
         ${!isMix ? heldNoteHtml(deck) : ''}
-        ${can ? (isMix ? `<p class="muted small" data-testid="room-mix-ok">Genoeg nummers: de server stelt de lijst eerlijk samen uit ieders playlists en favorieten (dubbele één keer, zekere jaartallen eerst).${esc(extra)}</p>` : '')
-    : `<p class="${isMix ? 'warn' : 'muted'} small mix-need" data-testid="room-mix-need" data-missing="${short.missing}">${isMix ? 'Te weinig nummers in de mix. ' : ''}Voor ${esc(gameName(s.game))}${s.game === 'bingo' ? ` ${s.size}×${s.size}` : s.game === 'quiz' ? ` (${s.questions} vragen)` : s.game === 'disco' ? '' : ` (doel ${s.goal})`} zijn er minstens ${short.need} nodig: nog ${short.missing}. Laat iedereen op de eigen telefoon <b>een playlist kiezen</b> (zonder inloggen) of zijn Spotify-favorieten delen.${esc(extra)}</p>`}
+        ${can ? (isMix ? `<p class="muted small" data-testid="room-mix-ok">Genoeg nummers: de server stelt de lijst eerlijk samen uit ${lists ? 'ieders playlists en favorieten' : 'ieders favorieten'} (dubbele één keer, zekere jaartallen eerst).${esc(extra)}</p>` : '')
+    : `<p class="${isMix ? 'warn' : 'muted'} small mix-need" data-testid="room-mix-need" data-missing="${short.missing}">${isMix ? 'Te weinig nummers in de mix. ' : ''}Voor ${esc(gameName(s.game))}${s.game === 'bingo' ? ` ${s.size}×${s.size}` : s.game === 'quiz' ? ` (${s.questions} vragen)` : s.game === 'disco' ? '' : ` (doel ${s.goal})`} zijn er minstens ${short.need} nodig: nog ${short.missing}. ${(session.meta?.spotifyLinks?.length || 0) >= 2 ? 'Laat iedereen <b>koppelen via zijn link</b> en playlists of favorieten kiezen.' : lists ? 'Laat iedereen op de eigen telefoon <b>kiezen uit de eigen playlists</b> of zijn Spotify-favorieten delen.' : 'Laat spelers op hun eigen telefoon <b>Doe mijn favorieten erbij</b> kiezen.'}${esc(extra)}</p>`}
       </fieldset>`;
   }
 

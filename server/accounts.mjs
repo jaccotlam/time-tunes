@@ -21,6 +21,9 @@
 //   A save may send a playlist the account already has unchanged as a stub { id, updated,
 //   same: true } ("keep yours"; /health feature 'account-delta'), so a big library is not sent
 //   again for every small change; such a save is answered with { rev, delta: true } (no data).
+//   `spotifyLinks` (/health feature 'account-links'): the host's Spotify apps [{ id, name }]
+//   (max 10); `spotifyClientId` stays and is the one the host logs in with himself, so an app
+//   of before (which knows only that field) keeps working; it never sends the list.
 // - Cloudflare stores the record in pieces (chunkedStore): the record without its playlists
 //   under 'account' and every playlist under 'pl:<id>', because one Durable Object value holds
 //   at most 2 MiB; only the pieces that changed are written. A record of before (everything
@@ -34,8 +37,9 @@
 // time, so two requests never interleave across an `await` (PBKDF2 is async).
 import { sha256Hex } from './sha256.mjs';
 import { evictOldest } from './policy.mjs';
-import { cleanPlaylist, cleanTrack, cleanSource, NAME_MAX, MAX_TRACKS, BUILTIN_ID } from '../app/js/playlist-logic.js';
+import { cleanPlaylist, cleanTrack, cleanSource, legacySource, NAME_MAX, MAX_TRACKS, BUILTIN_ID } from '../app/js/playlist-logic.js';
 import { cleanName as cleanPlayerName } from '../app/js/multi/game.js';
+import { cleanLinkId, cleanLinkName, LINKS_MAX } from '../app/js/spotify-links.js';
 
 export const PBKDF2_ITERATIONS = 100000; // Cloudflare's maximum for PBKDF2 in WebCrypto
 export const SESSION_MS = 90 * 24 * 60 * 60 * 1000;
@@ -205,14 +209,18 @@ export function validatePlaylist(p) {
     for (const k of TRACK_STRINGS) if (t[k] != null && (typeof t[k] !== 'string' || t[k].length > 200)) return { error: `Een nummer in "${p.name}" is ongeldig.` };
     if (t.year != null && !Number.isInteger(t.year)) return { error: `Een nummer in "${p.name}" heeft een ongeldig jaar.` };
     for (const k of ['previewUrl', 'trackViewUrl']) if (t[k] != null && (typeof t[k] !== 'string' || !/^https:\/\/[^\s"'<>]{4,600}$/.test(t[k]))) return { error: `Een nummer in "${p.name}" heeft een ongeldig adres.` };
+    // deezerId: no source any more, still valid stored data of v3-10 (carried along, see playlist-logic.js)
     if (t.deezerId != null && !(Number.isSafeInteger(t.deezerId) && t.deezerId > 0)) return { error: `Een nummer in "${p.name}" heeft een ongeldige Deezer-id.` };
     if (t.isrc != null && (typeof t.isrc !== 'string' || !/^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(t.isrc))) return { error: `Een nummer in "${p.name}" heeft een ongeldige ISRC.` };
     if ((t.yearFixed != null && typeof t.yearFixed !== 'boolean') || (t.yearChecked != null && typeof t.yearChecked !== 'boolean')) return { error: `Een nummer in "${p.name}" is ongeldig.` };
-    if (!cleanTrack(t)) return { error: `Een nummer in "${p.name}" kan nergens worden afgespeeld.` };
+    // a song a v3-10 Deezer import left with nothing to find it by (only its deezerId) is not
+    // refused: an app of v3-10 must still be able to save the list; the song is left out
+    if (!cleanTrack(t) && t.deezerId == null) return { error: `Een nummer in "${p.name}" kan nergens worden afgespeeld.` };
   }
   if (p.shareId != null && (typeof p.shareId !== 'string' || !/^[0-9a-z]{4,12}$/.test(p.shareId))) return { error: `De playlist "${p.name}" is beschadigd.` };
   if (p.playNow != null && typeof p.playNow !== 'boolean') return { error: `De playlist "${p.name}" is beschadigd.` };
-  if (p.source != null && !cleanSource(p.source)) return { error: `De playlist "${p.name}" heeft een ongeldige herkomst.` };
+  // a 'deezer' source (v3-10) is valid stored data, kept out of the stored value (cleanPlaylist)
+  if (p.source != null && !cleanSource(p.source) && !legacySource(p.source)) return { error: `De playlist "${p.name}" heeft een ongeldige herkomst.` };
   // known fields only: anything else is dropped (never stored)
   const known = Object.fromEntries(ALLOWED_PLAYLIST.filter((k) => p[k] !== undefined).map((k) => [k, p[k]]));
   const value = cleanPlaylist(known);
@@ -289,12 +297,29 @@ export function validateData(d, { current = null } = {}) {
   if (!d || typeof d !== 'object' || Array.isArray(d)) return { error: 'Ongeldige gegevens.' };
   if (hasBadKeys(d)) return { error: 'Ongeldige gegevens.' };
   const out = {};
-  for (const k of Object.keys(d)) if (!['spotifyClientId', 'playlists', 'deleted', 'prefs'].includes(k)) return { error: `Onbekend onderdeel "${k.slice(0, 30)}".` };
+  for (const k of Object.keys(d)) if (!['spotifyClientId', 'spotifyLinks', 'playlists', 'deleted', 'prefs'].includes(k)) return { error: `Onbekend onderdeel "${k.slice(0, 30)}".` };
   if ('spotifyClientId' in d) {
     const v = d.spotifyClientId;
     if (v === '' || v == null) out.spotifyClientId = '';
     else if (typeof v === 'string' && SPOTIFY_ID_RE.test(v.toLowerCase())) out.spotifyClientId = v.toLowerCase();
     else return { error: 'Dit is geen Spotify Client ID (32 tekens, 0-9 en a-f). Een wachtwoord, secret of token wordt nooit bewaard.' };
+  }
+  if ('spotifyLinks' in d) {
+    // several Spotify apps ("links", spotify-links.js): [{ id, name }], strict: a wrong entry is
+    // refused (never silently changed), so a token or secret pasted by mistake is never stored
+    const v = d.spotifyLinks;
+    if (!Array.isArray(v) || v.length > LINKS_MAX) return { error: `Hoogstens ${LINKS_MAX} Spotify-links.` };
+    out.spotifyLinks = [];
+    const seen = new Set();
+    for (const l of v) {
+      if (!l || typeof l !== 'object' || Array.isArray(l) || hasBadKeys(l) || Object.keys(l).some((k) => !['id', 'name'].includes(k))) return { error: 'Ongeldige Spotify-link.' };
+      const id = cleanLinkId(l.id);
+      if (!id) return { error: 'Dit is geen Spotify Client ID (32 tekens, 0-9 en a-f). Een wachtwoord, secret of token wordt nooit bewaard.' };
+      if (seen.has(id)) return { error: 'Twee Spotify-links hebben dezelfde Client ID.' };
+      if (l.name != null && typeof l.name !== 'string') return { error: 'Ongeldige Spotify-link.' };
+      seen.add(id);
+      out.spotifyLinks.push({ id, name: cleanLinkName(l.name || '') });
+    }
   }
   if ('playlists' in d) {
     if (!Array.isArray(d.playlists) || d.playlists.length > MAX_PLAYLISTS) return { error: `Hoogstens ${MAX_PLAYLISTS} playlists.` };

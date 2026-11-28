@@ -178,3 +178,23 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .sp-share .pl-qr { margin: 0 auto; width: min(100%, 240px); }
 .sp-receive h1 { font-size: 1.5rem; margin: 0 0 10px; }
 .sp-receive p { margin: 0 0 10px; }
+
+/* ---------- Spotify-links: one Spotify app (Client ID) per link, 5 people each ---------- */
+.sp-links { padding-top: 6px; border-top: 1px solid var(--line); }
+.sp-links p { margin: 0; }
+.sp-link-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.sp-link { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 14px; background: rgba(255, 255, 255, .04); border: 1px solid var(--line); min-width: 0; }
+.sp-link-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sp-link-id { font-size: .8rem; color: var(--muted); }
+.sp-link-name { width: 100%; min-width: 0; }
+.sp-link-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.sp-link-new { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 14px; border: 1px dashed var(--line); }
+.sp-link-new input { width: 100%; min-width: 0; }
+.sp-own-link select { width: 100%; }
+.sp-link-name, .sp-link-new input, .sp-own-link select {
+  min-height: 44px; border-radius: 12px; border: 2px solid var(--line); background: rgba(0, 0, 0, .25);
+  color: var(--text); font: inherit; font-size: 1rem; padding: 8px 12px;
+}
+.sp-link-name:focus, .sp-link-new input:focus, .sp-own-link select:focus { border-color: var(--mustard); outline: none; }
+.sp-own-link, .sp-link-new .pl-label { display: flex; flex-direction: column; gap: 4px; font-weight: 700; }
+.sp-own-link select { background-color: var(--bg-2); }

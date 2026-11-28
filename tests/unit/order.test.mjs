@@ -239,7 +239,7 @@ test('kamer: een nummer telt pas als gespeeld vanaf het onthullen; de kamer blij
   // the stored value of a room with a 2000-card game and a full history (Cloudflare: one value)
   const big = Array.from({ length: MAX_CARDS }, (_, i) => ({
     id: `k${i}`, year: 1960 + (i % 60), title: `A realistic song title number ${i} (Live)`, artist: `Some Artist Name ${i % 400}`,
-    itunesId: 1_000_000_000 + i, spotifyId: `${'4uLU6hMCjMI75M1A2tKUQC'.slice(0, 16)}${String(i).padStart(6, '0')}`, deezerId: 3_000_000 + i,
+    itunesId: 1_000_000_000 + i, spotifyId: `${'4uLU6hMCjMI75M1A2tKUQC'.slice(0, 16)}${String(i).padStart(6, '0')}`,
   }));
   const fit = fitCards(big);
   host.send({ t: 'start', cards: fit.cards });

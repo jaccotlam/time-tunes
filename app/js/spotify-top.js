@@ -10,7 +10,8 @@ import { entryToTrack } from './spotify-playlists.js';
 import { TOP_POOL, validRange, DEFAULT_RANGE } from './multi/mix.js';
 
 export class TopError extends Error {
-  constructor(code) { super(code); this.code = code; }
+  // cause: the SpotifyError behind it (status, what Spotify said), for spotify-links.js notRegistered
+  constructor(code, cause = null) { super(code); this.code = code; if (cause) this.cause = cause; }
 }
 
 export const MESSAGES = {
@@ -37,7 +38,7 @@ export async function topTracks({ range = DEFAULT_RANGE, limit = TOP_POOL } = {}
   try {
     j = await spotify.api('/me/top/tracks', { query: { time_range: validRange(range) ? range : DEFAULT_RANGE, limit: n, offset: 0 } });
   } catch (e) {
-    if (e?.code === 'forbidden') throw new TopError('scope');
+    if (e?.code === 'forbidden') throw new TopError('scope', e);
     throw e;
   }
   const out = [];

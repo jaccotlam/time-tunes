@@ -78,15 +78,30 @@ export async function installFakeItunes(ctx, { catalog = CATALOG } = {}) {
     return json(route, { resultCount: 0, results: [] });
   });
   await ctx.route('https://audio-ssl.itunes.apple.com/**', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: WAV }));
-  // The background worker (enrich.js) may also ask MusicBrainz (songs with an ISRC) and
-  // Deezer: never the real services in a test. A suite can route these itself after this.
+  // The background worker (enrich.js) may also ask MusicBrainz (songs with an ISRC, or title +
+  // artist): never the real service in a test. A suite can route it itself after this.
   await ctx.route('https://musicbrainz.org/**', (route) => {
     stats.musicbrainz = (stats.musicbrainz || 0) + 1;
     return route.fulfill({ status: 404, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '{"error":"Not Found"}' });
   });
-  await ctx.route('https://api.deezer.com/**', (route) => {
-    const cb = new URL(route.request().url()).searchParams.get('callback') || 'cb';
-    return route.fulfill({ status: 200, contentType: 'text/javascript', body: `${/^dzcb[0-9a-z]+$/.test(cb) ? cb : 'cb'}({"error":{"type":"DataException","message":"no data","code":800}})` });
+  await guardDeezer(ctx, stats);
+  return stats;
+}
+
+/** Deezer hosts (v3-11 removed Deezer: the app must never ask them anything). */
+export const DEEZER_HOST = /(^|\.)(deezer\.com|dzcdn\.net|deezer\.page\.link|dzr\.page\.link)$/i;
+
+/**
+ * Record and abort every request to a Deezer host in this context: stats.deezer lists the
+ * addresses (a suite asserts it stays empty). Safe to call twice on one context.
+ */
+export async function guardDeezer(ctx, stats = {}) {
+  stats.deezer ||= [];
+  if (ctx.__ttDeezerGuard) { ctx.__ttDeezerGuard.push(stats.deezer); return stats; }
+  ctx.__ttDeezerGuard = [stats.deezer];
+  await ctx.route((url) => DEEZER_HOST.test(url.hostname), (route) => {
+    for (const list of ctx.__ttDeezerGuard) list.push(route.request().url());
+    return route.abort('blockedbyclient');
   });
   return stats;
 }

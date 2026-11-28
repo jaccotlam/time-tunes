@@ -307,7 +307,7 @@ details.mix-block[open] > summary { margin-bottom: 10px; }
 .mix-tap { display: block; margin-top: 4px; font-size: .82rem; }
 details.mix-block[open] .mix-tap { display: none; }
 
-/* "Kies een playlist" (room-mix.js): public Deezer playlists, no login, phone-sized */
+/* "Kies een playlist" (room-mix.js, only with a list provider: see multi/mix-lists.js), phone-sized */
 .mix-sub { margin: 6px 0 0; font-size: 1rem; font-weight: 800; }
 .mix-sub small { font-weight: 600; font-size: .85rem; }
 .mix-way { display: flex; flex-direction: column; gap: 8px; }
@@ -318,37 +318,14 @@ details.mix-block[open] .mix-tap { display: none; }
 .mix-pick-head { display: flex; align-items: center; gap: 10px; }
 .mix-pick-head .btn { flex: none; }
 .mix-pick-consent { margin: 0; }
-.mix-search, .mix-link-row { display: flex; gap: 8px; min-width: 0; }
-.mix-search input, .mix-link-row input {
-  flex: 1; min-width: 0; min-height: 48px; padding: 8px 12px; border-radius: 12px;
-  border: 2px solid var(--line); background: var(--bg-2); color: var(--text); font-size: 1rem;
-}
-.mix-search input:focus, .mix-link-row input:focus, .mix-count-pick select:focus { border-color: var(--mustard); outline: none; }
-.mix-search .btn, .mix-link-row .btn { flex: none; min-height: 48px; }
-.mix-link, .mix-search-form { display: flex; flex-direction: column; gap: 6px; }
-.mix-search-label { font-weight: 700; color: var(--text); }
-.mix-link .pl-label, .mix-count-pick { font-size: .88rem; color: var(--muted); }
-.mix-search-form .mix-search-label { font-size: .95rem; color: var(--text); }
-.mix-count-pick { display: flex; flex-direction: column; gap: 4px; }
+.mix-count-pick { display: flex; flex-direction: column; gap: 4px; font-size: .88rem; color: var(--muted); }
+.mix-count-pick select:focus { border-color: var(--mustard); outline: none; }
 .mix-count-pick select {
   min-height: 48px; border-radius: 12px; border: 2px solid var(--line); background: var(--bg-2); color: var(--text);
   font: inherit; font-size: .95rem; padding: 6px 8px; width: 100%;
 }
-/* the quick picks: one row that scrolls sideways (16 chips would fill the screen) */
-.mix-quick {
-  display: flex; gap: 8px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
-  margin: 0 -14px; padding: 2px 14px 4px; scroll-padding: 0 14px;
-}
-.mix-quick::-webkit-scrollbar { display: none; }
-.mix-chip {
-  flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 6px 14px;
-  border-radius: 999px; border: 1px solid var(--line); background: rgba(255, 255, 255, .07); color: var(--text);
-  font-weight: 700; font-size: .92rem; white-space: nowrap; cursor: pointer;
-}
-.mix-chip:active { transform: scale(.97); }
 .mix-results-box:empty { display: none; }
 .mix-results-box { display: flex; flex-direction: column; gap: 8px; }
-.mix-results-for { margin: 0; }
 .mix-results, .mix-lists { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .mix-result, .mix-list {
   display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 8px 10px;
@@ -367,3 +344,21 @@ details.mix-block[open] .mix-tap { display: none; }
 .mix-result-go .ico { width: 18px; height: 18px; }
 .mix-list-x { flex: none; width: 44px; height: 44px; }
 .mix-explain { margin: 0; padding: 10px 12px; border-radius: 12px; background: rgba(255, 198, 73, .1); border: 1px solid rgba(255, 198, 73, .35); }
+
+/* ---------- several Spotify links: "Via welke link…", "Je staat niet op Link 1", the counts ---------- */
+.mix-linkstep { display: flex; flex-direction: column; gap: 10px; }
+.mix-link-q { margin: 0; font-size: 1.15rem; line-height: 1.3; }
+.mix-linkstep p { margin: 0; }
+.mix-link-list { display: flex; flex-direction: column; gap: 8px; }
+.mix-link-btn { justify-content: flex-start; min-height: 52px; font-size: 1.05rem; text-align: left; }
+.mix-link-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mix-linkstep.is-refused { padding: 12px 14px; border-radius: 14px; background: rgba(255, 198, 73, .1); border: 1px solid rgba(255, 198, 73, .45); }
+.mix-link-title { font-weight: 800; font-size: 1.05rem; color: var(--mustard); }
+.mix-links { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 14px; background: rgba(255, 255, 255, .04); border: 1px solid var(--line); }
+.mix-links p { margin: 0; }
+.mix-link-uses { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.mix-link-use { display: inline-flex; gap: 8px; align-items: baseline; padding: 4px 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); font-size: .9rem; max-width: 100%; }
+.mix-link-use b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.mix-link-use span { color: var(--muted); white-space: nowrap; }
+.mix-link-use.is-full { border-color: rgba(255, 198, 73, .6); }
+.mix-link-use.is-full span { color: var(--mustard); }

@@ -1,17 +1,15 @@
 // The sheet over the "Muziek kiezen" hub (#/playlists):
-// - the playlist sheet: a catalogue (Deezer) or Spotify list before it is saved: cover, title,
-//   maker, the first songs (catalogue songs with a 30-second listen), Speel direct / Bewaar;
+// - the playlist sheet: one of the player's Spotify playlists before it is saved: cover, title,
+//   the number of songs, the first songs, Speel direct / Bewaar;
 // - "Speel direct": the songs are fetched (visible, stoppable), then the years are checked
 //   (enrich.prepare, about one per second: the waiting moment says so and offers Speel nu toch);
 // - the play sheet: "<naam> staat klaar" + "Hoe wil je spelen?".
 // Opened from a room lobby (pick mode) the chosen list goes straight back to the room.
 // Focus: trapped in the sheet, restored on close; Esc and the phone's back button close it.
 import * as store from '../playlists.js';
-import * as deezer from '../deezer.js';
 import * as spl from '../spotify-playlists.js';
 import * as spotify from '../spotify.js';
 import * as enrich from '../enrich.js';
-import * as player from '../player.js';
 import { musicSource } from '../deck.js';
 import { FUN_MIN, BUILTIN_ID, BUILTIN_NAME, MAX_TRACKS } from '../playlist-logic.js';
 import { icons, esc, toast } from '../ui.js';
@@ -20,7 +18,7 @@ import {
 } from './music-bits.js';
 
 const PREVIEW_ROWS = 30;
-/** "Speel nu toch" waits at most this long for songs that have any year at all (Deezer gives them fast). */
+/** "Speel nu toch" waits at most this long for songs that have any year at all (Spotify gives most at once). */
 const NOW_WAIT_MS = 15000;
 
 const ico = (body) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${body}</svg>`;
@@ -36,30 +34,24 @@ export function coverHtml(url, cls = '') {
   return `<span class="cover ${cls}" aria-hidden="true">${noteIcon}${src ? `<img src="${esc(src)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}</span>`;
 }
 
-/** Catalogue / Spotify songs -> the input of store.importFromSource (years are guesses until checked). */
-function toImport(kind, tracks) {
-  if (kind === 'deezer') {
-    return tracks.map((t) => ({ deezerId: t.deezerId, title: t.title, artist: t.artist, album: t.album, isrc: t.isrc || undefined, yearSure: false }));
-  }
+/** Spotify songs -> the input of store.importFromSource (years are guesses until checked). */
+function toImport(tracks) {
   return tracks.map((t) => ({ spotifyId: t.spotifyId, title: t.title, artist: t.artist, album: t.album, spYear: t.spYear, isrc: t.isrc || undefined, yearSure: false }));
 }
 
-const errorText = (kind, e) => (kind === 'deezer' ? deezer.errorMessage(e) : spl.errorMessage(e));
+const errorText = (e) => spl.errorMessage(e);
 const aborted = (e, signal) => signal?.aborted || e?.code === 'aborted';
 
 /**
- * Fetch all songs of a source list and store them (a new list, or the same list updated).
- * Returns { res, longer } (longer: the source has more songs than MAX_TRACKS) or throws.
+ * Fetch all songs of a Spotify playlist and store them (a new list, or the same list updated).
+ * Returns { res, longer } (longer: the playlist has more songs than MAX_TRACKS) or throws.
  * Shared with the edit screen's "Opnieuw ophalen".
  */
 export async function fetchAndImport(src, { signal, onProgress } = {}) {
-  let tracks;
-  if (src.kind === 'deezer') tracks = await deezer.playlistTracks(Number(src.id), { signal, onProgress });
-  else tracks = await spl.playlistTracks(src.id, { signal, onProgress });
-  if (signal?.aborted) throw new deezer.DeezerError('aborted');
-  const res = store.importFromSource({ kind: src.kind, id: src.id, name: src.name }, toImport(src.kind, tracks));
-  const longer = src.kind === 'spotify' ? (tracks.capped ? tracks.total : 0) : (Number(src.count) > MAX_TRACKS ? src.count : 0);
-  return { res, longer };
+  const tracks = await spl.playlistTracks(src.id, { signal, onProgress });
+  if (signal?.aborted) throw new spl.PlaylistError('aborted');
+  const res = store.importFromSource({ kind: 'spotify', id: src.id, name: src.name }, toImport(tracks));
+  return { res, longer: tracks.capped ? tracks.total : 0 };
 }
 
 /** "Bewaard: X" / "Bijgewerkt: 12 nieuwe nummers" for an import result. */
@@ -73,7 +65,6 @@ export function createMusicSheet({ slot, navigate, getPick }) {
   let lastFocus = null;
   let pushed = false;
   let gen = 0;
-  let offPlayer = null;
   let offEnrich = null;
 
   const sheetEl = () => slot.querySelector('.sheet');
@@ -88,8 +79,7 @@ export function createMusicSheet({ slot, navigate, getPick }) {
       document.body.classList.add('has-sheet');
     } else stopWork();
     gen++;
-    st = { listening: null, ...state };
-    if (!offPlayer) offPlayer = player.subscribe(() => { if (st?.listening) drawTracks(); });
+    st = { ...state };
     if (!offEnrich) {
       offEnrich = enrich.subscribe(() => {
         const box = st?.view === 'play' ? slot.querySelector('[data-slot="ready"]') : null;
@@ -105,7 +95,6 @@ export function createMusicSheet({ slot, navigate, getPick }) {
     st?.loadCtrl?.abort();
     if (st?.nowTimer) clearTimeout(st.nowTimer);
     if (st?.etaTimer) { clearInterval(st.etaTimer); st.etaTimer = null; }
-    if (st?.listening) { player.stop(); st.listening = null; }
   }
 
   /** Close the sheet. fromHistory: the back button already went back. */
@@ -116,7 +105,6 @@ export function createMusicSheet({ slot, navigate, getPick }) {
     gen++;
     slot.innerHTML = '';
     document.body.classList.remove('has-sheet');
-    offPlayer?.(); offPlayer = null;
     offEnrich?.(); offEnrich = null;
     if (pushed && !fromHistory) { pushed = false; try { history.back(); } catch { /* ignore */ } }
     pushed = false;
@@ -142,13 +130,13 @@ export function createMusicSheet({ slot, navigate, getPick }) {
 
   function headHtml({ small = false } = {}) {
     const s = st.src;
-    const kicker = s.kind === 'deezer' ? 'Playlist uit de catalogus' : 'Jouw Spotify-playlist';
+    const kicker = 'Jouw Spotify-playlist';
     const longer = Number(s.count) > MAX_TRACKS ? ` · De eerste ${MAX_TRACKS} nummers` : '';
     return `<header class="ms-head${small ? ' is-small' : ''}">
       ${coverHtml(s.picture, small ? 'cover-md' : 'cover-lg')}
       <div class="ms-head-text">
         <p class="ms-kicker">${kicker}</p>
-        <h2 id="sheet-title" data-testid="sheet-title">${esc(s.name || s.placeholder || 'Playlist')}</h2>
+        <h2 id="sheet-title" data-testid="sheet-title">${esc(s.name || 'Playlist')}</h2>
         <p class="ms-sub" data-testid="sheet-count">${esc(countLine(s.count, s.by))}${longer}</p>
       </div>
       <button class="icon-btn ms-close" type="button" data-act="sheet-close" data-testid="sheet-close" aria-label="Sluiten">${icons.close}</button>
@@ -160,12 +148,7 @@ export function createMusicSheet({ slot, navigate, getPick }) {
     if (p.error) return `<p class="set-error" role="alert" data-testid="sheet-error">${esc(p.error)} <button class="linklike" type="button" data-act="sheet-reload" data-testid="sheet-reload">Opnieuw</button></p>`;
     if (!p.tracks) return '<p class="muted small ms-loading" data-testid="sheet-loading">Nummers laden…</p>';
     if (!p.tracks.length) return '<p class="set-empty">Er staan geen speelbare nummers in deze lijst.</p>';
-    const playing = player.state.status === 'playing' || player.state.status === 'loading';
-    const rows = p.tracks.map((t, i) => {
-      const on = st.listening === t.deezerId && playing;
-      const listen = t.deezerId ? `<button class="icon-btn ms-listen${on ? ' is-on' : ''}" type="button" data-act="sheet-listen" data-i="${i}" aria-pressed="${on}" aria-label="${on ? 'Stop' : 'Luister naar'} ${esc(t.title)}" data-testid="sheet-listen">${on ? icons.pause : icons.play}</button>` : '';
-      return `<li class="ms-track" data-testid="sheet-track"><span class="ms-num" aria-hidden="true">${i + 1}</span><span class="ms-t"><b>${esc(t.title)}</b><span>${esc(t.artist)}</span></span>${listen}</li>`;
-    }).join('');
+    const rows = p.tracks.map((t, i) => `<li class="ms-track" data-testid="sheet-track"><span class="ms-num" aria-hidden="true">${i + 1}</span><span class="ms-t"><b>${esc(t.title)}</b><span>${esc(t.artist)}</span></span></li>`).join('');
     const total = Number(st.src.count);
     const rest = Number.isInteger(total) && total > p.tracks.length ? `<p class="muted small ms-rest">… en nog ${Math.min(total, MAX_TRACKS) - p.tracks.length} nummers.</p>` : '';
     return `<ol class="ms-tracks" aria-label="De eerste nummers">${rows}</ol>${rest}`;
@@ -205,7 +188,7 @@ export function createMusicSheet({ slot, navigate, getPick }) {
       const txt = r.total ? `${r.read} van ${r.total}` : '';
       return `<p class="ms-step"><b>Nummers ophalen…</b> <span data-testid="sheet-progress-count">${txt}</span></p>
         <div class="pl-bar" aria-hidden="true"><i style="width:${pct(r.read, r.total)}%"></i></div>
-        <p class="small muted">${st.src.kind === 'deezer' ? 'Uit de openbare catalogus van Deezer.' : 'Uit jouw Spotify.'}</p>`;
+        <p class="small muted">Uit jouw Spotify.</p>`;
     }
     if (r.phase === 'years' || r.phase === 'now') {
       const s = r.status || {};
@@ -340,21 +323,12 @@ export function createMusicSheet({ slot, navigate, getPick }) {
     st.preview = { tracks: null, error: '' };
     drawTracks();
     try {
-      if (s.kind === 'deezer' && (!s.name || s.count == null)) {
-        const info = await deezer.playlistInfo(Number(s.id), { signal: ctrl.signal });
-        if (my !== gen) return;
-        Object.assign(s, { name: s.name || info.title || s.placeholder || '', count: info.count, by: s.by || info.by, picture: s.picture || info.picture });
-        draw();
-      }
-      const tracks = s.kind === 'deezer'
-        ? await deezer.playlistTracks(Number(s.id), { max: PREVIEW_ROWS, signal: ctrl.signal })
-        : await spl.playlistTracks(s.id, { max: PREVIEW_ROWS, signal: ctrl.signal });
+      const tracks = await spl.playlistTracks(s.id, { max: PREVIEW_ROWS, signal: ctrl.signal });
       if (my !== gen || ctrl.signal.aborted) return;
       st.preview = { tracks: tracks.slice(0, PREVIEW_ROWS), error: '' };
     } catch (e) {
       if (my !== gen || aborted(e, ctrl.signal)) return;
-      st.preview = { tracks: [], error: errorText(s.kind, e) };
-      if (s.kind === 'deezer' && e?.code === 'notfound' && !s.name) s.name = 'Playlist niet gevonden';
+      st.preview = { tracks: [], error: errorText(e) };
     }
     if (my === gen) draw();
   }
@@ -364,21 +338,10 @@ export function createMusicSheet({ slot, navigate, getPick }) {
     loadPreview();
   }
 
-  function listen(i) {
-    const t = st.preview?.tracks?.[i];
-    if (!t?.deezerId) return;
-    const on = st.listening === t.deezerId && (player.state.status === 'playing' || player.state.status === 'loading');
-    if (on) { player.stop(); st.listening = null; drawTracks(); return; }
-    st.listening = t.deezerId;
-    player.load({ id: `dz${t.deezerId}`, deezerId: t.deezerId, itunesId: null, previewUrl: null, title: t.title, artist: t.artist }, { autoplay: true, preview: true });
-    drawTracks();
-  }
-
   /* ---------- Speel direct / Bewaar ---------- */
 
   async function run(mode) {
     if (!st?.src) return;
-    if (st.listening) { player.stop(); st.listening = null; }
     const my = gen;
     const ctrl = new AbortController();
     st.view = 'run';
@@ -393,7 +356,7 @@ export function createMusicSheet({ slot, navigate, getPick }) {
       });
     } catch (e) {
       if (my !== gen || aborted(e, ctrl.signal)) return;
-      st.run.phase = 'error'; st.run.failedAt = 'fetch'; st.run.error = errorText(st.src.kind, e);
+      st.run.phase = 'error'; st.run.failedAt = 'fetch'; st.run.error = errorText(e);
       draw(); focusFirst();
       return;
     }
@@ -457,7 +420,7 @@ export function createMusicSheet({ slot, navigate, getPick }) {
     });
   }
 
-  /** "Speel nu toch": every song with a year plays; wait a moment for those years (Deezer is fast). */
+  /** "Speel nu toch": every song with a year plays; wait a moment for those years. */
   function playAnyway() {
     const r = st.run;
     if (!r?.pid) return;
@@ -528,7 +491,6 @@ export function createMusicSheet({ slot, navigate, getPick }) {
     switch (act) {
       case 'sheet-close': close(); break;
       case 'sheet-reload': loadPreview(); break;
-      case 'sheet-listen': listen(Number(a.dataset.i)); break;
       case 'sheet-play-now': run('play'); break;
       case 'sheet-save': run('save'); break;
       case 'sheet-anyway': playAnyway(); break;
@@ -582,7 +544,6 @@ export function createMusicSheet({ slot, navigate, getPick }) {
     destroy() {
       stopWork();
       st = null;
-      offPlayer?.(); offPlayer = null;
       offEnrich?.(); offEnrich = null;
       document.body.classList.remove('has-sheet');
       window.removeEventListener('popstate', onPop);

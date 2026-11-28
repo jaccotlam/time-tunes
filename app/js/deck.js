@@ -1,7 +1,7 @@
 // The ACTIVE deck: the built-in deck (app/data/deck.json) or one of the player's own
 // playlists (js/playlists.js). Both come in the same shape:
 // { version, country, id, name, kind: 'builtin'|'playlist', cards, byId }, every card
-// { id, title, artist, year, itunesId, previewUrl, trackViewUrl, spotifyId?, deezerId?, isrc? }
+// { id, title, artist, year, itunesId, previewUrl, trackViewUrl, spotifyId?, isrc? }
 // (+ `code` for playlist cards: the self-contained QR code, see playlist-logic.js).
 import { padId } from './logic.js';
 import { BUILTIN_ID, BUILTIN_NAME, playlistDeck, playable } from './playlist-logic.js';
@@ -79,7 +79,6 @@ export function deckSnapshot(deck, cards) {
   const slim = (c) => {
     const o = { id: c.id, title: c.title, artist: c.artist, year: c.year, itunesId: c.itunesId ?? null, previewUrl: c.previewUrl ?? null, trackViewUrl: c.trackViewUrl ?? null };
     if (c.spotifyId) o.spotifyId = c.spotifyId;
-    if (c.deezerId) o.deezerId = c.deezerId;
     if (c.isrc) o.isrc = c.isrc;
     return o;
   };

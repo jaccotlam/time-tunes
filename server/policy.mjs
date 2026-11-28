@@ -3,7 +3,10 @@
 //
 //   GET  /health                 -> { ok, v, service, features }  features: ['screen'] = knows displays,
 //                                   'accounts' = knows accounts and prepared rooms (/account/..., account-http.mjs),
-//                                   'account-delta' = an account save may send unchanged playlists as stubs
+//                                   'account-delta' = an account save may send unchanged playlists as stubs,
+//                                   'account-links' = the account keeps the Spotify links (spotifyLinks),
+//                                   'links' = rooms carry several Spotify links (server-protocol.js),
+//                                   'mix-lists', 'party': see server-protocol.js
 //   POST /rooms                  -> { code, token }      body { v, id, name?, hostPlays?, settings? }
 //   POST /rooms/CODE/restore     -> { code, restored }   body { v, id, token, snap }
 //   GET  /rooms/CODE             -> { exists, phase, players, leaderOnline } (404 when unknown)
@@ -128,7 +131,7 @@ export function route(method, pathname) {
 }
 
 /** accounts: this server has account storage (Cloudflare: the ACCOUNTS binding exists). */
-export const health = ({ accounts = true } = {}) => ({ ok: true, v: SERVER_PROTOCOL_VERSION, service: SERVICE, features: [...SERVER_FEATURES, ...(accounts ? ['accounts', 'account-delta'] : [])] });
+export const health = ({ accounts = true } = {}) => ({ ok: true, v: SERVER_PROTOCOL_VERSION, service: SERVICE, features: [...SERVER_FEATURES, ...(accounts ? ['accounts', 'account-delta', 'account-links'] : [])] });
 
 /** Body of POST /rooms -> options for RoomHub.create, or null. */
 export function createOptions(body) {

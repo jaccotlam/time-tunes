@@ -1,4 +1,4 @@
-// MusicBrainz: the ORIGINAL release year of a recording, by ISRC. Deezer and Spotify give the
+// MusicBrainz: the ORIGINAL release year of a recording, by ISRC. Spotify and Apple Music give the
 // date of the release a track sits on (often a compilation or remaster); MusicBrainz's
 // "first-release-date" of the recording is the first time it came out.
 // The API sends CORS headers, so plain fetch works. Limit: 1 request per second per client

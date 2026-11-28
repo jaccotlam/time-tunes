@@ -48,13 +48,31 @@
 //   Refused reactions are dropped silently. A new app must not send avatar / react to a server
 //   without the 'party' feature: that one answers 'bad'.
 //
-// "Mix van de groep" from playlists (optional addition within version 4; /health `features`
-//   lists 'mix-playlists'): a mix-add track may carry `deezerId` (positive safe integer) and
-//   `isrc` instead of a `spotifyId`; such a song (from a public Deezer playlist the phone chose)
-//   must say `checked: true` (its year was checked at MusicBrainz on the phone), else it is
-//   refused like any invalid song. Duplicates are also recognised by deezerId and ISRC. An
-//   older server refuses songs without a spotifyId, so a new app offers "Kies een playlist"
-//   only when the server lists the feature.
+// "Mix van de groep" from playlists (optional addition within version 5; /health `features`
+//   lists 'mix-lists'): a mix-add track may carry an `isrc` instead of a `spotifyId`; such a
+//   song must say `checked: true` (its year was checked at MusicBrainz on the phone), else it is
+//   refused like any invalid song. Duplicates are also recognised by ISRC. A new app offers
+//   "Kies een playlist" only when the server lists the feature (and the app has a provider for
+//   the lists, see mix-lists.js). v3-10 called this feature 'mix-playlists' and filled it from
+//   the public Deezer catalogue; v3-11 removed Deezer and renamed the feature, so a server no
+//   longer announces 'mix-playlists' and an app of v3-10 stops offering its Deezer search. A
+//   song such an app still sends is taken only when it has a Spotify id or an ISRC with a
+//   checked year (its `deezerId` is ignored); else it is refused with error 'mix', and the room
+//   and the rest of the message are not affected. No new version was needed.
+//
+// Several Spotify "links" (optional addition within version 5; /health `features` lists 'links'):
+//   a link is one Spotify app (one Client ID) with room for 5 people on its user list; the host
+//   may have several (spotify-links.js). The owner's hello may carry `links` [{ id, name }]
+//   (checked: the Client-ID form, max 10, names plain text of max 20 characters, no duplicates)
+//   and `play` ('spotify' | 'preview': how the leader's phone plays the music). The server
+//   puts them in every state's meta as `spotifyLinks` [{ id, name }] and `play`, and keeps
+//   `spotifyClientId` (= the first link) for phones of before. links {links, play} (owner
+//   only): the same during the room (a link added in the lobby). link {i}: a phone says it
+//   logged in through link i of the room (an index in spotifyLinks, nothing else); the leader's
+//   meta then has `linkUse` [n per link] (counts only, never who), every phone's meta `myLink`
+//   (its own index or null, so it can say it again after a server restart). An older server
+//   ignores the hello fields and would refuse the two new messages ('bad'), so a phone sends
+//   them only when the feature is listed; an older phone simply sees spotifyClientId.
 //
 // Version 2 (November 2026): the Quiz (settings questions/qtype/think, playing, the quiz part of
 // the view). Version 3 (November 2026): "Mix van de groep" (mix-add, mix-clear, settings.music,
@@ -66,7 +84,13 @@
 
 export const SERVER_PROTOCOL_VERSION = 5;
 /** Optional additions within this version that the server announces in /health `features`. */
-export const SERVER_FEATURES = ['screen', 'party', 'mix-playlists'];
+/** The feature of "Kies een playlist" in the group mix (v3-10 had 'mix-playlists', Deezer-based). */
+export const MIX_LISTS_FEATURE = 'mix-lists';
+/** Several Spotify links in a room (see above). */
+export const LINKS_FEATURE = 'links';
+export const SERVER_FEATURES = ['screen', 'party', MIX_LISTS_FEATURE, LINKS_FEATURE];
+/** How the leader's phone plays the music (meta.play): a guest's phone needs a fragment for every song only with 'preview'. */
+export const PLAY_SOURCES = ['spotify', 'preview'];
 /**
  * Largest message from a phone (the deck at the start of a game), in UTF-8 bytes. A start
  * with 2000 realistic cards is about 300 kB (tests/unit/big-lists.test.mjs); fitCards keeps
@@ -85,7 +109,7 @@ export const CLIENT_PING_MS = 10000;
 /** Nothing heard for this long: the connection is dead. */
 export const STALE_MS = 25000;
 
-const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing', 'mix-add', 'mix-clear', 'stamp', 'judge', 'avatar', 'react', 'hold', 'continue', 'finish'];
+const CLIENT_TYPES = ['hello', 'answer', 'withdraw', 'leave', 'settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'close', 'lead', 'playing', 'mix-add', 'mix-clear', 'stamp', 'judge', 'avatar', 'react', 'hold', 'continue', 'finish', 'links', 'link'];
 const SERVER_TYPES = ['welcome', 'state', 'error', 'backup', 'react'];
 export const LEADER_TYPES = ['settings', 'start', 'reveal', 'override', 'next', 'lobby', 'remove', 'playing', 'judge', 'hold', 'continue', 'finish'];
 
@@ -134,7 +158,7 @@ export function utf8Length(str) {
   return n;
 }
 
-const CARD_FIELDS = ['id', 'year', 'title', 'artist', 'previewUrl', 'itunesId', 'spotifyId', 'deezerId', 'isrc'];
+const CARD_FIELDS = ['id', 'year', 'title', 'artist', 'previewUrl', 'itunesId', 'spotifyId', 'isrc'];
 
 /**
  * Only what the server needs to run a game and the music phone needs to play a song (the
@@ -164,7 +188,7 @@ export function fitCards(cards, { maxBytes = MAX_CLIENT_MESSAGE - 4096, extra = 
   if (size(list) <= maxBytes) return { cards: list, cut: Math.max(0, (cards || []).length - list.length) };
   list = list.map((c) => {
     const o = { ...c };
-    if (o.itunesId || o.deezerId) delete o.previewUrl;
+    if (o.itunesId) delete o.previewUrl;
     if (typeof o.title === 'string') o.title = o.title.slice(0, 100);
     if (typeof o.artist === 'string') o.artist = o.artist.slice(0, 100);
     return o;
@@ -202,7 +226,6 @@ export function cleanCards(cards) {
     if (typeof c.previewUrl === 'string' && /^https:\/\/[^\s"'<>]{4,600}$/.test(c.previewUrl)) o.previewUrl = c.previewUrl;
     if (Number.isSafeInteger(Number(c.itunesId)) && Number(c.itunesId) > 0) o.itunesId = Number(c.itunesId);
     if (typeof c.spotifyId === 'string' && /^[A-Za-z0-9]{10,40}$/.test(c.spotifyId)) o.spotifyId = c.spotifyId;
-    if (Number.isSafeInteger(c.deezerId) && c.deezerId > 0) o.deezerId = c.deezerId;
     if (typeof c.isrc === 'string' && /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(c.isrc)) o.isrc = c.isrc;
     out.push(o);
   }

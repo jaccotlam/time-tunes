@@ -1,6 +1,6 @@
 // Pure helpers for the music screens (the "Muziek kiezen" hub, the playlist sheet, the edit
 // screen's status header): words for counts and progress, the pick mode ("you choose music for
-// room ABCD") and how a pasted link is recognised. No DOM here, so tests/unit can pin it.
+// room ABCD"). No DOM here, so tests/unit can pin it.
 import { MIN_TRACKS, validYear, rateEta } from '../playlist-logic.js';
 
 const plural = (n, one, more) => `${n} ${n === 1 ? one : more}`;
@@ -64,19 +64,9 @@ export function takePicked(storage = ss()) {
   return v && /^[A-Z]{4}$/.test(v) ? v : null;
 }
 
-/* ---------- search input ---------- */
+/* ---------- a playlist in words ---------- */
 
-/**
- * Is this a pasted Deezer playlist link (not a search for "538" or "Top 40")? A bare number only
- * counts when it is long enough to be a playlist id (Deezer's are 7+ digits).
- */
-export function isPlaylistLink(input) {
-  const s = String(input ?? '').trim();
-  if (/deezer\.com\/|^deezer:\/\//i.test(s)) return true;
-  return /^\d{7,16}$/.test(s);
-}
-
-/** "688 nummers · door Deezer Charts" (count or maker may be missing). */
+/** "688 nummers · door Anouk" (count or maker may be missing). */
 export function countLine(count, by) {
   const parts = [];
   if (Number.isInteger(count) && count >= 0) parts.push(plural(count, 'nummer', 'nummers'));
@@ -176,7 +166,7 @@ export function workLine(st, { short = false, source = 'preview' } = {}) {
     return short ? `jaren nakijken ${done}/${st.total}` : `Jaartallen nakijken… ${done} van ${st.total}`;
   }
   if (st.yearsMissing > 0 && st.pending > 0) return short ? `jaren ophalen ${st.ready}/${st.total}` : `Jaartallen ophalen… ${st.ready} van ${st.total}`;
-  // Apple Music fragments only matter for songs without any fragment (a Deezer song has one)
+  // Apple Music fragments only matter for songs without one yet
   if (source !== 'spotify' && st.appleTodo > 0 && st.fragmentsMissing > 0 && (st.working || st.pending)) {
     const all = st.appleDone + st.appleTodo;
     return short ? `fragmenten ${st.appleDone}/${all}` : `Fragmenten zoeken… ${st.appleDone} van ${all}`;
@@ -184,8 +174,8 @@ export function workLine(st, { short = false, source = 'preview' } = {}) {
   return '';
 }
 
-/** Source mark of a stored list. */
-export const sourceLabel = (p) => (p?.source?.kind === 'spotify' ? 'Spotify' : p?.source?.kind === 'deezer' ? 'Deezer' : 'eigen');
+/** Source mark of a stored list (a list imported from Deezer by v3-10 has no source any more: 'eigen'). */
+export const sourceLabel = (p) => (p?.source?.kind === 'spotify' ? 'Spotify' : 'eigen');
 
 /**
  * The mark a row of the edit screen gets, or null: only where the player can do something.

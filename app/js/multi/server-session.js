@@ -17,10 +17,23 @@ import {
 } from './server-protocol.js';
 import { playerId, JOIN_KEY, PLAYER_ID_KEY } from './client-session.js';
 import { HOST_ID_KEY, MULTI_SEED_KEY } from './host-session.js';
-import { getClientId } from '../spotify.js';
+import { getClientId, getLinks, getSettings, isConnected, subscribe as onSpotify } from '../spotify.js';
 import { isAvatar, isReaction, REACT_GAP_MS } from './party.js';
+import { LINKS_FEATURE } from './server-protocol.js';
 
-const spotifyClientId = () => { try { return getClientId() || ''; } catch { return ''; } };
+/**
+ * What the spelleider's phone tells the room about Spotify: its links (spotify-links.js; a
+ * public Client ID per Spotify app, with the host's short name), the first one as `cid` for
+ * a server of before, and how this phone plays the music ('spotify' | 'preview'), so the
+ * players' phones know whether a song needs an Apple Music fragment.
+ */
+export function spotifyHello() {
+  try {
+    const links = getLinks().map((l) => ({ id: l.id, name: l.name }));
+    const play = getSettings().source === 'spotify' && isConnected() ? 'spotify' : 'preview';
+    return { cid: links[0]?.id || getClientId() || '', links, play };
+  } catch { return { cid: '', links: [], play: 'preview' }; }
+}
 
 /** Per-browser override of MULTI_SERVER_URL: an address, or "off" for the PeerJS route. */
 export const SERVER_OVERRIDE_KEY = 'timetunesr.multiServer.v1';
@@ -611,6 +624,8 @@ export function createServerClientSession({ code, name, avatar: picked = null })
     /** "Mix van de groep": add songs to / withdraw this phone's part. False when offline. */
     mixAdd(tracks) { return link.send({ t: 'mix-add', tracks }); },
     mixClear() { return link.send({ t: 'mix-clear' }); },
+    /** This phone logged in through link i of the room (an index, nothing else; server feature 'links'). */
+    reportLink(i) { return Number.isInteger(i) && i >= 0 && link.supports(LINKS_FEATURE) ? link.send({ t: 'link', i }) : false; },
     get online() { return link.online; },
     /**
      * Does Verlaat keep this phone's seat? True during a game (also on the winner screen):
@@ -660,6 +675,10 @@ export function createServerHostSession() {
   const emit = () => { for (const fn of listeners) { try { fn(api); } catch (e) { console.error(e); } } };
   const reactions = reactionFeed();
   let lastReact = 0;
+  let linksSent = ''; // the links / play the room has from this phone (hello or links message)
+  // a link added in the settings, Spotify connected or gone: the room hears it at once (not only
+  // at the next redraw of the lobby)
+  const offSpotify = onSpotify((why) => { if (['settings', 'connected', 'disconnected'].includes(why)) { try { api.syncLinks(); } catch { /* not yet */ } } });
 
   const ownerId = () => {
     let id = store.get(HOST_ID_KEY, null);
@@ -684,7 +703,12 @@ export function createServerHostSession() {
       hooks: {
         // cid: this phone's Spotify Client ID (a public value, '' = none); the server passes the
         // owner's on to the players, so only the spelleider has to set Spotify up
-        hello: (code) => ({ t: 'hello', v: SERVER_PROTOCOL_VERSION, code, id: ident.id, token: ident.token, cid: spotifyClientId(), ...(storedAvatar() ? { avatar: storedAvatar() } : {}) }),
+        // (an older server only reads cid and ignores links / play)
+        hello: (code) => {
+          const sp = spotifyHello();
+          linksSent = JSON.stringify([sp.links, sp.play, null]);
+          return { t: 'hello', v: SERVER_PROTOCOL_VERSION, code, id: ident.id, token: ident.token, ...sp, ...(storedAvatar() ? { avatar: storedAvatar() } : {}) };
+        },
         roomCheck: async () => {
           const base = serverBase().http;
           if (!ident) {
@@ -738,6 +762,7 @@ export function createServerHostSession() {
             st = m;
             if (Number.isFinite(m.meta?.now)) clock = m.meta.now - Date.now();
             if (!m.lead) lostLead = true; // a player who led and handed it back
+            api.syncLinks(); // (only when something changed: just became the leader, …)
             emit();
           }
         },
@@ -812,6 +837,7 @@ export function createServerHostSession() {
     },
     mixAdd(tracks) { return !!link?.send({ t: 'mix-add', tracks }); },
     mixClear() { return !!link?.send({ t: 'mix-clear' }); },
+    reportLink() { return false; }, // the spelleider logs in with his own link: nothing to count
     get online() { return !!link?.online; },
     get received() { return received; },
     /** This phone's member id in the room (for its own part of the mix). */
@@ -871,11 +897,27 @@ export function createServerHostSession() {
     },
     /** Stop leading here without closing (a player hands the screen back). */
     forget() { forget(); ident = null; },
+    /**
+     * The links or the way of playing changed on this phone (settings, Spotify connected), or
+     * this phone just became the leader: tell the room (server feature 'links'; an older server
+     * keeps the hello's cid). The room takes the links from the owner only, and how the music
+     * plays from the phone that leads (it plays the music). True when sent.
+     */
+    syncLinks() {
+      if (!link?.online || !link.supports(LINKS_FEATURE) || !(st?.meta?.owner || st?.meta?.leader)) return false;
+      const sp = spotifyHello();
+      const key = JSON.stringify([sp.links, sp.play, !!st.meta.leader]);
+      if (key === linksSent) return false;
+      if (!link.send({ t: 'links', links: sp.links, play: sp.play })) return false;
+      linksSent = key;
+      return true;
+    },
     retry() { if (error && ident) connect(); else link?.retry({ force: true }); },
     copyDiag: async () => (link ? copyText(await diagText(link.diag, { status: api.status, code: api.code })) : false),
     diagText: () => (link ? diagText(link.diag, { status: api.status, code: api.code }) : Promise.resolve('')),
     destroy() {
       offLifecycle?.();
+      offSpotify();
       link?.stop();
       link = null;
       listeners.clear();

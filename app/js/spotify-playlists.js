@@ -17,7 +17,8 @@ const PAGE_PARALLEL = 3;
 const RATE_TRIES = 3;
 
 export class PlaylistError extends Error {
-  constructor(code) { super(code); this.code = code; }
+  // cause: the SpotifyError behind it (status, what Spotify said), for spotify-links.js notRegistered
+  constructor(code, cause = null) { super(code); this.code = code; if (cause) this.cause = cause; }
 }
 
 export const MESSAGES = {
@@ -35,7 +36,7 @@ export function errorMessage(e) {
 export const canRead = () => spotify.isConnected() && spotify.hasScopes(spotify.PLAYLIST_SCOPES);
 
 function mapError(e, { forItems = false } = {}) {
-  if (e?.code === 'forbidden' || e?.code === 'not-allowed') return new PlaylistError(forItems ? 'not-own' : 'scope');
+  if (e?.code === 'forbidden' || e?.code === 'not-allowed') return new PlaylistError(forItems ? 'not-own' : 'scope', e);
   if (e?.code === 'unavailable' && e.status === 404) return new PlaylistError('not-found');
   return e;
 }

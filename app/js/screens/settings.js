@@ -15,6 +15,7 @@ import {
   cleanClientId, clientIdMessage, redirectList, shareLink, explain, errorDetails,
 } from '../spotify-setup.js';
 import { accountNoteHtml, settingsAccountHtml, onLogInOut } from './account-bits.js';
+import { linkLabel, cleanLinkName, LINKS_MAX, LINK_NAME_MAX, LINK_USERS_MAX } from '../spotify-links.js';
 
 export const name = 'settings';
 
@@ -59,6 +60,8 @@ export function render(root, { params = [] } = {}) {
   let test = { busy: false, msg: '', timer: 0, kind: '', ok: false };
   let clientDraft = null; // what is typed in the Client ID field (kept across redraws)
   let shareOpen = false;
+  let shareFor = null; // the link (Client ID) the share sheet is for; null = the own one
+  let linkAdd = { open: false, id: '', name: '', msg: '' }; // "Link toevoegen"
   let resumed = false;
 
   // A finished setup ("Klaar") shows the overview the next time.
@@ -268,6 +271,7 @@ export function render(root, { params = [] } = {}) {
         <li>Vul zijn naam en het <b>e-mailadres van zijn Spotify-account</b> in en tik op de knop om hem toe te voegen (<b>“Add user”</b>).</li>
       </ol>
       <p class="small muted">Spotify staat maximaal <b>5 accounts</b> toe. Dit kan ook later.</p>
+      <p class="small" data-testid="wiz-links-note"><b>Meer dan 5 mensen?</b> Maak in het dashboard nog een app (met hetzelfde adres bij Redirect URIs): dat is <b>Link 2</b>. Elke link is een eigen Spotify-app met plek voor 5 mensen. Voeg hem na de koppelhulp toe bij Instellingen → Spotify → <b>Spotify-links</b>. In een kamer kiest iedereen dan zelf “link 1 of link 2”.</p>
     </div>
     ${navHtml('users', { nextLabel: 'Klaar: volgende', skip: true })}`;
   }
@@ -353,9 +357,66 @@ export function render(root, { params = [] } = {}) {
       ${unfinishedHtml()}
       ${errorHtml(st, null)}
       ${problem ? '' : `<button class="btn btn-primary btn-xl" type="button" data-act="connect" data-testid="spotify-connect" ${st.busy ? 'disabled' : ''}>${spotifyIcon}<span>${st.busy ? 'Bezig met verbinden…' : 'Verbind met Spotify'}</span></button>`}
+      ${linksHtml()}
       <div class="set-actions">
         <button class="btn btn-ghost btn-small" type="button" data-act="redo" data-testid="spotify-redo"><span>Opnieuw instellen</span></button>
         <button class="btn btn-ghost btn-small" type="button" data-act="forget-client" data-testid="spotify-forget-client"><span>Wis Client ID</span></button>
+      </div>`;
+  }
+
+  const shortId = (id) => `${id.slice(0, 6)}…${id.slice(-4)}`;
+
+  /**
+   * "Spotify-links": the host's Spotify apps (one Client ID each, 5 people per app). Link 1 is
+   * the existing Client ID; more can be added, named, moved and removed; per link the share
+   * link / QR; with more than one the host picks the one he logs in with himself.
+   */
+  function linksHtml() {
+    const links = spotify.getLinks();
+    if (!links.length) return '';
+    const own = spotify.ownLinkIndex();
+    const many = links.length > 1;
+    const rows = links.map((l, i) => `<li class="sp-link" data-testid="spotify-link-row" data-index="${i}" data-id="${esc(l.id)}">
+        <div class="sp-link-head">
+          <b class="sp-link-no">Link ${i + 1}</b>
+          <code class="sp-link-id" title="Client ID">${esc(shortId(l.id))}</code>
+          ${many && i === own ? '<span class="pill pill-on" data-testid="spotify-link-own">jij logt hiermee in</span>' : ''}
+        </div>
+        <input class="sp-link-name" type="text" maxlength="${LINK_NAME_MAX}" autocomplete="off" value="${esc(l.name)}" placeholder="Naam, bv. familie (mag leeg)"
+          data-link-name="${esc(l.id)}" data-testid="spotify-link-name" aria-label="Naam van link ${i + 1}">
+        <div class="sp-link-actions">
+          ${many ? `<button class="btn btn-small btn-ghost" type="button" data-act="link-up" data-id="${esc(l.id)}" data-testid="spotify-link-up" ${i === 0 ? 'disabled' : ''} aria-label="Link ${i + 1} omhoog">↑</button>
+          <button class="btn btn-small btn-ghost" type="button" data-act="link-down" data-id="${esc(l.id)}" data-testid="spotify-link-down" ${i === links.length - 1 ? 'disabled' : ''} aria-label="Link ${i + 1} omlaag">↓</button>` : ''}
+          <button class="btn btn-small btn-ghost" type="button" data-act="link-share" data-id="${esc(l.id)}" data-testid="spotify-link-share">${icons.share}<span>Deel</span></button>
+          ${many ? `<button class="btn btn-small btn-ghost" type="button" data-act="link-remove" data-id="${esc(l.id)}" data-testid="spotify-link-remove" aria-label="Haal link ${i + 1} weg">${icons.close}<span>Weg</span></button>` : ''}
+        </div>
+      </li>`).join('');
+    const ownPick = many ? `<label class="pl-label sp-own-link">Ik log zelf in via
+        <select data-testid="spotify-own-link" data-own-link>${links.map((l, i) => `<option value="${i}" ${i === own ? 'selected' : ''}>${esc(linkLabel(i, l.name))}</option>`).join('')}</select></label>` : '';
+    const check = cleanClientId(linkAdd.id);
+    const dup = check.ok && links.some((l) => l.id === check.value);
+    const add = links.length >= LINKS_MAX
+      ? `<p class="small muted" data-testid="spotify-links-full">Je hebt het maximum van ${LINKS_MAX} links.</p>`
+      : !linkAdd.open
+        ? `<button class="btn btn-small btn-secondary" type="button" data-act="link-add" data-testid="spotify-link-add">${icons.plus}<span>Link toevoegen</span></button>`
+        : `<div class="sp-link-new" data-testid="spotify-link-new">
+            <p class="small">Maak in het <a href="${DASHBOARD_URL}" target="_blank" rel="noopener">Spotify-dashboard</a> nog een app, precies zoals in stap 2 van de koppelhulp (hetzelfde adres bij Redirect URIs), en plak hier zijn Client ID.</p>
+            <label class="pl-label">Client ID van Link ${links.length + 1}
+              <input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(linkAdd.id)}" placeholder="32 tekens" data-testid="spotify-link-new-id"></label>
+            <label class="pl-label">Naam (mag leeg)
+              <input type="text" maxlength="${LINK_NAME_MAX}" autocomplete="off" value="${esc(linkAdd.name)}" placeholder="bv. vrienden" data-testid="spotify-link-new-name"></label>
+            ${linkAdd.msg || (linkAdd.id && (!check.ok || dup)) ? `<p class="set-error" data-testid="spotify-link-new-msg" role="alert">${esc(linkAdd.msg || (dup ? 'Deze Client ID staat er al in.' : clientIdMessage(check)))}</p>` : ''}
+            <div class="set-actions">
+              <button class="btn btn-small btn-primary" type="button" data-act="link-save" data-testid="spotify-link-new-save">${icons.check}<span>Bewaar link</span></button>
+              <button class="btn btn-small btn-ghost" type="button" data-act="link-cancel" data-testid="spotify-link-new-cancel"><span>Annuleer</span></button>
+            </div>
+          </div>`;
+    return `<div class="set-field sp-links" data-testid="spotify-links" data-count="${links.length}">
+        <span class="set-label">Spotify-links</span>
+        <p class="small" data-testid="spotify-links-explain">Elke link is een eigen Spotify-app met plek voor ${LINK_USERS_MAX} mensen. Voeg in het Spotify-dashboard bij die app (User Management) de mensen toe die via deze link mogen koppelen.${many ? ' In een kamer kiest iedereen zelf via welke link hij koppelt.' : ' Meer mensen? Voeg een tweede link toe.'}</p>
+        <ol class="sp-link-list">${rows}</ol>
+        ${ownPick}
+        ${add}
       </div>`;
   }
 
@@ -370,6 +431,7 @@ export function render(root, { params = [] } = {}) {
       ${devicesHtml(st)}
       ${testHtml()}
       ${limitHtml(settings.limit)}
+      ${spotify.getClientId() ? linksHtml() : ''}
       <div class="set-actions">
         ${borrowed ? '' : `<button class="btn btn-ghost btn-small" type="button" data-act="share" data-testid="spotify-share-open">${icons.users}<span>Deel met je groep</span></button>`}
         <button class="btn btn-ghost btn-small" type="button" data-act="redo" data-testid="spotify-redo">${icons.restart}<span>${borrowed ? 'Eigen Spotify instellen' : 'Opnieuw instellen'}</span></button>
@@ -378,12 +440,14 @@ export function render(root, { params = [] } = {}) {
   }
 
   function shareSheetHtml(st) {
-    const cid = spotify.getClientId() || spotify.connectedClientId();
+    const links = spotify.getLinks();
+    const li = shareFor ? links.findIndex((l) => l.id === shareFor) : -1;
+    const cid = li >= 0 ? links[li].id : spotify.getClientId() || spotify.connectedClientId();
     const link = shareLink(defaultBaseUrl(), cid, st.profile?.name || '');
     if (!link) return '';
-    return `<div class="sheet-backdrop" data-testid="spotify-share-sheet">
+    return `<div class="sheet-backdrop" data-testid="spotify-share-sheet" data-id="${esc(cid)}">
       <div class="sheet pl-share sp-share" role="dialog" aria-modal="true" aria-labelledby="sp-share-title">
-        <h2 id="sp-share-title">Deel je Spotify-instelling</h2>
+        <h2 id="sp-share-title">${li >= 0 && links.length > 1 ? `Deel ${esc(linkLabel(li, links[li].name))}` : 'Deel je Spotify-instelling'}</h2>
         <p class="small">Vrienden die deze code scannen of de link openen, hoeven alleen nog in te loggen bij Spotify. Ze krijgen eerst de vraag of ze hem willen overnemen.</p>
         <div class="pl-qr" data-testid="spotify-share-qr">${qrSvg(link)}</div>
         <label class="pl-label" for="sp-share-link">Link</label>
@@ -602,6 +666,32 @@ export function render(root, { params = [] } = {}) {
     }
   }
 
+  function saveNewLink() {
+    const idEl = root.querySelector('[data-testid="spotify-link-new-id"]');
+    const nameEl = root.querySelector('[data-testid="spotify-link-new-name"]');
+    linkAdd.id = idEl ? idEl.value : linkAdd.id;
+    linkAdd.name = nameEl ? nameEl.value : linkAdd.name;
+    const check = cleanClientId(linkAdd.id);
+    const links = spotify.getLinks();
+    linkAdd.msg = !check.ok ? clientIdMessage(check) || 'Plak hier de Client ID van de nieuwe Spotify-app.'
+      : links.some((l) => l.id === check.value) ? 'Deze Client ID staat er al in.'
+        : links.length >= LINKS_MAX ? `Je hebt het maximum van ${LINKS_MAX} links.` : '';
+    if (linkAdd.msg) { redraw(); return; }
+    spotify.setLinks([...links, { id: check.value, name: cleanLinkName(linkAdd.name) }]);
+    toast(`${linkLabel(links.length, cleanLinkName(linkAdd.name))} bewaard`, { ms: 2200 });
+    linkAdd = { open: false, id: '', name: '', msg: '' };
+    redraw();
+  }
+
+  function moveLink(id, by) {
+    const links = spotify.getLinks();
+    const i = links.findIndex((l) => l.id === id);
+    const j = i + by;
+    if (i < 0 || j < 0 || j >= links.length) return;
+    [links[i], links[j]] = [links[j], links[i]];
+    spotify.setLinks(links);
+  }
+
   function finish() {
     spotify.setSettings({ source: 'spotify' });
     spotify.setSetup({ step: 'done' });
@@ -698,8 +788,21 @@ export function render(root, { params = [] } = {}) {
       case 'devices': loadDevices(); break;
       case 'test': runTest(); break;
       case 'copy-details': copyDetails(); break;
-      case 'share': shareOpen = true; draw(); break;
-      case 'share-close': shareOpen = false; draw(); break;
+      case 'share': shareOpen = true; shareFor = null; draw(); break;
+      case 'share-close': shareOpen = false; shareFor = null; draw(); break;
+      case 'link-share': shareOpen = true; shareFor = el.dataset.id; draw(); break;
+      case 'link-add': linkAdd = { open: true, id: '', name: '', msg: '' }; redraw(); root.querySelector('[data-testid="spotify-link-new-id"]')?.focus(); break;
+      case 'link-cancel': linkAdd = { open: false, id: '', name: '', msg: '' }; redraw(); break;
+      case 'link-save': saveNewLink(); break;
+      case 'link-up': case 'link-down': moveLink(el.dataset.id, act === 'link-up' ? -1 : 1); break;
+      case 'link-remove': {
+        const links = spotify.getLinks();
+        const i = links.findIndex((l) => l.id === el.dataset.id);
+        if (i < 0 || links.length < 2) break;
+        spotify.setLinks(links.filter((l) => l.id !== el.dataset.id));
+        toast(`${linkLabel(i, links[i].name)} weggehaald`, { ms: 2200 });
+        break;
+      }
       case 'share-native': {
         const link = root.querySelector('[data-testid="spotify-share-link"]')?.value;
         if (link) navigator.share({ title: 'TimeTunesr: Spotify-instelling', text: 'Speel hele nummers in TimeTunesr met mijn Spotify-instelling:', url: link }).catch(() => {});
@@ -711,14 +814,20 @@ export function render(root, { params = [] } = {}) {
 
   function onChange(e) {
     const t = e.target;
+    if (t.dataset?.linkName) { spotify.renameLink(t.dataset.linkName, t.value); return; }
+    if (t.matches?.('[data-own-link]')) { spotify.setLinks(spotify.getLinks(), { own: Number(t.value) }); toast('Je logt voortaan zelf in via deze link. Log daarna opnieuw in bij Spotify als dat gevraagd wordt.', { ms: 3500 }); return; }
     if (t.name === 'source') spotify.setSettings({ source: t.value === 'spotify' ? 'spotify' : 'preview' });
     else if (t.name === 'limit') spotify.setSettings({ limit: Number(t.value) });
   }
   function onInput(e) {
     if (e.target.matches('[data-testid="spotify-client-id"]')) onClientInput(e.target);
+    if (e.target.matches('[data-testid="spotify-link-new-id"]')) linkAdd.id = e.target.value;
+    if (e.target.matches('[data-testid="spotify-link-new-name"]')) linkAdd.name = e.target.value;
   }
   function onKey(e) {
     if (e.key === 'Enter' && e.target.matches('[data-testid="spotify-client-id"]')) { e.preventDefault(); saveClient(); }
+    if (e.key === 'Enter' && e.target.matches('[data-testid^="spotify-link-new-"]')) { e.preventDefault(); saveNewLink(); }
+    if (e.key === 'Enter' && e.target.dataset?.linkName) { e.preventDefault(); e.target.blur(); }
     if (e.key === 'Escape' && shareOpen) { shareOpen = false; draw(); }
   }
 

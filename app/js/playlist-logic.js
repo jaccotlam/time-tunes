@@ -9,12 +9,19 @@
 // - storage format (versioned) and the playlist -> deck conversion
 // - which cards can be played with which music source (playable)
 //
-// A stored track comes from up to three catalogues: Apple Music (`itunesId`, the 30-second
-// fragments and the printed QR codes), Spotify (`spotifyId`, whole songs) and Deezer
-// (`deezerId`, fragments too). `isrc` identifies the recording itself and finds the song on
-// Spotify when there is no `spotifyId`. Preview addresses and store links are NOT stored: a
-// preview is looked up fresh at play time (Apple's and Deezer's links expire) and a store link
-// follows from the id. That keeps a 2000-song list near 400 kB in localStorage.
+// A stored track comes from Apple Music (`itunesId`, the 30-second fragments and the printed
+// QR codes) and/or Spotify (`spotifyId`, whole songs). `isrc` identifies the recording itself
+// and finds the song on Spotify when there is no `spotifyId` (else title + artist do). Preview
+// addresses and store links are NOT stored: a preview is looked up fresh at play time (Apple's
+// links expire) and a store link follows from the id. That keeps a 2000-song list near 400 kB
+// in localStorage.
+//
+// Data migration (v3-11 removed the Deezer catalogue): lists stored by v3-10 may hold songs
+// imported from Deezer (`deezerId`, often with isrc, title, artist, year) and a playlist
+// `source` of kind 'deezer'. Such a song is kept (see cleanTrack), plays through Spotify (ISRC,
+// else title + artist) and gets a fragment from the Apple Music match in the background; its
+// `deezerId` is carried along unused, only so an app of v3-10 that reads the same account does
+// not drop the song. A 'deezer' source is read as no source: an ordinary saved list.
 import { scoreTrack, titleScore, artistScore, versionPenalty, fold } from './spotify-match.js';
 
 export const STORE_VERSION = 1;
@@ -59,21 +66,21 @@ const hasText = (v) => typeof v === 'string' && v.trim() !== '';
  * THE answer to "can this card / track be played with this music source?" (counters,
  * readiness checks before a game, the deck builder, the room's deck, the group mix).
  * Every card needs a year (it has to be placed). Then:
- * - 'preview' (fragments): an Apple Music id or a Deezer id (the player looks the 30-second
- *   preview up fresh), or a stored previewUrl (built-in deck, group mix);
+ * - 'preview' (fragments): an Apple Music id (the player looks the 30-second preview up
+ *   fresh), or a stored previewUrl (built-in deck, group mix);
  * - 'spotify': any song: a Spotify id, an ISRC or a title plus artist to search for (and when
  *   Spotify finds nothing the player falls back to the fragment).
  */
 export function playable(t, source = 'preview') {
   if (!t || typeof t !== 'object' || !validYear(Number(t.year))) return false;
-  const fragment = posInt(t.itunesId) || posInt(t.deezerId) || (typeof t.previewUrl === 'string' && /^https:\/\//.test(t.previewUrl));
+  const fragment = posInt(t.itunesId) || (typeof t.previewUrl === 'string' && /^https:\/\//.test(t.previewUrl));
   if (source !== 'spotify') return fragment;
   return fragment || isSpId(t.spotifyId) || isIsrc(t.isrc) || (hasText(t.title) && hasText(t.artist));
 }
 
 /**
  * Is the year of this track still waiting for the background check (enrich.js)? Catalogue years
- * (Deezer, Spotify's album) are often a re-release, and the game asks for the year (±2 / exact).
+ * (Spotify's album, Apple Music) are often a re-release, and the game asks for the year (±2 / exact).
  * False when the player fixed it (yearFixed), the check is done (yearChecked), the year is
  * trusted (yearSure on a valid year), or there is nothing to check with (no ISRC, no title +
  * artist). Pure: only the stored fields. THE definition; enrich.js uses the same truth table
@@ -362,18 +369,14 @@ export function newShareId(rand = Math.random) {
  * With `maxLen` the songs are split over several payloads of at most maxLen chars
  * (for QR codes); without it there is one payload. Songs without an iTunes id or
  * year cannot be shared this way and are skipped (`skipped` in the result).
- * `deezer: true` also takes songs that only have a Deezer id: they go in an extra last field
- * "~d<id36 year36>.<...>" (an app of before Deezer refuses such a link as invalid instead of
- * reading wrong songs). The receiving side must then look those up at Deezer (deezerItems).
  */
-export function encodeShare({ name, tracks }, { maxLen = Infinity, shareId = newShareId(), deezer = false } = {}) {
+export function encodeShare({ name, tracks }, { maxLen = Infinity, shareId = newShareId() } = {}) {
   const ok = (tracks || []).filter((t) => Number.isSafeInteger(Number(t.itunesId)) && Number(t.itunesId) > 0 && validYear(t.year));
-  const dz = deezer ? (tracks || []).filter((t) => !(Number(t.itunesId) > 0) && posInt(t.deezerId) && validYear(t.year)) : [];
-  const items = [...ok.map(itemCode), ...dz.map((t) => `d${Number(t.deezerId).toString(36)}${(t.year - YEAR_MIN).toString(36).padStart(2, '0')}`)];
+  const items = ok.map(itemCode);
   const nm = b64urlEncode(String(name || 'Playlist').slice(0, NAME_MAX));
   const head = (p, n) => `1~${shareId}~${p}~${n}~${nm}~`;
-  const room = maxLen - head(99, 99).length - (dz.length ? 3 : 0);
-  if (room < 14) throw new Error('maxLen te klein');
+  const room = maxLen - head(99, 99).length;
+  if (room < 12) throw new Error('maxLen te klein');
   const chunks = [];
   let cur = [];
   let len = 0;
@@ -384,53 +387,38 @@ export function encodeShare({ name, tracks }, { maxLen = Infinity, shareId = new
     cur.push(it);
   }
   if (cur.length || !chunks.length) chunks.push(cur);
-  const body = (c) => {
-    const a = c.filter((x) => x[0] !== 'd');
-    const d = c.filter((x) => x[0] === 'd').map((x) => x.slice(1));
-    return a.join('.') + (d.length ? `~d${d.join('.')}` : '');
-  };
   return {
-    payloads: chunks.map((c, i) => head(i + 1, chunks.length) + body(c)),
-    shared: ok.length + dz.length,
-    skipped: (tracks || []).length - ok.length - dz.length,
+    payloads: chunks.map((c, i) => head(i + 1, chunks.length) + c.join('.')),
+    shared: ok.length,
+    skipped: (tracks || []).length - ok.length,
   };
 }
 
-function shareItems(field, key, seen) {
-  const out = [];
-  for (const it of field ? field.split('.') : []) {
-    if (it.length < 3) return null;
-    const id = Number.parseInt(it.slice(0, -2), 36);
-    const year = Number.parseInt(it.slice(-2), 36) + YEAR_MIN;
-    if (!Number.isSafeInteger(id) || id <= 0 || !validYear(year)) return null;
-    if (seen.has(`${key}${id}`)) continue;
-    seen.add(`${key}${id}`);
-    out.push({ [key]: id, year });
-  }
-  return out;
-}
-
-/**
- * Parse a share payload (or a whole link containing #/pl/...). Null when invalid.
- * { shareId, part, total, name, items: [{ itunesId, year }], deezerItems: [{ deezerId, year }] }
- */
+/** Parse a share payload (or a whole link containing #/pl/...). Null when invalid. */
 export function decodeShare(input) {
   let s = String(input ?? '').trim();
   const at = s.indexOf('#/pl/');
   if (at >= 0) s = s.slice(at + 5);
   try { s = decodeURIComponent(s); } catch { /* keep */ }
-  const m = s.match(/^1~([0-9a-z]{4,12})~(\d{1,3})~(\d{1,3})~([A-Za-z0-9_-]*)~([0-9a-z.]*)(?:~d([0-9a-z.]*))?$/);
+  const m = s.match(/^1~([0-9a-z]{4,12})~(\d{1,3})~(\d{1,3})~([A-Za-z0-9_-]*)~([0-9a-z.]*)$/);
   if (!m) return null;
   const part = Number(m[2]);
   const total = Number(m[3]);
   if (part < 1 || total < 1 || part > total) return null;
   let name;
   try { name = b64urlDecode(m[4]).slice(0, NAME_MAX); } catch { return null; }
+  const items = [];
   const seen = new Set();
-  const items = shareItems(m[5], 'itunesId', seen);
-  const deezerItems = shareItems(m[6] || '', 'deezerId', seen);
-  if (!items || !deezerItems) return null;
-  return { shareId: m[1], part, total, name: name || 'Gedeelde playlist', items, deezerItems };
+  for (const it of m[5] ? m[5].split('.') : []) {
+    if (it.length < 3) return null;
+    const itunesId = Number.parseInt(it.slice(0, -2), 36);
+    const year = Number.parseInt(it.slice(-2), 36) + YEAR_MIN;
+    if (!Number.isSafeInteger(itunesId) || itunesId <= 0 || !validYear(year)) return null;
+    if (seen.has(itunesId)) continue;
+    seen.add(itunesId);
+    items.push({ itunesId, year });
+  }
+  return { shareId: m[1], part, total, name: name || 'Gedeelde playlist', items };
 }
 
 /* ---------- Spotify playlist links ---------- */
@@ -466,22 +454,29 @@ export function cleanIsrc(v) {
 
 /** Store links follow from the ids (so they are never stored). */
 export const appleMusicUrl = (itunesId) => (posInt(itunesId) ? `https://music.apple.com/nl/song/${Number(itunesId)}` : null);
-export const deezerUrl = (deezerId) => (posInt(deezerId) ? `https://www.deezer.com/track/${Number(deezerId)}` : null);
 
-const SOURCE_KINDS = ['spotify', 'deezer'];
 export const SOURCE_NAME_MAX = 100;
 /**
- * Where a playlist came from: { kind: 'spotify' | 'deezer', id, name } (id always a string:
- * a Spotify playlist id of 22 characters, a Deezer playlist number). Null when invalid.
+ * Where a playlist came from: { kind: 'spotify', id, name } (id: the Spotify playlist id of 22
+ * characters). Null when invalid, and for the 'deezer' source that v3-10 stored (see
+ * legacySource): such a list is read as an ordinary saved list.
  */
 export function cleanSource(src) {
-  if (!src || typeof src !== 'object' || Array.isArray(src) || !SOURCE_KINDS.includes(src.kind)) return null;
-  const id = typeof src.id === 'number' ? String(src.id) : src.id;
-  if (typeof id !== 'string') return null;
-  if (src.kind === 'spotify' && !isSpId(id)) return null;
-  if (src.kind === 'deezer' && !(/^\d{1,16}$/.test(id) && posInt(id))) return null;
+  if (!src || typeof src !== 'object' || Array.isArray(src) || src.kind !== 'spotify') return null;
+  if (!isSpId(src.id)) return null;
   const name = String(src.name ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, SOURCE_NAME_MAX);
-  return { kind: src.kind, id: src.kind === 'deezer' ? String(Number(id)) : id, name };
+  return { kind: 'spotify', id: src.id, name };
+}
+
+/**
+ * The source a playlist imported from Deezer carries in data of v3-10: { kind: 'deezer', id
+ * (a playlist number), name }. Not a source any more (cleanSource drops it), but valid stored
+ * data: the account server accepts a save that still has it (an app of v3-10).
+ */
+export function legacySource(src) {
+  if (!src || typeof src !== 'object' || Array.isArray(src) || src.kind !== 'deezer') return false;
+  const id = typeof src.id === 'number' ? String(src.id) : src.id;
+  return typeof id === 'string' && /^\d{1,16}$/.test(id) && posInt(id) && (src.name == null || typeof src.name === 'string');
 }
 
 export function cleanName(name, fallback = 'Mijn playlist') {
@@ -490,9 +485,11 @@ export function cleanName(name, fallback = 'Mijn playlist') {
 }
 
 /**
- * One stored track, sanitised. Returns null when it cannot be played anywhere (no Apple Music,
- * Spotify or Deezer id). Format: { n, itunesId, title, artist, album, year, yearSure,
- * spotifyId?, deezerId?, isrc?, yearFixed?, yearChecked?, match? }. `yearFixed`: the player typed
+ * One stored track, sanitised. Kept when it has an Apple Music or Spotify id, or enough to find
+ * it again (an ISRC, or title + artist: Spotify searches it, the Apple Music match may add a
+ * fragment); else null. Format: { n, itunesId, title, artist, album, year, yearSure,
+ * spotifyId?, isrc?, yearFixed?, yearChecked?, match?, deezerId? }. `deezerId` is no source any
+ * more: it is only carried along for an app of v3-10 (see the top of this file). `yearFixed`: the player typed
  * this year (background work never changes it). `yearChecked`: the background year check
  * (enrich.js) has finished for this track (only ever true). Old data with previewUrl / trackViewUrl loads; those two
  * are dropped (looked up fresh / derived, see the top of this file).
@@ -516,7 +513,7 @@ export function cleanTrack(t) {
   if (t.yearFixed === true && out.year != null) { out.yearFixed = true; out.yearSure = true; }
   if (t.yearChecked === true) out.yearChecked = true;
   if (['pending', 'none'].includes(t.match)) out.match = t.match;
-  if (!out.itunesId && !out.spotifyId && !out.deezerId) return null;
+  if (!out.itunesId && !out.spotifyId && !out.isrc && !(hasText(out.title) && hasText(out.artist))) return null;
   return out;
 }
 
@@ -583,8 +580,8 @@ export const padN = (n) => String(n).padStart(3, '0');
 /**
  * A playlist as a deck, in the same format as data/deck.json:
  * { id, name, kind, cards, byId } with cards { id, title, artist, year, itunesId,
- * previewUrl (null: looked up at play time), trackViewUrl (derived), spotifyId?, deezerId?,
- * isrc?, code? }. Which songs: deckTracks(p, source) (without a year: never; with a year
+ * previewUrl (null: looked up at play time), trackViewUrl (derived), spotifyId?, isrc?,
+ * code? }. Which songs: deckTracks(p, source) (without a year: never; with a year
  * still being checked: see there). Default source 'spotify': every playable song (print).
  */
 export function playlistDeck(p, source = 'spotify') {
@@ -593,10 +590,9 @@ export function playlistDeck(p, source = 'spotify') {
     .map((t) => {
       const c = {
         id: padN(t.n), title: t.title, artist: t.artist, year: t.year,
-        itunesId: t.itunesId || null, previewUrl: null, trackViewUrl: appleMusicUrl(t.itunesId) || deezerUrl(t.deezerId),
+        itunesId: t.itunesId || null, previewUrl: null, trackViewUrl: appleMusicUrl(t.itunesId),
       };
       if (t.spotifyId) c.spotifyId = t.spotifyId;
-      if (t.deezerId) c.deezerId = t.deezerId;
       if (t.isrc) c.isrc = t.isrc;
       if (t.itunesId) c.code = encodeCardCode(t.itunesId, t.year);
       return c;
@@ -608,7 +604,7 @@ export function playlistDeck(p, source = 'spotify') {
   };
 }
 
-/** Backup file content for one playlist. */
+/** Backup file content for one playlist (a v3-10 deezerId goes along, see the top of this file). */
 export function exportPlaylist(p) {
   return {
     app: 'TimeTunesr', type: 'playlist', v: STORE_VERSION, exported: new Date().toISOString(),

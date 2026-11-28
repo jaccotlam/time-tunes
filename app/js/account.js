@@ -21,11 +21,13 @@
 // that background work keeps finishing is not sent again every few seconds.
 import { store } from './ui.js';
 import { serverBase, SERVER_HOST_KEY, BACKUP_KEY } from './multi/server-session.js';
+import { cleanLinks, sameLinks } from './spotify-links.js';
 
 export const ACCOUNT_KEY = 'timetunesr.account.v1';
 const PLAYLISTS_KEY = 'timetunesr.playlists.v1'; // playlists.js KEY
 const ACTIVE_DECK_KEY = 'timetunesr.activeDeck.v1'; // playlists.js ACTIVE_KEY
 const SPOTIFY_ID_KEY = 'timetunesr.spotify.clientId.v1'; // spotify.js K.clientId
+const SPOTIFY_LINKS_KEY = 'timetunesr.spotify.links.v1'; // spotify.js K.links
 const HOST_NAME_KEY = 'timetunesr.multiName.v1'; // the spelleider's name (room-host.js)
 const SETTINGS_KEY = 'timetunesr.multiSettings.v1'; // the lobby's last settings (server-session.js)
 
@@ -42,20 +44,34 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 /**
  * Merge this device's state with the account's. Both: { playlists: [...], spotifyClientId,
- * prefs, deleted? } (deleted: { playlistId: time } tombstones). Rules:
+ * spotifyLinks?, prefs, deleted? } (deleted: { playlistId: time } tombstones). `baseIn`: the
+ * account's data as this device last synced it (the common ancestor), or null on a device that
+ * never synced with this account. Rules:
  * - playlists by id: in both places the newest `updated` wins (equal: the account's);
  *   only here -> uploaded; only in the account -> put on this device; a tombstone at or after
  *   a playlist's `updated` removes it on both sides (a playlist changed after it was deleted
- *   elsewhere comes back);
- * - the Spotify Client ID: the account's when it has one, else this device's is uploaded;
- * - prefs per field: the account's when set, else this device's.
+ *   elsewhere comes back). (The `updated` stamps make this a three-way rule already.)
+ * - the Spotify Client ID, the Spotify links (spotifyLinks [{ id, name }], several Spotify apps)
+ *   and the preference the device keeps itself (hostName) are three-way against the base:
+ *   changed only here -> this device's wins and is uploaded; changed only in the account -> the
+ *   account's; changed in both -> the account's, except for the links, which are merged per
+ *   link (linkMerge: the account's list and order, plus a link renamed or removed only here,
+ *   plus the links added only here at the end, up to LINKS_MAX);
+ * - no base (a fresh device, the first sync): the account's Client ID when it has one, else
+ *   this device's; the account's links when it has a list, else this device's (an account of
+ *   before, with only spotifyClientId, gets the device's list); prefs per field the account's
+ *   when set, else this device's;
+ * - the Client ID the host logs in with himself is always one of the links;
+ * - opts.links false: the server does not keep the links (no 'account-links'): this device's
+ *   list stays as it is and never counts as a change to save.
  * Returns { local, remote, localChanged, remoteChanged, summary, text } with `local` and
  * `remote` the new states (equal in content), `summary` counts and names, `text` Dutch lines
  * for the screen ("3 playlists van dit toestel toegevoegd aan je account").
  */
-export function mergeAccountData(localIn = {}, remoteIn = {}) {
+export function mergeAccountData(localIn = {}, remoteIn = {}, baseIn = null, { links: linksKept = true } = {}) {
   const local = normalizeState(localIn);
   const remote = normalizeState(remoteIn);
+  const base = baseIn && typeof baseIn === 'object' ? normalizeState(baseIn) : null;
   const deleted = { ...remote.deleted };
   for (const [id, at] of Object.entries(local.deleted)) if (!(deleted[id] >= at)) deleted[id] = at;
   const L = new Map(local.playlists.map((p) => [p.id, p]));
@@ -78,16 +94,61 @@ export function mergeAccountData(localIn = {}, remoteIn = {}) {
   }
   // a tombstone that won is kept only while it matters: one for a playlist that came back goes
   for (const p of out) delete deleted[p.id];
-  let spotifyClientId = remote.spotifyClientId;
-  if (remote.spotifyClientId && remote.spotifyClientId !== local.spotifyClientId) summary.spotify = 'fromAccount';
-  if (!remote.spotifyClientId && local.spotifyClientId) { spotifyClientId = local.spotifyClientId; summary.spotify = 'toAccount'; }
+  let spotifyClientId;
+  let spotifyLinks;
   const prefs = { ...remote.prefs };
-  for (const [k, v] of Object.entries(local.prefs)) if (prefs[k] === undefined && v !== undefined) { prefs[k] = v; summary.prefs.push(k); }
-  const merged = { playlists: out, spotifyClientId, prefs, deleted };
-  const localState = { playlists: out, spotifyClientId, prefs };
+  if (!base) {
+    // a fresh device: the account wins (as before the three-way rule)
+    spotifyClientId = remote.spotifyClientId || local.spotifyClientId;
+    // links: the account's list when it has one; the own Client ID is always in it (an app of
+    // before may have changed only spotifyClientId: that one comes in front)
+    spotifyLinks = !linksKept ? local.spotifyLinks : remote.hasLinks ? remote.spotifyLinks : local.hasLinks ? local.spotifyLinks : [];
+    if (!spotifyClientId && !remote.hasLinks) spotifyLinks = [];
+    for (const [k, v] of Object.entries(local.prefs)) if (prefs[k] === undefined && v !== undefined) { prefs[k] = v; summary.prefs.push(k); }
+  } else {
+    // changed in the account since the last sync -> the account's (also when changed here too);
+    // else this device's (changed here, or not changed at all)
+    spotifyClientId = remote.spotifyClientId !== base.spotifyClientId ? remote.spotifyClientId : local.spotifyClientId;
+    const B = rawLinks(base);
+    // an account written only by apps of before has no list: they never change it
+    const R = remote.listed ? remote.list : B;
+    const L = local.spotifyLinks;
+    const here = !sameLinks(L, B);
+    const there = !sameLinks(R, B);
+    spotifyLinks = !linksKept || !there ? L : !here ? R : linkMerge(L, R, B);
+    // an app of before removed its Client ID in the account: that link goes too
+    if (!spotifyClientId && base.spotifyClientId && remote.spotifyClientId !== base.spotifyClientId) spotifyLinks = spotifyLinks.filter((l) => l.id !== base.spotifyClientId);
+    for (const [k, v] of Object.entries(local.prefs)) {
+      if (v === undefined) continue;
+      if (prefs[k] === undefined || (v !== base.prefs[k] && prefs[k] === base.prefs[k])) {
+        if (prefs[k] !== v) summary.prefs.push(k);
+        prefs[k] = v;
+      }
+    }
+  }
+  if (spotifyClientId && !spotifyLinks.some((l) => l.id === spotifyClientId)) {
+    // the Client ID changed by an app of before takes the place of the own link it replaced (as
+    // setClientId does), else it comes in front
+    const prev = [base?.spotifyClientId, local.spotifyClientId].find((id) => id && id !== spotifyClientId && spotifyLinks.some((l) => l.id === id) && (base || !remote.hasLinks));
+    const at = prev ? spotifyLinks.findIndex((l) => l.id === prev) : -1;
+    spotifyLinks = at >= 0 ? cleanLinks(spotifyLinks.map((l, i) => (i === at ? { ...l, id: spotifyClientId } : l)))
+      : cleanLinks([{ id: spotifyClientId, name: '' }, ...spotifyLinks]);
+  }
+  // links but no own Client ID: Link 1 is the own one (as spotify.js setLinks decides)
+  if (!spotifyClientId && spotifyLinks.length) spotifyClientId = spotifyLinks[0].id;
+  if (spotifyClientId && spotifyClientId !== local.spotifyClientId && spotifyClientId === remote.spotifyClientId) summary.spotify = 'fromAccount';
+  else if (spotifyClientId && spotifyClientId !== remote.spotifyClientId) summary.spotify = 'toAccount';
+  const plain = (list) => list.length <= 1 && !list.some((l) => l.name); // nothing more than the Client ID itself
+  // one link and no list in the account yet: nothing new to save (an account of before stays as it was)
+  const linksChanged = linksKept && (remote.listed ? !sameLinks(remote.list, spotifyLinks) : !plain(spotifyLinks));
+  if (!summary.spotify && !sameLinks(local.spotifyLinks, spotifyLinks)) summary.spotify = 'linksFromAccount';
+  else if (!summary.spotify && linksChanged && !plain(spotifyLinks)) summary.spotify = 'linksToAccount';
+  const merged = { playlists: out, spotifyClientId, spotifyLinks, prefs, deleted };
   // (only the host name of the prefs is kept on the device itself)
-  const localChanged = !sameJson(local.playlists, out) || local.spotifyClientId !== spotifyClientId || (prefs.hostName !== undefined && local.prefs.hostName === undefined);
-  const remoteChanged = !sameJson(remote.playlists, out) || remote.spotifyClientId !== spotifyClientId || !sameJson(remote.prefs, prefs) || !sameJson(remote.deleted, deleted);
+  const hostName = prefs.hostName;
+  const localState = { playlists: out, spotifyClientId, spotifyLinks, prefs: { ...prefs, ...(hostName !== undefined ? { hostName } : {}) } };
+  const localChanged = !sameJson(local.playlists, out) || local.spotifyClientId !== spotifyClientId || !sameLinks(local.spotifyLinks, spotifyLinks) || (hostName !== undefined && local.prefs.hostName !== hostName);
+  const remoteChanged = !sameJson(remote.playlists, out) || remote.spotifyClientId !== spotifyClientId || linksChanged || !sameJson(remote.prefs, prefs) || !sameJson(remote.deleted, deleted);
   return { local: localState, remote: merged, localChanged, remoteChanged, summary, text: summaryText(summary) };
 }
 
@@ -95,9 +156,45 @@ function normalizeState(s) {
   return {
     playlists: Array.isArray(s?.playlists) ? s.playlists.filter((p) => p && typeof p.id === 'string') : [],
     spotifyClientId: typeof s?.spotifyClientId === 'string' ? s.spotifyClientId.toLowerCase() : '',
+    // the list as it is in effect: the Client ID alone when there is no list (yet)
+    spotifyLinks: effectiveLinks(s),
+    hasLinks: cleanLinks(s?.spotifyLinks).length > 0,
+    // the list exactly as stored (an account written only by apps of before has none: listed false)
+    listed: Array.isArray(s?.spotifyLinks),
+    list: cleanLinks(s?.spotifyLinks),
     prefs: s?.prefs && typeof s.prefs === 'object' ? { ...s.prefs } : {},
     deleted: s?.deleted && typeof s.deleted === 'object' ? { ...s.deleted } : {},
   };
+}
+function effectiveLinks(s) {
+  const cid = typeof s?.spotifyClientId === 'string' ? s.spotifyClientId.toLowerCase() : '';
+  const list = cleanLinks(s?.spotifyLinks);
+  return cid && !list.some((l) => l.id === cid) ? cleanLinks([{ id: cid, name: '' }, ...list]) : list;
+}
+/** The links of a synced state as stored (the Client ID alone when it has no list). */
+const rawLinks = (n) => (n.listed ? n.list : n.spotifyClientId ? [{ id: n.spotifyClientId, name: '' }] : []);
+
+/**
+ * Both this device and the account changed the links since the last sync (base): the account's
+ * list in its order, where a link that only this device renamed gets this device's name and a
+ * link that only this device removed goes; then the links only this device added, at the end,
+ * up to LINKS_MAX. A link the account removed stays removed; one renamed in both places keeps
+ * the account's name. Deterministic: the same three lists always give the same result.
+ */
+export function linkMerge(local, remote, base) {
+  const B = new Map(cleanLinks(base).map((l) => [l.id, l]));
+  const L = new Map(cleanLinks(local).map((l) => [l.id, l]));
+  const R = cleanLinks(remote);
+  const out = [];
+  for (const r of R) {
+    const b = B.get(r.id);
+    const l = L.get(r.id);
+    const untouchedThere = b && b.name === r.name;
+    if (untouchedThere && !l) continue; // removed here only
+    out.push(untouchedThere && l && l.name !== b.name ? { id: r.id, name: l.name } : r);
+  }
+  for (const l of L.values()) if (!B.has(l.id) && !R.some((r) => r.id === l.id)) out.push(l); // added here
+  return cleanLinks(out);
 }
 const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const same = (a, b) => sameJson(a, b);
@@ -112,6 +209,8 @@ export function summaryText(s) {
   if (s.removedHere.length) lines.push(`${plural(s.removedHere.length, 'playlist', 'playlists')} van dit toestel verwijderd (op een ander toestel weggegooid)`);
   if (s.spotify === 'fromAccount') lines.push('Spotify Client ID van je account op dit toestel gezet');
   if (s.spotify === 'toAccount') lines.push('Spotify Client ID van dit toestel bewaard in je account');
+  if (s.spotify === 'linksFromAccount') lines.push('Spotify-links van je account op dit toestel gezet');
+  if (s.spotify === 'linksToAccount') lines.push('Spotify-links van dit toestel bewaard in je account');
   return lines;
 }
 
@@ -121,9 +220,14 @@ function readLocal() {
   const playlists = Array.isArray(raw?.lists) ? raw.lists : Array.isArray(raw) ? raw : [];
   const sp = store.get(SPOTIFY_ID_KEY, '');
   const hostName = store.get(HOST_NAME_KEY, '');
+  const spotifyClientId = typeof sp === 'string' && /^[0-9a-f]{32}$/i.test(sp.trim()) ? sp.trim().toLowerCase() : '';
+  // the device's links (spotify.js K.links): only stored once there is more than the Client ID
+  // itself; the merge adds the Client ID when it is not in it (normalizeState)
+  const spotifyLinks = cleanLinks(store.get(SPOTIFY_LINKS_KEY, null));
   return {
     playlists,
-    spotifyClientId: typeof sp === 'string' && /^[0-9a-f]{32}$/i.test(sp.trim()) ? sp.trim().toLowerCase() : '',
+    spotifyClientId,
+    spotifyLinks,
     prefs: typeof hostName === 'string' && hostName.trim() ? { hostName: hostName.trim() } : {},
   };
 }
@@ -134,10 +238,19 @@ async function writeLocal(state, before) {
     store.set(PLAYLISTS_KEY, { v: 1, lists: state.playlists });
     try { (await import('./playlists.js')).reload(); } catch { /* not in this page */ }
   }
-  if (state.spotifyClientId !== before.spotifyClientId) {
-    try { (await import('./spotify.js')).setClientId(state.spotifyClientId); } catch { store.set(SPOTIFY_ID_KEY, state.spotifyClientId); }
+  if (state.spotifyClientId !== before.spotifyClientId || !sameLinks(state.spotifyLinks, effectiveLinks(before))) {
+    const links = cleanLinks(state.spotifyLinks);
+    const own = links.findIndex((l) => l.id === state.spotifyClientId);
+    try {
+      const sp = await import('./spotify.js');
+      if (links.length) sp.setLinks(links, { own: own >= 0 ? own : null });
+      if (sp.getClientId() !== state.spotifyClientId) sp.setClientId(state.spotifyClientId);
+    } catch {
+      store.set(SPOTIFY_ID_KEY, state.spotifyClientId);
+      if (links.length > 1 || links.some((l) => l.name)) store.set(SPOTIFY_LINKS_KEY, links); else store.remove(SPOTIFY_LINKS_KEY);
+    }
   }
-  if (state.prefs.hostName && !store.get(HOST_NAME_KEY, '')) store.set(HOST_NAME_KEY, state.prefs.hostName);
+  if (state.prefs.hostName && store.get(HOST_NAME_KEY, '') !== state.prefs.hostName) store.set(HOST_NAME_KEY, state.prefs.hostName);
 }
 
 // ---------- session ----------
@@ -183,6 +296,15 @@ export async function available({ fresh = false } = {}) {
   if (r.ok) healthCache = { base: base.http, at: Date.now(), result, features: Array.isArray(r.data?.features) ? r.data.features : [] };
   return result;
 }
+
+/**
+ * Does the server keep the Spotify links (health 'account-links')? An older one refuses the
+ * field. Only asked after guard() (settle), so the features of this server are known: a save
+ * never leaves the links out just because the health check had not been done yet.
+ */
+const linksSaves = () => healthCache?.base === serverBase()?.http && !!healthCache.features?.includes('account-links');
+/** Without 'account-links' a save leaves the list out (the server keeps spotifyClientId as before). */
+const forServer = (data, keep = linksSaves()) => { if (keep) return data; const { spotifyLinks, ...rest } = data; return rest; };
 
 /** Does the server take a save with stubs for unchanged playlists (health 'account-delta')? */
 const deltaSaves = () => healthCache?.base === serverBase()?.http && !!healthCache.features?.includes('account-delta');
@@ -279,6 +401,7 @@ function removeAccountData() {
   if (raw?.lists) store.set(PLAYLISTS_KEY, { v: 1, lists: raw.lists.filter((p) => !ids.has(p.id)) });
   if (ids.has(store.get(ACTIVE_DECK_KEY, ''))) store.remove(ACTIVE_DECK_KEY);
   if (s?.data?.spotifyClientId && store.get(SPOTIFY_ID_KEY, '') === s.data.spotifyClientId) store.remove(SPOTIFY_ID_KEY);
+  if (Array.isArray(s?.data?.spotifyLinks) && s.data.spotifyLinks.length && sameLinks(store.get(SPOTIFY_LINKS_KEY, null), s.data.spotifyLinks)) store.remove(SPOTIFY_LINKS_KEY);
   import('./playlists.js').then((m) => m.reload()).catch(() => {});
 }
 
@@ -326,31 +449,39 @@ function localDeleted(s, local) {
 
 /** Merge `remote` ({rev, data}) with this device and save the result where needed. */
 async function settle(remote, { tries = 3 } = {}) {
+  // the server's features decide what a save may carry (the links): know them first
+  const no = await guard();
+  if (no) return no;
+  const keepLinks = linksSaves();
   let s = readSession();
   let rem = remote;
+  // the common ancestor for the three-way merge: the account as this device last synced it,
+  // then (after a conflict) the account state this device just merged with
+  let base = s?.data || null;
   for (let i = 0; i < tries && s; i++) {
     const local = readLocal();
-    const m = mergeAccountData({ ...local, deleted: localDeleted(s, local) }, rem.data);
+    const m = mergeAccountData({ ...local, deleted: localDeleted(s, local) }, rem.data, base, { links: keepLinks });
     await writeLocal(m.local, local);
     let rev = rem.rev;
-    let data = m.remote;
+    let data = forServer(m.remote, keepLinks); // what the account holds after this (no links on a server without them)
     if (m.remoteChanged) {
       const delta = deltaSaves();
-      // format: this app knows the playlist format of 2026-11 (2000 songs, Deezer, ISRC ...): the
+      // format: this app knows the playlist format of 2026-11 (2000 songs, ISRC, yearChecked ...): the
       // server lets only such an app overwrite playlists that need it (DATA_FORMAT in accounts.mjs)
-      const body = delta ? { rev, data: deltaData(m.remote, rem.data), delta: true, format: DATA_FORMAT } : { rev, data: m.remote, format: DATA_FORMAT };
+      const body = delta ? { rev, data: forServer(deltaData(m.remote, rem.data), keepLinks), delta: true, format: DATA_FORMAT } : { rev, data: forServer(m.remote, keepLinks), format: DATA_FORMAT };
       lastSent = { at: Date.now(), bytes: JSON.stringify(body).length };
       const r = await authed('POST', '/account/data', body);
       if (!r.ok && r.code === 'conflict' && r.status === 409) {
         // another device saved in between: merge with that and try again
         const fresh = await authed('GET', '/account');
         if (!fresh.ok) return fresh;
+        base = rem.data;
         rem = { rev: fresh.rev, data: fresh.data };
         continue;
       }
       if (!r.ok) return r;
       rev = r.rev;
-      data = r.delta ? m.remote : r.data;
+      data = r.delta ? forServer(m.remote, keepLinks) : r.data;
     }
     s = readSession();
     if (!s) return { ok: false, code: 'loggedout', message: 'Je bent niet ingelogd.' };

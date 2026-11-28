@@ -1,10 +1,11 @@
-// 2000-song playlists and the three catalogues (Apple Music, Spotify, Deezer), engine side:
-// the track format (deezerId, isrc, source, yearFixed), playable() as the one rule, the
-// storage size of a 2000-song list (and a full localStorage), importFromSource, old data,
-// backups and share links, the Spotify ISRC match and the paged import with a fake Web API,
-// the Deezer fragment in the player, a room started with 2000 cards on the real hub (message
-// size, backup, restore) and account sync of big lists (chunked Durable Object storage, the
-// per-value limit, delta saves). The measured numbers are printed as test diagnostics.
+// 2000-song playlists and the two catalogues (Apple Music, Spotify), engine side: the track
+// format (isrc, source, yearFixed; what is kept), playable() as the one rule, the storage size
+// of a 2000-song list (and a full localStorage), importFromSource, old data, backups and share
+// links, the Spotify ISRC match and the paged import with a fake Web API, the fragment in the
+// player (Apple Music only), a room started with 2000 cards on the real hub (message size,
+// backup, restore) and account sync of big lists (chunked Durable Object storage, the
+// per-value limit, delta saves). The measured numbers are printed as test diagnostics. (The
+// Deezer data of v3-10: tests/unit/stored-data-migration.test.mjs.)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -63,11 +64,11 @@ const { playableWith } = await import('../../app/js/multi/mix.js');
 const kB = (n) => `${(n / 1024).toFixed(1)} kB`;
 const bytes = (v) => Buffer.byteLength(typeof v === 'string' ? v : JSON.stringify(v));
 
-// realistic songs: a 10-digit Apple id, a Spotify id, an ISRC, a Deezer id, ordinary names
+// realistic songs: a 10-digit Apple id, a Spotify id, an ISRC, ordinary names
 const spId = (i) => `${'4uLU6hMCjMI75M1A2tKUQC'.slice(0, 16)}${String(i).padStart(6, '0')}`;
 const isrc = (i) => `NLA${String(10 + (i % 80)).padStart(2, '0')}${String(8000000 + i).slice(-7)}`.slice(0, 12);
 const song = (i) => ({
-  n: i + 1, itunesId: 1422648000 + i, spotifyId: spId(i), deezerId: 3135000 + i, isrc: isrc(i),
+  n: i + 1, itunesId: 1422648000 + i, spotifyId: spId(i), isrc: isrc(i),
   title: `Liedje nummer ${i + 1} (Radio Edit)`, artist: `Artiest ${i % 300} & De Band`, album: `Album van het jaar ${1960 + (i % 60)}`,
   year: 1960 + (i % 60), yearSure: i % 3 !== 0,
 });
@@ -80,17 +81,17 @@ const oldSong = (i) => ({
 });
 
 // ---------- the track format ----------
-test('trackformaat: deezerId, isrc, yearFixed en herkomst; een nummer blijft met elk van de drie ids', () => {
+test('trackformaat: isrc, yearFixed en herkomst; een nummer blijft met een id of genoeg om het terug te vinden', () => {
   assert.equal(MAX_TRACKS, 2000);
   assert.equal(MAX_IMPORT, MAX_TRACKS, 'Spotify-import volgt het maximum');
   assert.equal(MAX_CARDS, MAX_TRACKS, 'kamer volgt het maximum');
-  const dz = cleanTrack({ deezerId: 3135556, title: 'Dancing Queen', artist: 'ABBA', year: 1976, isrc: ' se-ayd-76-01020 ' });
-  assert.deepEqual(dz, { n: 0, itunesId: null, title: 'Dancing Queen', artist: 'ABBA', album: '', year: 1976, yearSure: true, deezerId: 3135556, isrc: 'SEAYD7601020' });
+  const sp = cleanTrack({ spotifyId: spId(1), title: 'Dancing Queen', artist: 'ABBA', year: 1976, isrc: ' se-ayd-76-01020 ' });
+  assert.deepEqual(sp, { n: 0, itunesId: null, title: 'Dancing Queen', artist: 'ABBA', album: '', year: 1976, yearSure: true, spotifyId: spId(1), isrc: 'SEAYD7601020' });
   assert.ok(cleanTrack({ spotifyId: spId(1) }), 'alleen Spotify');
   assert.ok(cleanTrack({ itunesId: 5 }), 'alleen Apple');
-  assert.equal(cleanTrack({ isrc: 'SEAYD7601020', title: 'x' }), null, 'alleen een ISRC is niet genoeg');
-  for (const bad of [-1, 0, 1.5, '12a', true, Number.MAX_SAFE_INTEGER + 2, { a: 1 }]) assert.equal(cleanTrack({ itunesId: 1, deezerId: bad }).deezerId, undefined, `deezerId ${String(bad)}`);
-  assert.equal(cleanTrack({ itunesId: 1, deezerId: '77' }).deezerId, 77, 'cijfers als tekst');
+  assert.ok(cleanTrack({ isrc: 'SEAYD7601020' }), 'een ISRC: Spotify vindt het nummer');
+  assert.ok(cleanTrack({ title: 'Dancing Queen', artist: 'ABBA' }), 'titel en artiest: Spotify zoekt het nummer');
+  for (const bad of [{}, { title: 'x' }, { artist: 'y' }, { title: ' ', artist: 'y' }, { isrc: 'kapot', title: 'x' }, { deezerId: 5 }]) assert.equal(cleanTrack(bad), null, `niets om mee te vinden: ${JSON.stringify(bad)}`);
   for (const bad of ['SEAYD760102', 'SEAYD76010200', '1EAYD7601020', 'SEAYD76010A0', 42, null]) assert.equal(cleanIsrc(bad), null, `isrc ${bad}`);
   assert.equal(cleanTrack({ itunesId: 1, year: 1980, yearFixed: true, yearSure: false }).yearSure, true, 'een eigen jaar is zeker');
   assert.equal(cleanTrack({ itunesId: 1, yearFixed: true }).yearFixed, undefined, 'geen jaar, niets vast');
@@ -105,11 +106,10 @@ test('trackformaat: deezerId, isrc, yearFixed en herkomst; een nummer blijft met
   assert.equal(old.spotifyId, spId(0));
   // source
   assert.deepEqual(cleanSource({ kind: 'spotify', id: spId(3), name: '  Mijn   lijst ' }), { kind: 'spotify', id: spId(3), name: 'Mijn lijst' });
-  assert.deepEqual(cleanSource({ kind: 'deezer', id: 1266971851, name: 'Top Netherlands' }), { kind: 'deezer', id: '1266971851', name: 'Top Netherlands' });
-  for (const bad of [null, 'x', { kind: 'apple', id: '1' }, { kind: 'spotify', id: 'kort' }, { kind: 'deezer', id: '12a' }, { kind: 'deezer', id: -5 }, { kind: 'deezer', id: { x: 1 } }]) assert.equal(cleanSource(bad), null);
-  assert.equal(cleanSource({ kind: 'deezer', id: '1', name: 'x'.repeat(500) }).name.length, 100);
-  const p = cleanPlaylist({ id: 'abc', name: 'L', tracks: [song(1)], source: { kind: 'deezer', id: '1266971851', name: 'Top' } });
-  assert.deepEqual(p.source, { kind: 'deezer', id: '1266971851', name: 'Top' });
+  for (const bad of [null, 'x', { kind: 'apple', id: '1' }, { kind: 'spotify', id: 'kort' }, { kind: 'spotify', id: 12 }, { kind: 'deezer', id: '1266971851' }]) assert.equal(cleanSource(bad), null);
+  assert.equal(cleanSource({ kind: 'spotify', id: spId(1), name: 'x'.repeat(500) }).name.length, 100);
+  const p = cleanPlaylist({ id: 'abc', name: 'L', tracks: [song(1)], source: { kind: 'spotify', id: spId(9), name: 'Top' } });
+  assert.deepEqual(p.source, { kind: 'spotify', id: spId(9), name: 'Top' });
   assert.equal(cleanPlaylist({ id: 'abc', name: 'L', tracks: [], source: { kind: 'evil' } }).source, undefined);
 });
 
@@ -117,7 +117,8 @@ test('playable(): één regel voor fragmenten en Spotify', () => {
   const cases = [
     // [track, preview, spotify]
     [{ year: 1980, itunesId: 5 }, true, true],
-    [{ year: 1980, deezerId: 5 }, true, true],
+    [{ year: 1980, deezerId: 5 }, false, false], // v3-10: a Deezer id is no source any more
+    [{ year: 1980, deezerId: 5, isrc: 'SEAYD7601020' }, false, true],
     [{ year: 1980, previewUrl: 'https://x.example/a.m4a' }, true, true],
     [{ year: 1980, spotifyId: spId(1) }, false, true],
     [{ year: 1980, isrc: 'SEAYD7601020' }, false, true],
@@ -146,12 +147,12 @@ test('opslag: bytes per nummer voor en na, een lijst van 2000 nummers', (t) => {
   const oldOne = bytes(oldSong(10));
   const newOne = bytes(cleanTrack(oldSong(10)));
   const full = bytes(cleanTrack(song(10)));
-  t.diagnostic(`bytes per opgeslagen nummer: oud (v3-9, met preview- en winkeladres) ${oldOne}, nu ${newOne}, nu met Spotify + Deezer + ISRC ${full}`);
+  t.diagnostic(`bytes per opgeslagen nummer: oud (v3-9, met preview- en winkeladres) ${oldOne}, nu ${newOne}, nu met Apple + Spotify + ISRC ${full}`);
   assert.ok(newOne < oldOne * 0.6, 'flink kleiner');
   const list = cleanPlaylist({ id: 'groot', name: 'Groot', tracks: Array.from({ length: 2000 }, (_, i) => song(i)) });
   assert.equal(list.tracks.length, 2000);
   const oldList = { id: 'groot', name: 'Groot', tracks: Array.from({ length: 2000 }, (_, i) => oldSong(i)) };
-  t.diagnostic(`2000 nummers in localStorage: oud ${kB(bytes(oldList))}, nu ${kB(bytes(list))} (met alle drie de ids)`);
+  t.diagnostic(`2000 nummers in localStorage: oud ${kB(bytes(oldList))}, nu ${kB(bytes(list))} (met Apple, Spotify en ISRC)`);
   assert.ok(bytes(list) < 500 * 1024);
   assert.ok(bytes(list) < MAX_PLAYLIST_BYTES / 2, 'ruim binnen de grens van het account');
   // more than 2000: capped
@@ -173,7 +174,7 @@ test('opslag: oude gegevens laden, 2000 nummers bewaren, en een volle opslag gee
   assert.equal(res.full, true);
   assert.equal(JSON.parse(storage.get(playlists.KEY)).lists[1].tracks.length, 2000);
   // duplicates by any id
-  const again = playlists.addTracks(p.id, [{ deezerId: 3135000 + 7, title: 'x' }, { isrc: isrc(8), spotifyId: spId(99999) }]);
+  const again = playlists.addTracks(p.id, [{ itunesId: 1422648000 + 7, title: 'x' }, { isrc: isrc(8), spotifyId: spId(99999) }]);
   assert.equal(again.duplicates, 2);
   // a full browser storage: nothing half-done, a message, the list as it was stored
   const before = storage.get(playlists.KEY);
@@ -214,7 +215,7 @@ test('importFromSource: eerste keer een nieuwe lijst, daarna dezelfde lijst bijw
   playlists.updateTrack(id, 1, { itunesId: 99, year: 1999, yearSure: false });
   assert.equal(playlists.get(id).tracks[0].year, 1975, 'eigen jaar blijft');
   assert.equal(playlists.get(id).tracks[0].itunesId, 99);
-  assert.equal(playlists.updateTracks(id, [{ n: 2, patch: { year: 1960, yearSure: true } }, { n: 3, patch: { deezerId: 5 } }, { n: 99999, patch: {} }]), 2, 'veel wijzigingen in één keer');
+  assert.equal(playlists.updateTracks(id, [{ n: 2, patch: { year: 1960, yearSure: true } }, { n: 3, patch: { isrc: isrc(2) } }, { n: 99999, patch: {} }]), 2, 'veel wijzigingen in één keer');
   playlists.rename(id, 'Mijn eigen naam');
   // the same source again, with 600 new songs and an ISRC for an old one
   const second = [...first.slice(0, 1400).map((t, i) => (i === 0 ? { ...t, spYear: 2001, isrc: isrc(0) } : t)),
@@ -233,41 +234,38 @@ test('importFromSource: eerste keer een nieuwe lijst, daarna dezelfde lijst bijw
   assert.equal(t1.isrc, isrc(0), 'lege velden aangevuld');
   assert.equal(playlists.all().length, 1);
   assert.equal(playlists.findBySource('spotify', spId(424242)).id, id);
-  // a Deezer source of the same name is another playlist
-  const d = playlists.importFromSource({ kind: 'deezer', id: 1266971851, name: 'Feest 2026' }, [{ deezerId: 1, title: 'x', artist: 'y', year: 2020 }]);
+  // another Spotify playlist of the same name is another playlist
+  const d = playlists.importFromSource({ kind: 'spotify', id: spId(424243), name: 'Feest 2026' }, [{ spotifyId: spId(1), title: 'x', artist: 'y', year: 2020 }]);
   assert.equal(d.created, true);
   assert.equal(d.playlist.name, 'Feest 2026', 'de eerste heet nu anders');
   assert.equal(playlists.importFromSource({ kind: 'nope', id: 1 }, []).error, 'source');
+  assert.equal(playlists.importFromSource({ kind: 'deezer', id: 1266971851, name: 'Top' }, [{ isrc: isrc(1), title: 'x', artist: 'y' }]).error, 'source', 'geen Deezer-import meer');
 });
 
 test('back-up en deellink: nieuwe velden mee, oude bestanden en links blijven werken', () => {
-  const p = cleanPlaylist({ id: 'x', name: 'Mix', source: { kind: 'deezer', id: '3155776842', name: 'Top' }, tracks: [{ ...song(0), yearChecked: true }, { ...song(1), yearFixed: true }, { n: 3, deezerId: 77, title: 'Alleen Deezer', artist: 'Z', year: 1999 }] });
+  const p = cleanPlaylist({ id: 'x', name: 'Mix', source: { kind: 'spotify', id: spId(7), name: 'Top' }, tracks: [{ ...song(0), yearChecked: true }, { ...song(1), yearFixed: true }, { n: 3, deezerId: 77, isrc: isrc(3), title: 'Ooit van Deezer', artist: 'Z', year: 1999 }] });
   const file = JSON.parse(JSON.stringify(exportPlaylist(p)));
   const back = importBackup(file)[0];
   assert.deepEqual(back.source, p.source);
   assert.equal(back.tracks[0].isrc, song(0).isrc);
-  assert.equal(back.tracks[0].deezerId, song(0).deezerId);
   assert.equal(back.tracks[1].yearFixed, true);
   assert.equal(back.tracks[0].yearChecked, true, 'back-up houdt yearChecked');
-  assert.equal(back.tracks[2].deezerId, 77);
+  assert.equal(back.tracks[2].isrc, isrc(3), 'een nummer van een Deezer-import (v3-10) blijft');
+  assert.equal(back.tracks[2].deezerId, 77, 'met zijn (ongebruikte) deezerId, voor een app van v3-10');
   // a backup of the live version
   const oldFile = { app: 'TimeTunesr', type: 'playlist', v: STORE_VERSION, name: 'Oud', tracks: [{ n: 1, itunesId: 9, title: 'T', artist: 'A', album: '', year: 1971, yearSure: false }] };
   assert.equal(importBackup(oldFile)[0].tracks[0].itunesId, 9);
   assert.equal(migrateStore({ v: 1, lists: [oldFile] }).lists[0].tracks.length, 1);
-  // share: as before by default (Apple ids only), Deezer-only songs with deezer: true
+  // share: Apple ids only (a song without one is skipped)
   const plain = encodeShare(p, { shareId: 'abcd' });
   assert.equal(plain.shared, 2);
   assert.equal(plain.skipped, 1);
   assert.match(plain.payloads[0], /^1~abcd~1~1~[A-Za-z0-9_-]+~[0-9a-z.]+$/, 'zelfde vorm als vroeger');
-  const withDz = encodeShare(p, { shareId: 'abcd', deezer: true });
-  assert.equal(withDz.shared, 3);
-  const dec = decodeShare(withDz.payloads[0]);
-  assert.deepEqual(dec.deezerItems, [{ deezerId: 77, year: 1999 }]);
-  assert.equal(dec.items.length, 2);
+  assert.deepEqual(Object.keys(decodeShare(plain.payloads[0])).sort(), ['items', 'name', 'part', 'shareId', 'total']);
   // a link of the live version
   const live = '1~k3x9a~1~1~RmVlc3Q~nhwphc0g.nhwphd0k';
   assert.equal(decodeShare(live).items.length, 2);
-  assert.deepEqual(decodeShare(live).deezerItems, []);
+  assert.equal(decodeShare(`${live}~d1x2s`), null, 'een deel met Deezer-nummers bestaat niet (meer)');
   // 2000 songs: one link, and QR parts of 700 characters
   const big = cleanPlaylist({ id: 'b', name: 'Groot', tracks: Array.from({ length: 2000 }, (_, i) => song(i)) });
   const link = encodeShare(big, { shareId: 'abcd' });
@@ -304,14 +302,14 @@ test('Spotify: eerst exact op ISRC, dan titel en artiest; een ander nummer onder
     return { tracks: { items: [] } };
   });
   try {
-    const r1 = await spotify.resolveTrack({ id: '001', title: 'Dancing Queen', artist: 'ABBA', year: 1976, isrc: 'SEAYD7601020', deezerId: 5 });
+    const r1 = await spotify.resolveTrack({ id: '001', title: 'Dancing Queen', artist: 'ABBA', year: 1976, isrc: 'SEAYD7601020' });
     assert.equal(r1.id, 'a'.repeat(22));
     assert.equal(calls.length, 1, 'één zoekvraag');
     const r2 = await spotify.resolveTrack({ id: '002', title: 'Bohemian Rhapsody', artist: 'Queen', year: 1975, isrc: 'GBUM71029604' });
     assert.equal(r2.id, 'c'.repeat(22), 'ander nummer onder de ISRC: zoeken op titel');
     // cached per card
     const n = calls.length;
-    assert.equal((await spotify.resolveTrack({ id: '001', title: 'Dancing Queen', artist: 'ABBA', year: 1976, isrc: 'SEAYD7601020', deezerId: 5 })).id, 'a'.repeat(22));
+    assert.equal((await spotify.resolveTrack({ id: '001', title: 'Dancing Queen', artist: 'ABBA', year: 1976, isrc: 'SEAYD7601020' })).id, 'a'.repeat(22));
     assert.equal(calls.length, n);
     // a card without title / artist takes the ISRC hit
     assert.equal(isrcMatch({}, [spTrack('d'.repeat(22), 'X', 'Y')]).id, 'd'.repeat(22));
@@ -360,29 +358,23 @@ test('Spotify-import: 2000 nummers in pagina\'s van 50, een paar tegelijk, met v
   } finally { globalThis.fetch = realFetch; }
 });
 
-// ---------- the player: a Deezer fragment ----------
-test('speler: fragment via Deezer (trackPreview) voor een kaart zonder Apple-id; Apple eerst wanneer er een is', async () => {
+// ---------- the player: the fragment comes from Apple Music only ----------
+test('speler: fragment via Apple Music; een kaart zonder Apple-id (ook met een oude deezerId) speelt geen fragment en vraagt niets aan Deezer', async () => {
   storage.clear();
-  const asked = [];
-  player.setDeezerPreview(async (id) => { asked.push(id); return id === 404 ? null : `https://cdnt-preview.dzcdn.net/api/1/1/${id}.mp3?hdnea=exp=1`; });
+  const hosts = [];
   globalThis.fetch = async (url) => {
     const u = new URL(String(url));
+    hosts.push(u.hostname);
     if (u.hostname === 'itunes.apple.com') return new Response(JSON.stringify({ results: [{ trackId: 1, previewUrl: 'https://audio.example/apple.m4a', trackViewUrl: 'https://music.apple.com/x' }] }), { status: 200 });
     return new Response('{}', { status: 404 });
   };
   try {
-    assert.equal(await player.load({ id: '001', title: 'x', artist: 'y', year: 1980, deezerId: 3135556 }), true);
-    assert.equal(audio.src, 'https://cdnt-preview.dzcdn.net/api/1/1/3135556.mp3?hdnea=exp=1');
-    assert.deepEqual(asked, [3135556]);
     assert.equal(await player.load({ id: '002', title: 'x', artist: 'y', year: 1980, itunesId: 1, deezerId: 7 }), true);
     assert.equal(audio.src, 'https://audio.example/apple.m4a');
-    assert.deepEqual(asked, [3135556], 'Apple had er een: Deezer niet gevraagd');
-    assert.equal(await player.load({ id: '003', title: 'x', artist: 'y', year: 1980, deezerId: 404 }), false, 'geen fragment: geen afspelen');
+    assert.equal(await player.load({ id: '003', title: 'x', artist: 'y', year: 1980, deezerId: 3135556 }), false, 'geen Apple-id: geen fragment');
     assert.equal(player.state.status, 'error');
-    // without the Deezer module (not there yet / failing) nothing breaks
-    player.setDeezerPreview(async () => { throw new Error('kapot'); });
-    assert.equal(await player.load({ id: '004', title: 'x', artist: 'y', year: 1980, deezerId: 9 }), false);
-    player.setDeezerPreview(null); // back to the default (dynamic import of js/deezer.js)
+    assert.deepEqual([...new Set(hosts)], ['itunes.apple.com'], 'alleen Apple Music');
+    assert.equal(typeof player.setDeezerPreview, 'undefined');
   } finally { globalThis.fetch = realFetch; player.stop(); }
 });
 
@@ -419,7 +411,7 @@ test('kamer: starten met 2000 kaarten (berichtgrootte), back-up en herstel; te g
   const fit = fitCards(deck.cards);
   assert.equal(fit.cut, 0);
   const msg = JSON.stringify({ t: 'start', cards: fit.cards, mix: false, play: 'preview' });
-  t.diagnostic(`startbericht met 2000 kaarten (Apple + Spotify + Deezer): ${kB(utf8Length(msg))} (grens ${kB(MAX_CLIENT_MESSAGE)})`);
+  t.diagnostic(`startbericht met 2000 kaarten (Apple + Spotify): ${kB(utf8Length(msg))} (grens ${kB(MAX_CLIENT_MESSAGE)})`);
   assert.ok(utf8Length(msg) < MAX_CLIENT_MESSAGE * 0.75);
   assert.ok(parseClientMessage(msg));
   host.raw(msg);
@@ -427,7 +419,7 @@ test('kamer: starten met 2000 kaarten (berichtgrootte), back-up en herstel; te g
   const lead = host.last('state');
   assert.equal(lead.lead.room.phase, 'answering', JSON.stringify(host.last('error')));
   const songNow = lead.lead.song;
-  assert.ok(songNow.deezerId && songNow.itunesId && songNow.spotifyId, 'de muziektelefoon krijgt alle ids');
+  assert.ok(songNow.itunesId && songNow.spotifyId, 'de muziektelefoon krijgt alle ids');
   assert.equal(songNow.isrc, undefined, 'ISRC alleen zonder Spotify-id');
   const backupSize = host.lastSize('backup');
   t.diagnostic(`back-up van de kamer naar de telefoon van de eigenaar: ${kB(backupSize)}; staat van een speler: ${kB(a.lastSize('state'))}`);
@@ -453,8 +445,8 @@ test('kamer: starten met 2000 kaarten (berichtgrootte), back-up en herstel; te g
   assert.ok(utf8Length(JSON.stringify({ t: 'start', cards: f2.cards, mix: false, play: 'preview' })) <= MAX_CLIENT_MESSAGE);
   assert.ok(f2.cards.every((c) => c.title.length <= 100));
   // the server keeps the new ids and drops broken ones
-  const clean = cleanCards([{ id: '1', year: 1980, deezerId: 5, isrc: 'SEAYD7601020' }, { id: '2', year: 1980, deezerId: '5', isrc: 'kapot' }]);
-  assert.deepEqual(clean.map((c) => [c.deezerId, c.isrc]), [[5, 'SEAYD7601020'], [undefined, undefined]]);
+  const clean = cleanCards([{ id: '1', year: 1980, deezerId: 5, isrc: 'SEAYD7601020' }, { id: '2', year: 1980, isrc: 'kapot' }]);
+  assert.deepEqual(clean.map((c) => [c.deezerId, c.isrc]), [[undefined, 'SEAYD7601020'], [undefined, undefined]], 'een deezerId (v3-10) gaat niet mee');
 });
 
 // ---------- accounts with big lists ----------
@@ -546,5 +538,5 @@ test('account: het samenvoegen houdt de nieuwe velden en de herkomst', () => {
   p.source = { kind: 'spotify', id: spId(1), name: 'X' };
   const m = mergeAccountData({ playlists: [p] }, { playlists: [] });
   assert.deepEqual(m.remote.playlists[0].source, p.source);
-  assert.equal(m.remote.playlists[0].tracks[0].deezerId, song(0).deezerId);
+  assert.equal(m.remote.playlists[0].tracks[0].isrc, song(0).isrc);
 });

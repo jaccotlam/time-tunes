@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  cleanPick, readPick, setPick, clearPick, markPicked, takePicked, isPlaylistLink, countLine, safeImage,
+  cleanPick, readPick, setPick, clearPick, markPicked, takePicked, countLine, safeImage,
   yearsEta, etaText, yearsWaitText, readinessInfo, workLine, sourceLabel, rowMark, PICK_KEY, PICK_MAX_AGE_MS,
 } from '../../app/js/screens/music-bits.js';
 
@@ -38,17 +38,8 @@ test('pick mode: set, read, clear; the picked room is told once', () => {
   assert.equal(takePicked(s), null);
 });
 
-test('isPlaylistLink: links and long ids open a list, searches do not', () => {
-  assert.equal(isPlaylistLink('https://www.deezer.com/nl/playlist/1266971851'), true);
-  assert.equal(isPlaylistLink('deezer://www.deezer.com/playlist/123'), true);
-  assert.equal(isPlaylistLink('1266971851'), true);
-  assert.equal(isPlaylistLink('538'), false, 'Radio 538 is a search');
-  assert.equal(isPlaylistLink('Top 40'), false);
-  assert.equal(isPlaylistLink(''), false);
-});
-
 test('countLine and safeImage', () => {
-  assert.equal(countLine(688, 'Deezer Charts'), '688 nummers · door Deezer Charts');
+  assert.equal(countLine(688, 'Anouk'), '688 nummers · door Anouk');
   assert.equal(countLine(1, ''), '1 nummer');
   assert.equal(countLine(null, 'Sanne'), 'door Sanne');
   assert.equal(safeImage('https://cdn-images.dzcdn.net/a.jpg'), 'https://cdn-images.dzcdn.net/a.jpg');
@@ -134,6 +125,6 @@ test('rowMark: a mark only where the player can act', () => {
   assert.equal(rowMark({ year: 1983, yearSure: false }, { pending: true, fromSource: true }), null, 'catalogue year still being checked: the header says so');
   assert.equal(rowMark({ year: 1983, yearSure: false }, { pending: false, fromSource: true }), 'unsure', 'checked and still not sure');
   assert.equal(sourceLabel({ source: { kind: 'spotify' } }), 'Spotify');
-  assert.equal(sourceLabel({ source: { kind: 'deezer' } }), 'Deezer');
+  assert.equal(sourceLabel({ source: { kind: 'deezer' } }), 'eigen', 'a v3-10 Deezer import is an ordinary list');
   assert.equal(sourceLabel({}), 'eigen');
 });
