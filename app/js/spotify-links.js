@@ -14,14 +14,18 @@ export const LINK_NAME_MAX = 20;
 export const LINK_USERS_MAX = 5;
 
 const CLIENT_ID = /^[0-9a-f]{32}$/i;
-// zero-width and bidi control characters: a name shown on other phones must look like what it is
-const INVISIBLE = /[​-‏‪-‮⁦-⁩﻿]/g;
+// zero-width, soft hyphen, invisible operators and bidi control characters: a name shown on
+// other phones must look like what it is
+const INVISIBLE = /[\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
 
 /** A link's short name as plain one-line text of at most LINK_NAME_MAX characters ('' = none). */
 export function cleanLinkName(v) {
   if (typeof v !== 'string') return '';
-  return v.slice(0, LINK_NAME_MAX * 8).replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(INVISIBLE, '')
-    .replace(/\s+/g, ' ').trim().slice(0, LINK_NAME_MAX).trim();
+  const flat = v.slice(0, LINK_NAME_MAX * 8).replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(INVISIBLE, '')
+    .replace(/\s+/g, ' ').trim();
+  // cut by code point (Array.from), so an emoji at the end is never split into half a surrogate pair;
+  // a lone surrogate (half a pair in the input) goes
+  return Array.from(flat).filter((c) => !/^[\ud800-\udfff]$/.test(c)).slice(0, LINK_NAME_MAX).join('').trim();
 }
 
 /** A Client ID in its stored form (lower case), or null when it is not one. */
@@ -62,12 +66,15 @@ export const sameLinks = (a, b) => JSON.stringify(cleanLinks(a)) === JSON.string
  * is not documented). Tolerant on purpose: a 403 on the first call after the login (GET /me,
  * which needs no scope) counts whatever its text, unless it says Premium (playback without
  * Premium, or an app owner without Premium: other problems with their own message). A 403
- * that names a missing scope is not this either. Takes a SpotifyError ({ code, status,
+ * that names a missing scope is not this either. With `anyForbidden` every other 403 counts
+ * (the guest's own read calls in a room, see below). Takes a SpotifyError ({ code, status,
  * detail: { where, status, reason, message } }) or that detail itself.
  */
-export function notRegistered(e) {
+export function notRegistered(e, { anyForbidden = false } = {}) {
   if (!e || typeof e !== 'object') return false;
   if (e.code === 'not-allowed') return true;
+  // a TopError / PlaylistError ('scope') made from the SpotifyError: decide by what Spotify said
+  if (e.cause && typeof e.cause === 'object' && e.cause !== e) return notRegistered(e.cause, { anyForbidden });
   const d = e.detail && typeof e.detail === 'object' ? e.detail : e;
   const status = Number(d.status ?? e.status);
   if (status !== 403) return false;
@@ -75,6 +82,10 @@ export function notRegistered(e) {
   if (/premium/i.test(text)) return false;
   if (/scope/i.test(text)) return false;
   if (/regist|developer|dashboard|user management|allow ?list|whitelist|not.{0,20}allow/i.test(text)) return true;
+  // anyForbidden: a read call of the guest's own part (top songs, own playlists) right after a
+  // login that asked for exactly those scopes: Spotify may answer /me with 200 and only these
+  // with 403; nothing else forbids them
+  if (anyForbidden) return true;
   return /(^|\s)GET \/me$/.test(String(d.where || '')) || String(d.where || '') === '/me';
 }
 
@@ -92,9 +103,4 @@ export function linkCounts(links, use, members = null) {
     if (i >= 0) n[i]++;
   }
   return n;
-}
-
-/** "Link 1 · familie: 3 van 5 · Link 2: 1 van 5" */
-export function linkCountsText(links, counts) {
-  return cleanLinks(links).map((l, i) => `${linkLabel(i, l.name)}: ${Number(counts?.[i]) || 0} van ${LINK_USERS_MAX}`).join(' · ');
 }

@@ -67,11 +67,17 @@ export function setSettings(patch) {
   emit('settings');
 }
 
+/** A Client ID in its one stored form: lower case (Spotify does not mind; the tokens are kept by it). */
+const lc = (v) => String(v || '').trim().toLowerCase();
+
 export function getClientId() {
   const own = store.get(K.clientId, '');
-  return (typeof own === 'string' && own.trim()) || SPOTIFY_CLIENT_ID || '';
+  const v = (typeof own === 'string' && own.trim()) || SPOTIFY_CLIENT_ID || '';
+  // stored before the lower-case rule (typed as copied from the dashboard): stored again in lower case
+  if (typeof own === 'string' && own.trim() && own !== lc(own)) store.set(K.clientId, lc(own));
+  return lc(v);
 }
-export const defaultClientId = () => SPOTIFY_CLIENT_ID || '';
+export const defaultClientId = () => lc(SPOTIFY_CLIENT_ID);
 
 /**
  * Save a Client ID typed by the user; empty (or the default) falls back to config.js. This is
@@ -79,9 +85,10 @@ export const defaultClientId = () => SPOTIFY_CLIENT_ID || '';
  * value takes the place of the old one in the list (keeping its name), '' takes it out.
  */
 export function setClientId(value) {
-  const v = String(value || '').trim();
+  const v = lc(value);
   const prev = getClientId();
-  if (!v || v === SPOTIFY_CLIENT_ID) store.remove(K.clientId);
+  const before = getLinks().map((l) => l.id);
+  if (!v || v === lc(SPOTIFY_CLIENT_ID)) store.remove(K.clientId);
   else store.set(K.clientId, v);
   const now = getClientId();
   // keep the list of links in step (it is only stored once the host has more than his own)
@@ -94,12 +101,31 @@ export function setClientId(value) {
     else next.unshift({ id: now, name: '' });
     writeLinks(next);
   }
-  const tokenApp = readToken()?.clientId || prev;
+  const tokenApp = lc(readToken()?.clientId || prev);
   if (isConnected() && tokenApp !== getClientId()) {
-    // tokens belong to one app: use the one kept for the new app, or log out of the old one
-    if (!useClientToken(getClientId())) disconnect({ quiet: true });
+    // tokens belong to one app: use the one kept for the new app, or put the current login
+    // aside (only that one: the logins kept for the other links stay)
+    if (!useClientToken(getClientId())) setAside();
   }
+  pruneStash(before);
   emit('settings');
+}
+
+/**
+ * A friend's shared setting (#/spotify-delen/<clientId>): ADD it as a link and log in with it
+ * from now on; the host's own links all stay (the previous own one is simply another link).
+ * Returns 'added' | 'known' (it was a link already: now the own one) | 'full' (LINKS_MAX links:
+ * nothing changed) | 'bad'.
+ */
+export function addLink(id, { name = '' } = {}) {
+  const v = lc(id);
+  if (!isClientId(v)) return 'bad';
+  const list = getLinks();
+  const at = list.findIndex((l) => l.id === v);
+  if (at >= 0) { setLinks(list, { own: at }); return 'known'; }
+  if (list.length >= LINKS_MAX) return 'full';
+  setLinks([...list, { id: v, name: cleanLinkName(name) }], { own: list.length });
+  return 'added';
 }
 
 /* ---------- links: several Spotify apps (Client IDs) for the guests of a room ---------- */
@@ -133,11 +159,13 @@ export const ownLinkIndex = () => { const own = getClientId().toLowerCase(); ret
  */
 export function setLinks(list, { own = null } = {}) {
   const clean = cleanLinks(list);
-  const cur = getClientId().toLowerCase();
+  const cur = getClientId();
+  const before = getLinks().map((l) => l.id);
   const ownId = Number.isInteger(own) && clean[own] ? clean[own].id : clean.some((l) => l.id === cur) ? cur : clean[0]?.id || '';
   writeLinks(clean);
   if (ownId !== cur) setClientId(ownId); // also emits
-  else emit('settings');
+  pruneStash(before);
+  if (ownId === cur) emit('settings');
   return getLinks();
 }
 
@@ -154,24 +182,45 @@ export function renameLink(id, name) {
  */
 function stash() {
   const s = store.get(K.tokens, null);
-  return s && typeof s === 'object' && !Array.isArray(s) ? s : {};
+  if (!s || typeof s !== 'object' || Array.isArray(s)) return {};
+  // keyed by the Client ID in lower case (a stash of before may have another case)
+  const out = {};
+  for (const [k, t] of Object.entries(s)) if (t && typeof t.access_token === 'string') out[lc(k)] = { ...t, clientId: lc(t.clientId || k) };
+  return out;
 }
 function stashToken(t) {
-  if (!t?.clientId || typeof t.access_token !== 'string') return;
+  if (!t || typeof t.access_token !== 'string') return;
+  const cid = lc(t.clientId);
+  if (!cid) return;
   const s = stash();
-  s[t.clientId] = t;
+  delete s[cid]; // to the end: the newest stays when the cap cuts
+  s[cid] = { ...t, clientId: cid };
   const keys = Object.keys(s);
   for (const k of keys.slice(0, Math.max(0, keys.length - LINKS_MAX))) delete s[k];
   store.set(K.tokens, s);
 }
 
-/** Has this phone a login for this Client ID (in use or kept)? */
-export function hasClientToken(clientId) {
-  const c = String(clientId || '').toLowerCase();
-  if (!c) return false;
-  if (String(readToken()?.clientId || '').toLowerCase() === c) return true;
-  const t = stash()[c] || stash()[clientId];
-  return !!(t && typeof t.access_token === 'string');
+/**
+ * Forget the kept logins of links that were just removed (`before`: the link ids before the
+ * change). Only those: a guest's phone also keeps the logins of rooms' links, which are no
+ * links of its own, and those stay.
+ */
+function pruneStash(before) {
+  const now = new Set([...getLinks().map((l) => l.id), lc(readToken()?.clientId)]);
+  const s = stash();
+  let changed = false;
+  for (const id of before) if (!now.has(id) && id in s) { delete s[id]; changed = true; }
+  if (changed) store.set(K.tokens, s);
+}
+
+/** The own app changed and has no kept login: the current login is put aside (kept while it is a link), not thrown away with all others. */
+function setAside() {
+  const cur = readToken();
+  if (cur && getLinks().some((l) => l.id === lc(cur.clientId))) stashToken(cur);
+  store.remove(K.token);
+  store.remove(K.profile);
+  store.remove(K.device);
+  emit('disconnected');
 }
 
 /**
@@ -179,15 +228,14 @@ export function hasClientToken(clientId) {
  * phone is now logged in with that app.
  */
 export function useClientToken(clientId) {
-  const c = String(clientId || '');
+  const c = lc(clientId);
   const cur = readToken();
   if (!c) return false;
-  if (cur?.clientId && cur.clientId.toLowerCase() === c.toLowerCase()) return true;
+  if (cur?.clientId && lc(cur.clientId) === c) return true;
   const s = stash();
-  const key = Object.keys(s).find((k) => k.toLowerCase() === c.toLowerCase());
-  const t = key ? s[key] : null;
+  const t = s[c] || null;
   if (!t || typeof t.access_token !== 'string') return false;
-  delete s[key];
+  delete s[c];
   store.set(K.tokens, s);
   if (cur) stashToken(cur);
   store.set(K.token, t);
@@ -200,7 +248,7 @@ export function useClientToken(clientId) {
 export const looksLikeClientId = (v) => isClientId(String(v || '').trim());
 
 /** The Client ID the current login belongs to (own, config.js or a room's), or null. */
-export const connectedClientId = () => readToken()?.clientId || null;
+export const connectedClientId = () => lc(readToken()?.clientId) || null;
 
 /* ---------- the setup help (wizard) ---------- */
 
@@ -322,19 +370,26 @@ const offlineError = () => new SpotifyError('offline');
 
 function readToken() {
   const t = store.get(K.token, null);
-  return t && typeof t.access_token === 'string' ? t : null;
+  if (!t || typeof t.access_token !== 'string') return null;
+  if (!t.clientId) {
+    // a token from before v3-11 has no clientId: it was made with the Client ID of then, the own one
+    const cid = getClientId();
+    if (cid) { const adopted = { ...t, clientId: cid }; store.set(K.token, adopted); return adopted; }
+  }
+  return t;
 }
 export const isConnected = () => !!readToken();
 
-function saveToken(json, prev) {
-  store.set(K.token, {
+function tokenOf(json, prev) {
+  return {
     access_token: json.access_token,
     refresh_token: json.refresh_token || prev?.refresh_token || null,
     expires_at: Date.now() + (Number(json.expires_in) || 3600) * 1000,
     scope: json.scope || prev?.scope || wantedScopes(),
-    clientId: prev?.clientId || getClientId(),
-  });
+    clientId: lc(prev?.clientId || getClientId()),
+  };
 }
+function saveToken(json, prev) { store.set(K.token, tokenOf(json, prev)); }
 
 async function tokenRequest(body, phase = 'code') {
   let res;
@@ -361,10 +416,21 @@ async function refresh() {
   if (!t?.refresh_token) { dropSession('session'); throw new SpotifyError('session'); }
   if (!refreshing) {
     refreshing = tokenRequest(pkce.refreshRequestBody({ clientId: t.clientId || getClientId(), refreshToken: t.refresh_token }), 'refresh')
-      .then((json) => { saveToken(json, t); })
+      .then((json) => {
+        // meanwhile the phone may have switched to another link (useClientToken): the fresh
+        // token of THIS app then goes to the kept logins, never over the one in use
+        const now = readToken();
+        const fresh = tokenOf(json, t);
+        if (now && lc(now.clientId) === lc(t.clientId)) store.set(K.token, fresh);
+        else stashToken(fresh);
+        return fresh;
+      })
       .catch((e) => {
         const code = ['client', 'redirect'].includes(e.code) ? 'session' : e.code;
-        if (['session', 'not-allowed', 'owner-premium'].includes(code)) dropSession(code, e.detail);
+        if (['session', 'not-allowed', 'owner-premium'].includes(code)) {
+          // only the login of THIS app goes (the phone may have switched to another link meanwhile)
+          if (lc(readToken()?.clientId) === lc(t.clientId)) dropSession(code, e.detail); else dropStashed(t.clientId);
+        }
         throw code === e.code ? e : new SpotifyError('session', { detail: e.detail });
       })
       .finally(() => { refreshing = null; });
@@ -376,8 +442,8 @@ async function accessToken() {
   const t = readToken();
   if (!t) throw new SpotifyError('not-connected');
   if (!t.expires_at || t.expires_at - 60_000 < Date.now()) {
-    await refresh();
-    return readToken().access_token;
+    // the token of the app this call started with (the active one may have changed meanwhile)
+    return (await refresh()).access_token;
   }
   return t.access_token;
 }
@@ -433,7 +499,7 @@ export async function api(path, { method = 'GET', query, body, keepalive = false
 export async function connect(returnHash = location.hash || '#/', { playlists = false, top = false, clientId: borrowed = '', exact = false, quiet = false } = {}) {
   // borrowed: a room's Client ID (the spelleider's), used when this phone has none of its own;
   // exact: log in with exactly that one (a guest chose "link 2" of the room)
-  const clientId = exact && isClientId(borrowed) ? borrowed : getClientId() || (isClientId(borrowed) ? borrowed : '');
+  const clientId = lc(exact && isClientId(borrowed) ? borrowed : getClientId() || (isClientId(borrowed) ? borrowed : ''));
   if (!clientId) throw new SpotifyError('no-client');
   const problem = environmentProblem();
   if (problem) throw new SpotifyError(problem);
@@ -490,7 +556,7 @@ export function handleRedirect() {
   emit('status');
   // the login of another app (an earlier link) is kept, and comes back when this one fails
   const before = readToken();
-  const other = before && before.clientId !== pending.clientId ? before : null;
+  const other = before && lc(before.clientId) !== lc(pending.clientId) ? before : null;
   return tokenRequest(pkce.tokenRequestBody({
     clientId: pending.clientId, code: cb.code, redirectUri: pending.redirectUri, verifier: pending.verifier,
   }))
@@ -513,15 +579,32 @@ export function handleRedirect() {
     .catch((e) => {
       // e.g. token fine, but the account is not allowed: the token of THAT app is gone already,
       // an earlier login of another app stays (never a broken token left behind)
-      if (!e.kept && isConnected() && readToken()?.clientId === pending.clientId) dropSession(e.code, e.detail);
+      if (!e.kept && isConnected() && lc(readToken()?.clientId) === lc(pending.clientId)) dropSession(e.code, e.detail);
       return fail(e.code || 'unavailable', e.detail || null);
     });
 }
 
+/**
+ * Forget the login of this one app (in use or kept): the account behind it is not on that
+ * app's user list, so the login is of no use. The logins of the other apps stay.
+ */
+export function dropClientToken(clientId) {
+  const c = lc(clientId);
+  if (!c) return;
+  if (lc(readToken()?.clientId) === c) {
+    store.remove(K.token);
+    store.remove(K.profile);
+    store.remove(K.device);
+    emit('disconnected');
+  }
+  dropStashed(c);
+}
+
 function dropStashed(clientId) {
   const s = stash();
-  if (!(clientId in s)) return;
-  delete s[clientId];
+  const c = lc(clientId);
+  if (!(c in s)) return;
+  delete s[c];
   store.set(K.tokens, s);
 }
 

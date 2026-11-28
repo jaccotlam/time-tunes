@@ -153,13 +153,24 @@ export function createMixShare({ code, memberId, session, returnHash, onChange, 
     store.set(LINK_KEY, { code, id, verified: true, at: Date.now() });
     report(true);
   }
+  let reportedFor = ''; // the room's list the last report was made against (an index is only valid for one list)
+  let reportAgain = 0;
   function report(force = false) {
     const p = picked();
     if (!p?.verified || !session.online || typeof session.reportLink !== 'function') return;
-    const i = links().findIndex((l) => l.id === p.id);
+    const list = links();
+    const i = list.findIndex((l) => l.id === p.id);
     if (i < 0 || session.meta?.myLink === i) return;
-    if (!force && Date.now() - lastReport < RESEND_MS) return;
+    // the leader reordered the links since the last report (it may have reached the room with the
+    // old order and counted the wrong link): report at once
+    const key = JSON.stringify(list.map((l) => l.id));
+    if (!force && key === reportedFor && Date.now() - lastReport < RESEND_MS) {
+      clearTimeout(reportAgain); // no further state may come: look again when the gap is over
+      reportAgain = setTimeout(() => { if (alive) report(); }, RESEND_MS);
+      return;
+    }
     lastReport = Date.now();
+    reportedFor = key;
     session.reportLink(i);
   }
 
@@ -229,7 +240,7 @@ export function createMixShare({ code, memberId, session, returnHash, onChange, 
       list = await top.topTracks({ range: st.range, limit: TOP_POOL });
     } catch (e) {
       if (!alive) return;
-      if (asks() && notRegistered(e)) { refuse('top', spotify.connectedClientId()); return; }
+      if (asks() && notRegistered(e, { anyForbidden: true })) { refuse('top', spotify.connectedClientId()); return; }
       st.phase = 'error';
       st.error = top.errorMessage(e);
       emit();
@@ -293,8 +304,11 @@ export function createMixShare({ code, memberId, session, returnHash, onChange, 
     ln.step = 'refused';
     ln.want = want;
     ln.refused = String(cid || '').toLowerCase() || null;
+    // forget the refused choice: after a reload the guest is asked again (never sent to that login again)
     const p = picked();
-    if (p && p.id === ln.refused) store.set(LINK_KEY, { ...p, verified: false });
+    if (p && p.id === ln.refused) store.remove(LINK_KEY);
+    // and its login (it would count as "the link this phone uses" otherwise): the other links' logins stay
+    if (ln.refused) spotify.dropClientToken(ln.refused);
     st.phase = 'idle';
     st.error = '';
     emit();
@@ -305,6 +319,13 @@ export function createMixShare({ code, memberId, session, returnHash, onChange, 
     // with the 30-second fragments every song needs an Apple Music fragment (meta.play of the room;
     // unknown, from an older server: look it up, then the song works both ways)
     needFragment: () => session.meta?.play !== 'spotify',
+    // the own playlists answered 403 for this account (it is not on the link it chose): the same
+    // friendly "not on this link" step as the top songs
+    onError: (e) => {
+      if (!asks() || !notRegistered(e, { anyForbidden: true })) return false;
+      refuse('lists', spotify.connectedClientId());
+      return true;
+    },
   });
   const api = {
     get state() { return st; },
@@ -406,6 +427,7 @@ export function createMixShare({ code, memberId, session, returnHash, onChange, 
     destroy() {
       alive = false;
       clearTimeout(recheck);
+      clearTimeout(reportAgain);
       ctrl?.abort();
       lists.destroy();
       offSp();

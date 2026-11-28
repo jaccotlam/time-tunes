@@ -77,16 +77,25 @@ export function migrateState(state) {
   // several Spotify links (spotify-links.js): checked again on every load, as if they were new
   if ('spotifyLinks' in state) state.spotifyLinks = cleanLinks(state.spotifyLinks);
   if ('play' in state && !PLAY_SOURCES.includes(state.play)) delete state.play;
-  state.linkUse = cleanLinkUse(state.linkUse);
+  // how the music plays on the phone of a player who took the lead (see playNow)
+  if ('leadPlay' in state && !(state.leadPlay && validId(state.leadPlay.mid) && PLAY_SOURCES.includes(state.leadPlay.play))) delete state.leadPlay;
+  state.linkUse = cleanLinkUse(state.linkUse, state.members);
   return state;
 }
 
-/** { memberId: clientId } of the phones that said which link they logged in through. */
-function cleanLinkUse(u) {
+/** Most entries of linkUse: one per seat (and the owner); more can only be stale. */
+const LINK_USE_MAX = G.MAX_ROOM_PLAYERS + 1;
+
+/**
+ * { memberId: clientId } of the phones that said which link they logged in through: only
+ * members of the room (`members`: the room's members object; an entry of a phone that left, was
+ * removed or belongs to an earlier party of a reused prepared room goes), at most LINK_USE_MAX
+ * (the newest win: entries are added at the end).
+ */
+function cleanLinkUse(u, members = null) {
   if (!u || typeof u !== 'object' || Array.isArray(u)) return {};
-  const out = {};
-  for (const [mid, id] of Object.entries(u)) if (validId(mid) && typeof id === 'string' && SPOTIFY_CLIENT_ID_RE.test(id)) out[mid] = id.toLowerCase();
-  return out;
+  const entries = Object.entries(u).filter(([mid, id]) => validId(mid) && typeof id === 'string' && SPOTIFY_CLIENT_ID_RE.test(id) && (!members || has(members, mid)));
+  return Object.fromEntries(entries.slice(-LINK_USE_MAX).map(([mid, id]) => [mid, id.toLowerCase()]));
 }
 
 const withSettings = (room) => ({ ...room, settings: G.normalizeSettings(room.settings || {}) });
@@ -337,6 +346,7 @@ export class RoomHub {
     s.room = { ...s.room, removed: s.room.removed.filter((x) => x !== pick) }; // may join again (fresh)
     delete s.members[pick];
     delete s.away[pick];
+    if (s.linkUse) delete s.linkUse[pick];
     this.dropContribution(pick);
     return true;
   }
@@ -489,6 +499,7 @@ export class RoomHub {
     // the owner's Spotify Client ID goes to the players (a public value; only the form is checked).
     // No cid field (an older app): keep what there is; '' = the owner has none (any more).
     if (id === s.ownerId && Array.isArray(m.links)) this.setLinks(m.links, m.play);
+    else if (id === s.leaderId && PLAY_SOURCES.includes(m.play)) s.leadPlay = { mid: id, play: m.play }; // a player who took the lead
     else if (id === s.ownerId && typeof m.cid === 'string') {
       // an app of before the links: one Client ID, and the list follows it
       if (SPOTIFY_CLIENT_ID_RE.test(m.cid)) s.spotifyClientId = m.cid.toLowerCase();
@@ -612,7 +623,11 @@ export class RoomHub {
         const history = s.played || emptyHistory();
         s.room = r.phase === 'won' ? G.playAgain(r, { cards, seed, now, pool, history }) : G.startGame(r, { cards, seed, now, pool, history });
         s.played = nextGame(history);
-        if (mix) s.room = { ...s.room, game: { ...s.room.game, mix: true, play: m.play === 'spotify' ? 'spotify' : 'preview' } };
+        if (mix) {
+          const play = m.play === 'spotify' ? 'spotify' : 'preview';
+          s.room = { ...s.room, game: { ...s.room.game, mix: true, play } };
+          this.notePlay(mid, play); // the phone that starts the game is the one that plays it
+        }
         break;
       }
       case 'mix-add': {
@@ -626,12 +641,14 @@ export class RoomHub {
         break;
       }
       case 'links': {
-        // the owner's links (a link added or renamed in the lobby), and how the music plays
-        if (mid !== s.ownerId) throw new G.GameError('notleader', 'Alleen de spelleider kan de Spotify-links van de kamer instellen.');
-        if (!Array.isArray(m.links)) return;
-        const before = JSON.stringify([s.spotifyLinks, s.spotifyClientId, s.play]);
-        this.setLinks(m.links, m.play);
-        if (JSON.stringify([s.spotifyLinks, s.spotifyClientId, s.play]) === before) return;
+        // the owner's links (a link added or renamed in the lobby), and how the music plays on
+        // the sender's phone: the links only from the owner (the guests are on the owner's Spotify
+        // apps), the way of playing from the owner and from a player who leads now
+        if (mid !== s.ownerId && mid !== s.leaderId) throw new G.GameError('notleader', 'Alleen de spelleider kan de Spotify-links van de kamer instellen.');
+        const before = JSON.stringify([s.spotifyLinks, s.spotifyClientId, s.play, s.leadPlay]);
+        if (mid === s.ownerId && Array.isArray(m.links)) this.setLinks(m.links, m.play);
+        else this.notePlay(mid, m.play);
+        if (JSON.stringify([s.spotifyLinks, s.spotifyClientId, s.play, s.leadPlay]) === before) return;
         break;
       }
       case 'link': {
@@ -641,7 +658,9 @@ export class RoomHub {
         if (!Number.isInteger(i) || i < 0 || i >= list.length) return;
         const id = list[i].id;
         if (s.linkUse?.[mid] === id) return;
-        s.linkUse = { ...cleanLinkUse(s.linkUse), [mid]: id };
+        const use = cleanLinkUse(s.linkUse, s.members);
+        delete use[mid]; // to the end: the newest stays when the cap cuts
+        s.linkUse = cleanLinkUse({ ...use, [mid]: id }, s.members);
         break;
       }
       case 'mix-clear': {
@@ -675,6 +694,7 @@ export class RoomHub {
         s.room = G.removePlayer(r, pid);
         delete s.members[pid];
         if (s.away) delete s.away[pid];
+        if (s.linkUse) delete s.linkUse[pid];
         this.dropContribution(pid);
         for (const [other, oc] of [...this.conns]) {
           if (oc.mid === pid) {
@@ -697,6 +717,7 @@ export class RoomHub {
           s.room = G.removePlayer(r, mid);
           s.room = { ...s.room, removed: s.room.removed.filter((x) => x !== mid) };
           delete s.members[mid];
+          if (s.linkUse) delete s.linkUse[mid];
           this.dropContribution(mid);
         }
         if (s.leaderId === mid) { s.leaderId = s.ownerId; s.leaderAwaySince = this.online(s.ownerId) ? null : this.now(); }
@@ -888,7 +909,7 @@ export class RoomHub {
       spotifyClientId: typeof s.spotifyClientId === 'string' && SPOTIFY_CLIENT_ID_RE.test(s.spotifyClientId) ? s.spotifyClientId : null,
       // the spelleider's links (spotify-links.js): a player chooses "link 1 of link 2" when logging in
       spotifyLinks: links,
-      play: PLAY_SOURCES.includes(s.play) ? s.play : null,
+      play: this.playNow(),
       myLink: mine >= 0 ? mine : null,
       // per link how many phones logged in through it: counts only, for the leader only
       ...(mid != null && mid === s.leaderId ? { linkUse: linkCounts(links, s.linkUse, this.linkMembers()) } : {}),
@@ -910,6 +931,26 @@ export class RoomHub {
     if (list.length) s.spotifyClientId = list[0].id;
     else delete s.spotifyClientId;
     if (PLAY_SOURCES.includes(play)) s.play = play;
+  }
+
+  /** How the phone `mid` plays the music ('spotify' | 'preview'): the owner's in s.play, a player who leads in s.leadPlay. */
+  notePlay(mid, play) {
+    const s = this.state;
+    if (!PLAY_SOURCES.includes(play)) return;
+    if (mid === s.ownerId) s.play = play;
+    else if (mid === s.leaderId) s.leadPlay = { mid, play };
+  }
+
+  /**
+   * meta.play: how the music plays NOW, i.e. on the phone of the current leader (that phone
+   * plays the songs: the guests' phones decide by it whether a song needs an Apple Music
+   * fragment). The owner's device as told in its hello / links message; after a take-over the
+   * new leader's (its hello, links message or start); a leader that never said: the owner's.
+   */
+  playNow() {
+    const s = this.state;
+    const p = s.leaderId !== s.ownerId && s.leadPlay?.mid === s.leaderId ? s.leadPlay.play : s.play;
+    return PLAY_SOURCES.includes(p) ? p : null;
   }
 
   /** Who counts for the link counts: the players in the room (not the owner himself, not who left). */

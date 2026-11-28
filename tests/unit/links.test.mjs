@@ -5,7 +5,7 @@
 // for the playlist worker (mix-spotify.js + mix-lists.js, with the fragment rule).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanLinks, cleanLinkName, notRegistered, linkCounts, linkCountsText, linkLabel, LINKS_MAX, LINK_NAME_MAX } from '../../app/js/spotify-links.js';
+import { cleanLinks, cleanLinkName, notRegistered, linkCounts, linkLabel, LINKS_MAX, LINK_NAME_MAX } from '../../app/js/spotify-links.js';
 import { createRoomServer } from '../../server/core.mjs';
 import { RoomHub, migrateState } from '../../server/room.mjs';
 import { validateData } from '../../server/accounts.mjs';
@@ -61,7 +61,6 @@ test('tellen per link: alleen leden, op Client ID (verschuiven telt goed)', () =
   assert.deepEqual(linkCounts(links, use, ['a', 'b', 'c']), [1, 2]);
   assert.deepEqual(linkCounts([links[1], links[0]], use, ['a', 'b', 'c']), [2, 1]);
   assert.deepEqual(linkCounts(links, null), [0, 0]);
-  assert.equal(linkCountsText(links, [3, 1]), 'Link 1 · familie: 3 van 5 · Link 2: 1 van 5');
 });
 
 /* ---------- the room server ---------- */
@@ -209,7 +208,6 @@ test('telefoon: logins per Client ID; wisselen van link gooit geen werkende logi
   // logged in with link 1; a kept login of link 2 is used (and link 1's kept in turn)
   mem.set('timetunesr.spotify.token.v1', JSON.stringify(tok(L1, 'at-1')));
   mem.set('timetunesr.spotify.tokens.v1', JSON.stringify({ [L2]: tok(L2, 'at-2') }));
-  assert.equal(sp.hasClientToken(L2), true);
   assert.equal(sp.useClientToken(L2), true);
   assert.equal(sp.connectedClientId(), L2);
   assert.equal(JSON.parse(mem.get('timetunesr.spotify.tokens.v1'))[L1].access_token, 'at-1', 'de login van link 1 blijft bewaard');

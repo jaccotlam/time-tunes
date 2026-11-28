@@ -17,7 +17,7 @@ import {
 } from './server-protocol.js';
 import { playerId, JOIN_KEY, PLAYER_ID_KEY } from './client-session.js';
 import { HOST_ID_KEY, MULTI_SEED_KEY } from './host-session.js';
-import { getClientId, getLinks, getSettings, isConnected } from '../spotify.js';
+import { getClientId, getLinks, getSettings, isConnected, subscribe as onSpotify } from '../spotify.js';
 import { isAvatar, isReaction, REACT_GAP_MS } from './party.js';
 import { LINKS_FEATURE } from './server-protocol.js';
 
@@ -676,6 +676,9 @@ export function createServerHostSession() {
   const reactions = reactionFeed();
   let lastReact = 0;
   let linksSent = ''; // the links / play the room has from this phone (hello or links message)
+  // a link added in the settings, Spotify connected or gone: the room hears it at once (not only
+  // at the next redraw of the lobby)
+  const offSpotify = onSpotify((why) => { if (['settings', 'connected', 'disconnected'].includes(why)) { try { api.syncLinks(); } catch { /* not yet */ } } });
 
   const ownerId = () => {
     let id = store.get(HOST_ID_KEY, null);
@@ -703,7 +706,7 @@ export function createServerHostSession() {
         // (an older server only reads cid and ignores links / play)
         hello: (code) => {
           const sp = spotifyHello();
-          linksSent = JSON.stringify([sp.links, sp.play]);
+          linksSent = JSON.stringify([sp.links, sp.play, null]);
           return { t: 'hello', v: SERVER_PROTOCOL_VERSION, code, id: ident.id, token: ident.token, ...sp, ...(storedAvatar() ? { avatar: storedAvatar() } : {}) };
         },
         roomCheck: async () => {
@@ -759,6 +762,7 @@ export function createServerHostSession() {
             st = m;
             if (Number.isFinite(m.meta?.now)) clock = m.meta.now - Date.now();
             if (!m.lead) lostLead = true; // a player who led and handed it back
+            api.syncLinks(); // (only when something changed: just became the leader, …)
             emit();
           }
         },
@@ -894,13 +898,15 @@ export function createServerHostSession() {
     /** Stop leading here without closing (a player hands the screen back). */
     forget() { forget(); ident = null; },
     /**
-     * The links or the way of playing changed on this phone (settings, Spotify connected):
-     * tell the room (server feature 'links'; an older server keeps the hello's cid). True when sent.
+     * The links or the way of playing changed on this phone (settings, Spotify connected), or
+     * this phone just became the leader: tell the room (server feature 'links'; an older server
+     * keeps the hello's cid). The room takes the links from the owner only, and how the music
+     * plays from the phone that leads (it plays the music). True when sent.
      */
     syncLinks() {
-      if (!link?.online || !link.supports(LINKS_FEATURE) || !st?.meta?.owner) return false;
+      if (!link?.online || !link.supports(LINKS_FEATURE) || !(st?.meta?.owner || st?.meta?.leader)) return false;
       const sp = spotifyHello();
-      const key = JSON.stringify([sp.links, sp.play]);
+      const key = JSON.stringify([sp.links, sp.play, !!st.meta.leader]);
       if (key === linksSent) return false;
       if (!link.send({ t: 'links', links: sp.links, play: sp.play })) return false;
       linksSent = key;
@@ -911,6 +917,7 @@ export function createServerHostSession() {
     diagText: () => (link ? diagText(link.diag, { status: api.status, code: api.code }) : Promise.resolve('')),
     destroy() {
       offLifecycle?.();
+      offSpotify();
       link?.stop();
       link = null;
       listeners.clear();

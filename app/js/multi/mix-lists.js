@@ -20,6 +20,12 @@
 // an Apple Music fragment: after the year check the phone looks it up (apple-match.js, the
 // throttled iTunes queue, as "Doe mijn favorieten erbij" does); a song without one is left out
 // and counted (st.noFragment). With Spotify (meta.play 'spotify') the Spotify id is enough.
+// When meta.play changes after the phone shared (the leader connected or left Spotify, or a
+// player who plays another way took the lead) the part follows (adapt): to fragments, the songs
+// already shared without one are taken out of the room and looked up again (those with a
+// fragment come back, the others are held back); to Spotify, the songs held back for lack of a
+// fragment are shared after all. Every song is in the room at most once (st.topUp: what the
+// phone is doing for the screen).
 //
 // The provider (where the lists come from). Shape:
 //   {
@@ -104,9 +110,11 @@ export function forgetMixLists(code, store = lsStore) {
  * provider: where the lists come from (see the top of this file), or null (none: nothing offered).
  * inLobby(): may the phone work now (the room is in the lobby)?
  * needFragment(): must every song have an Apple Music fragment (the leader plays fragments)?
+ * onError(e): an error of the provider; true = the caller explains it itself (mix-share.js: "you
+ * are not on this link"), then this worker shows no error of its own.
  * onChange(): redraw. deps (tests): { musicbrainz, apple, store, rand, wait }.
  */
-export function createListShare({ code, session, provider = null, onChange, inLobby = () => true, needFragment = () => false, deps = {} }) {
+export function createListShare({ code, session, provider = null, onChange, inLobby = () => true, needFragment = () => false, onError = () => false, deps = {} }) {
   const mb = deps.musicbrainz || mbApi;
   const apple = deps.apple || appleMatch;
   const store = deps.store || lsStore;
@@ -115,6 +123,7 @@ export function createListShare({ code, session, provider = null, onChange, inLo
     const t = setTimeout(resolve, ms);
     signal?.addEventListener?.('abort', () => { clearTimeout(t); resolve(); }, { once: true });
   }));
+  const handled = (e) => { try { return onError(e) === true; } catch { return false; } };
   const failText = (e) => { try { return provider?.errorMessage?.(e) || FAILED_MESSAGE; } catch { return FAILED_MESSAGE; } };
 
   let alive = true;
@@ -126,6 +135,8 @@ export function createListShare({ code, session, provider = null, onChange, inLo
   let resyncAt = null;
   let recheck = 0;
   let plan = []; // candidates still to look at, in order
+  let held = []; // checked candidates left out for lack of a fragment (shared after all when Spotify plays)
+  let fragMode = null; // needFragment() when the part was made: a change of meta.play is noticed (adapt)
   // [candidateKey, year | 0, sure 0|1, listId, fragment?]: what this phone already decided;
   // fragment: absent = not looked up, 0 = Apple Music has none, [itunesId, previewUrl] = found
   let checked = [];
@@ -150,6 +161,7 @@ export function createListShare({ code, session, provider = null, onChange, inLo
     pickMsg: '',
     adding: '',
     stale: false, // the lists changed and the plan is not made yet
+    topUp: '', // '' | 'fragments' | 'spotify': the way of playing changed, the part follows
   };
   const emit = () => { if (alive) { try { onChange?.(); } catch (e) { console.error(e); } } };
 
@@ -166,6 +178,9 @@ export function createListShare({ code, session, provider = null, onChange, inLo
       checked: checked.slice(-CHECKED_MAX),
       skipped: st.skipped,
       noFragment: st.noFragment,
+      held: held.slice(0, STORED_PLAN_MAX).map(packCand),
+      frag: fragMode,
+      topUp: st.topUp,
       stale: st.stale,
       at: Date.now(),
     });
@@ -184,6 +199,9 @@ export function createListShare({ code, session, provider = null, onChange, inLo
     st.skipped = Number.isSafeInteger(s.skipped) && s.skipped >= 0 ? s.skipped : 0;
     st.noFragment = Number.isSafeInteger(s.noFragment) && s.noFragment >= 0 ? s.noFragment : 0;
     st.stale = s.stale === true;
+    held = (Array.isArray(s.held) ? s.held : []).map(unpackCand).filter(Boolean);
+    fragMode = typeof s.frag === 'boolean' ? s.frag : null;
+    st.topUp = ['fragments', 'spotify'].includes(s.topUp) ? s.topUp : '';
     return true;
   }
 
@@ -223,8 +241,11 @@ export function createListShare({ code, session, provider = null, onChange, inLo
   async function walk() {
     if (walking || !alive || st.phase === 'reading') return;
     if (!inLobby()) { if (['checking', 'reading'].includes(st.phase)) { st.phase = 'waiting'; emit(); } return; }
+    // the way of playing changed since the part was made (also while this phone was away): follow it first
+    if (fragMode !== null && !!needFragment() !== fragMode && !st.stale && st.lists.length) { adapt(!!needFragment()); return; }
     walking = true;
     const my = gen;
+    fragMode = !!needFragment();
     ctrl = new AbortController();
     const signal = ctrl.signal;
     let fails = 0;
@@ -284,7 +305,7 @@ export function createListShare({ code, session, provider = null, onChange, inLo
           frag = Array.isArray(entry[4]) ? entry[4] : null;
         } else if (r && Array.isArray(entry[4])) frag = entry[4]; // found earlier: take it along anyway
         plan.shift();
-        if (r && needFragment() && !frag) st.noFragment++;
+        if (r && needFragment() && !frag) { st.noFragment++; held.push(c); }
         else if (r) {
           const t = { title: c.title, artist: c.artist, year: r.year, yearSure: r.sure, checked: true, l: c.list };
           if (c.spotifyId) t.spotifyId = c.spotifyId;
@@ -303,6 +324,7 @@ export function createListShare({ code, session, provider = null, onChange, inLo
       }
       if (alive && my === gen) {
         st.phase = 'done';
+        st.topUp = '';
         save();
         emit();
       }
@@ -348,6 +370,7 @@ export function createListShare({ code, session, provider = null, onChange, inLo
       }
     } catch (e) {
       if (signal.aborted || my !== gen || e?.code === 'aborted') return;
+      if (handled(e)) { st.phase = 'idle'; st.lists = []; save(); emit(); return; }
       st.phase = 'error';
       st.error = failText(e);
       save();
@@ -368,15 +391,48 @@ export function createListShare({ code, session, provider = null, onChange, inLo
     st.shared = [];
     st.skipped = 0;
     st.noFragment = 0;
+    held = [];
+    st.topUp = '';
     resyncAt = null;
     save();
     walk();
   }
 
+  /** meta.play changed since the part was made: follow it (see the top of this file). */
+  function adapt(need) {
+    stop();
+    if (need) {
+      // fragments now: a song in the room without one would be dropped by the mix
+      const keep = st.shared.filter((t) => t.previewUrl || t.itunesId);
+      const redo = st.shared.filter((t) => !(t.previewUrl || t.itunesId));
+      if (redo.length) {
+        // no per-song removal in the protocol: empty this phone's part and send the kept songs again
+        session.mixClear();
+        st.shared = keep;
+        send(keep);
+        resyncAt = null;
+        const fallback = st.lists[0]?.id || '';
+        plan = [...redo.map((t) => ({ ...cleanCand({ spotifyId: t.spotifyId, isrc: t.isrc, title: t.title, artist: t.artist, year: t.year }), list: listId(t.l) || fallback })).filter((c) => c.title), ...plan];
+        st.topUp = 'fragments';
+      }
+    } else if (held.length) {
+      // Spotify now: the songs held back for lack of a fragment may go (already checked: instant)
+      plan = [...held, ...plan];
+      held = [];
+      st.noFragment = 0;
+      st.topUp = 'spotify';
+    } else st.noFragment = 0;
+    fragMode = need;
+    save();
+    if (st.phase !== 'error') walk(); else emit();
+  }
+
   function reset() {
     stop();
     plan = [];
-    Object.assign(st, { phase: 'idle', error: '', lists: [], shared: [], skipped: 0, noFragment: 0, read: 0, readTotal: 0, stale: false });
+    held = [];
+    fragMode = null;
+    Object.assign(st, { phase: 'idle', error: '', lists: [], shared: [], skipped: 0, noFragment: 0, read: 0, readTotal: 0, stale: false, topUp: '' });
     resyncAt = null;
     forgetMixLists(code, store);
   }
@@ -395,6 +451,7 @@ export function createListShare({ code, session, provider = null, onChange, inLo
       st.choices = (Array.isArray(items) ? items : []).map(listMeta).filter(Boolean);
     } catch (e) {
       if (pc.signal.aborted || e?.code === 'aborted') return;
+      if (handled(e)) { st.view = 'home'; return; }
       st.pickError = failText(e);
     } finally {
       if (pickCtrl === pc) { st.loading = false; emit(); }
@@ -457,7 +514,9 @@ export function createListShare({ code, session, provider = null, onChange, inLo
     sync(meta) {
       if (!alive) return;
       const lobby = inLobby();
-      if (!lobby && (walking || st.phase === 'reading')) { stop(); st.phase = 'waiting'; emit(); }
+      const need = !!needFragment();
+      if (lobby && st.lists.length && fragMode !== null && need !== fragMode && !st.stale && st.phase !== 'reading') adapt(need);
+      else if (!lobby && (walking || st.phase === 'reading')) { stop(); st.phase = 'waiting'; emit(); }
       else if (lobby && st.phase === 'waiting') { if (st.stale || (!plan.length && !st.shared.length)) rebuild(); else walk(); }
       const server = meta?.mix?.mine;
       if (!Number.isInteger(server) || !session.online || !st.shared.length) return;

@@ -8,7 +8,9 @@
 // at Apple) and shared; the lobby shows per link "1 van 5" and the mix counts; Discobingo from
 // the mix plays songs of both. Then: a room with one link asks nothing; an app of before the
 // links (from git) as a guest in a room with two links logs in with meta.spotifyClientId;
-// and the new app against a room server of before the links (from git): nothing new is sent.
+// the new app against a room server of before the links (from git): nothing new is sent; and
+// links edited on a device with an account (real Node account server) reach the account, are
+// still there after a reload and come to a second device.
 import { spawn, execSync } from 'node:child_process';
 import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,6 +25,7 @@ const SHOTS = process.env.LINKS_SHOTS || OUT;
 
 const L1 = '11111111111111111111111111111111';
 const L2 = '22222222222222222222222222222222';
+const L3 = 'abcdefabcdefabcdefabcdefabcdefab';
 const PLAYBACK = 'user-read-playback-state user-modify-playback-state';
 const TOP = 'user-top-read';
 const LISTS = 'playlist-read-private playlist-read-collaborative';
@@ -393,6 +396,53 @@ export default async function main() {
     await cas.page.locator('[data-testid="mix-panel"][data-phase="done"]').waitFor({ timeout: 40000 });
     assert(cas.sp.authorize.length === 1 && cas.sp.authorize[0].clientId === L1, 'no question: straight to Spotify with the one link');
     assert(await host2.page.getByTestId('mix-link-use').count() === 0, 'and the lobby of a one-link room shows no link counts');
+
+    // ---------- links edited on a device with an account reach the account ----------
+    {
+      const dev1 = await linkPhone(browser, rooms, base, ACCOUNTS.ilse, { own: L1, desk: true });
+      const P = dev1.page;
+      pages.push(P);
+      await P.goto(`${base}#/instellingen/spotify`);
+      await P.getByTestId('spotify-links').waitFor();
+      const su = await P.evaluate(async (l) => {
+        (await import('/js/spotify.js')).setLinks([{ id: l[0], name: 'familie' }, { id: l[1], name: '' }]);
+        window.__acct = await import('/js/account.js');
+        const r = await window.__acct.signUp('ilselinks', 'geheim-wachtwoord-1');
+        await window.__acct.startAutoSave();
+        return r.ok;
+      }, [L1, L2]);
+      assert(su, 'an account with two links (the first upload)');
+      const idle = () => P.waitForFunction(() => { const s = window.__acct.status(); return !s.pending && !s.saving && !s.error; }, null, { timeout: 20000 });
+      await P.reload();
+      await P.getByTestId('spotify-links').waitFor();
+      await P.evaluate(async () => { window.__acct = await import('/js/account.js'); await window.__acct.startAutoSave(); });
+      // now the account holds a list: edit it in Instellingen (rename + add), the way the host does
+      await P.locator('[data-testid="spotify-link-name"]').nth(1).fill('vrienden');
+      await P.locator('[data-testid="spotify-link-name"]').nth(1).press('Enter');
+      await P.getByTestId('spotify-link-add').click();
+      await P.getByTestId('spotify-link-new-id').fill(L3);
+      await P.getByTestId('spotify-link-new-name').fill('werk');
+      await P.getByTestId('spotify-link-new-save').click();
+      await P.locator('[data-testid="spotify-links"][data-count="3"]').waitFor();
+      await P.waitForFunction(() => window.__acct.status().pending || window.__acct.status().saving || window.__acct.status().lastSync, null, { timeout: 10000 });
+      await idle();
+      await P.waitForFunction(async () => { const a = await window.__acct.fetchAccount(); return (a.data?.spotifyLinks || []).length === 3; }, null, { timeout: 20000 });
+      const inAcct = await P.evaluate(async () => (await window.__acct.fetchAccount()).data.spotifyLinks);
+      assert(JSON.stringify(inAcct) === JSON.stringify([{ id: L1, name: 'familie' }, { id: L2, name: 'vrienden' }, { id: L3, name: 'werk' }]), `the edit reached the account (${JSON.stringify(inAcct.map((l) => l.name))})`);
+      // a reload pulls the account again: the edit stays
+      await P.reload();
+      await P.getByTestId('spotify-links').waitFor();
+      await P.evaluate(async () => { window.__acct = await import('/js/account.js'); await window.__acct.pull(); });
+      const after = await P.evaluate(() => JSON.parse(localStorage.getItem('timetunesr.spotify.links.v1')));
+      assert(after.map((l) => l.name).join(',') === 'familie,vrienden,werk', `still there after a reload and a pull (${after.map((l) => l.name).join(',')})`);
+      assert(await P.locator('[data-testid="spotify-links"][data-count="3"]').count() === 1, 'and in Instellingen');
+      // a second device logs in: it gets the edited list
+      const dev2 = await linkPhone(browser, rooms, base, ACCOUNTS.ilse, { desk: true });
+      pages.push(dev2.page);
+      await dev2.page.goto(`${base}#/`);
+      const got = await dev2.page.evaluate(async () => { const a = await import('/js/account.js'); const r = await a.logIn('ilselinks', 'geheim-wachtwoord-1'); return r.ok ? JSON.parse(localStorage.getItem('timetunesr.spotify.links.v1')) : r; });
+      assert(Array.isArray(got) && got.map((l) => `${l.id.slice(0, 2)}:${l.name}`).join(',') === '11:familie,22:vrienden,ab:werk', `a second device gets it (${JSON.stringify(got)})`);
+    }
 
     // ---------- the new app against a room server of before the links ----------
     const oldServer = oldTree('server');

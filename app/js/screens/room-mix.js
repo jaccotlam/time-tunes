@@ -39,7 +39,7 @@ export function mixKey(ms, meta, extra = null) {
   const l = ms.lists?.state;
   const ls = ms.linkState?.();
   const link = ls ? [ls.step, ls.refused?.id, ls.choices.map((c) => c.label), ls.chosen?.id, ls.asks] : null;
-  const lk = l ? [l.view, l.phase, l.error, l.lists.map((x) => x.id), l.shared.length, l.skipped, l.noFragment, l.count, l.read, ms.lists.needsFragment?.(),
+  const lk = l ? [l.view, l.phase, l.error, l.lists.map((x) => x.id), l.shared.length, l.skipped, l.noFragment, l.count, l.read, ms.lists.needsFragment?.(), l.topUp,
     Math.ceil((ms.lists.eta() || 0) / 5), !!ms.lists.etaStalled?.(), l.loading, l.pickError, l.pickMsg, l.choices.map((x) => x.id), ms.listsOffered()] : null;
   return JSON.stringify([s.phase, s.error, s.done, s.total, s.tracks.length, s.skipped, s.range, s.count, meta?.mix, ms.problem(), lk, link, ms.clientSource?.(), extra]);
 }
@@ -105,6 +105,7 @@ function listHomeHtml(ms, meta, { inGame }) {
     progress = `<div class="pl-progress" data-testid="mix-lists-progress" data-phase="checking" data-shared="${n}" data-target="${l.count}" role="status">
         <div class="pl-bar" aria-hidden="true"><i style="width:${Math.round((n / l.count) * 100)}%"></i></div>
         <p><b data-testid="mix-lists-progress-text">${n} van ${l.count} nummers nagekeken en gedeeld</b></p>
+        ${l.topUp === 'fragments' ? '<p class="small" data-testid="mix-lists-topup" data-kind="fragments">De spelleider speelt nu met fragmenten van 30 seconden: je telefoon zoekt ze op voor de nummers die je al deelde.</p>' : l.topUp === 'spotify' ? '<p class="small" data-testid="mix-lists-topup" data-kind="spotify">De spelleider speelt nu via Spotify: de nummers zonder fragment doen alsnog mee.</p>' : ''}
         <p class="small muted">Van elk nummer zoekt je telefoon het echte jaartal${ms.lists.needsFragment?.() ? ' en het fragment van 30 seconden' : ''} op${slow ? ' (MusicBrainz reageert traag…)' : eta ? `, nog ongeveer ${eta < 60 ? `${Math.max(5, Math.ceil(eta / 5) * 5)} seconden` : `${Math.ceil(eta / 60)} minuten`}` : ''}. Laat dit scherm open; de nummers gaan vanzelf naar de kamer.</p></div>`;
   } else if (l.phase === 'waiting') {
     progress = `<p class="mix-note" data-testid="mix-lists-waiting">${n ? `${plural(n, 'nummer', 'nummers')} gedeeld. ` : ''}Tijdens het potje wacht het nakijken even; in de lobby gaat het verder.</p>`;
